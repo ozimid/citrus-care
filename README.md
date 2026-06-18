@@ -38,3 +38,7 @@ Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis, track
 ## Deploy
 
 Vercel — connect repo, add the four env vars above, deploy.
+
+## Known gotchas
+
+- If `npm run build` fails with `Cannot read properties of null (reading 'useContext')` on `/_global-error`, your shell has `NODE_ENV=development` exported. The build script already unsets it; if you call `next build` directly, do `unset NODE_ENV` first. ([Next.js issue #87719](https://github.com/vercel/next.js/issues/87719))
