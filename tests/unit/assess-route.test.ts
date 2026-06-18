@@ -26,9 +26,17 @@ function buildSupabaseStub(opts: {
   download?: Blob | null;
   insertedId?: string;
   insertError?: { message: string } | null;
+  rateLimit?: { count: number; allowed: boolean; retry_after_sec: number };
 }) {
   const user = "user" in opts ? opts.user : { id: "user-1" };
+  const rl = opts.rateLimit ?? { count: 1, allowed: true, retry_after_sec: 0 };
   return {
+    rpc: vi.fn().mockImplementation((fn: string) => {
+      if (fn === "consume_rate_limit") {
+        return Promise.resolve({ data: [rl], error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    }),
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: { user },
@@ -163,6 +171,10 @@ describe("POST /api/assess", () => {
     });
 
     createClientMock.mockResolvedValue({
+      rpc: vi.fn().mockResolvedValue({
+        data: [{ count: 1, allowed: true, retry_after_sec: 0 }],
+        error: null,
+      }),
       auth: {
         getUser: vi.fn().mockResolvedValue({
           data: { user: { id: "u1" } },
@@ -295,6 +307,22 @@ describe("POST /api/assess", () => {
     const body = await res.json();
     expect(body.error).not.toContain("duplicate key");
     expect(body.error).not.toContain("public.assessments");
+  });
+
+  it("returns 429 with Retry-After when rate limit is exceeded (does NOT call Gemini)", async () => {
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({
+        user: { id: "u1" },
+        tree: { id: "t1", user_id: "u1", name: "x", cultivar: null, location: null },
+        rateLimit: { count: 6, allowed: false, retry_after_sec: 1234 },
+      }),
+    );
+    const res = await POST(req({ treeId: "t1", photoPath: "u1/t1/x.jpg" }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("1234");
+    const body = await res.json();
+    expect(body.retryAfter).toBe(1234);
+    expect(callGeminiVisionMock).not.toHaveBeenCalled();
   });
 
   it("returns 502 when Gemini returns invalid JSON", async () => {

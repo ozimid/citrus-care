@@ -5,6 +5,7 @@
 3. Run each migration in order:
    - `migrations/0001_init.sql` — profiles, trees, assessments + RLS
    - `migrations/0002_storage_photos.sql` — private `photos` bucket + per-user RLS
+   - `migrations/0003_rate_limits.sql` — per-user `rate_limits` buckets + `consume_rate_limit()` RPC
 4. Copy keys from **Project Settings → API** into `.env.local`:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`

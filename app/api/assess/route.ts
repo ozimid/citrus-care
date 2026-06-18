@@ -7,10 +7,14 @@ import {
   callGeminiVision,
   parseAssessment,
 } from "@/app/_lib/gemini";
+import { tryConsume } from "@/app/_lib/rate-limit";
 import type { Assessment, Tree } from "@/app/_lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+const ASSESS_LIMIT_PER_HOUR = 5;
+const ASSESS_WINDOW_SEC = 3600;
 
 const assessBodySchema = z.object({
   treeId: z.string().min(1),
@@ -38,6 +42,25 @@ export async function POST(req: Request) {
 
   if (!photoPath.startsWith(user.id + "/")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const rl = await tryConsume({
+    supabase,
+    key: "assess",
+    limit: ASSESS_LIMIT_PER_HOUR,
+    windowSec: ASSESS_WINDOW_SEC,
+  });
+  if (!rl.ok) {
+    return NextResponse.json(
+      {
+        error: "Too many assessments. Please try again later.",
+        retryAfter: rl.retryAfterSec,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      },
+    );
   }
 
   const { data: treeRow } = await supabase
