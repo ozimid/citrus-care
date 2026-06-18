@@ -1,5 +1,7 @@
 # Citrus Care PWA
 
+[![CI](https://github.com/ozimid/citrus-care/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ozimid/citrus-care/actions/workflows/ci.yml)
+
 Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis from Gemini 2.5 Flash, track each tree over time, see better/same/worse on re-assessment.
 
 ## Product docs (Obsidian)
