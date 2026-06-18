@@ -1,6 +1,14 @@
 # Citrus Care PWA
 
-Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis, track each tree over time.
+Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis from Gemini 2.5 Flash, track each tree over time, see better/same/worse on re-assessment.
+
+## Product docs (Obsidian)
+
+Source of truth for everything product-level (PRD, architecture decisions, feature specs, competitive landscape, test plan, security log):
+
+`~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/`
+
+Start with `Citrus Care PRD v1.md`. This repo only contains code + code-adjacent docs (`SHIP.md`, `supabase/README.md`).
 
 ## Setup
 
@@ -10,39 +18,46 @@ Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis, track
    ```
 
 2. **Supabase**
-   - Create a free project at supabase.com
-   - In SQL editor, run every file in `supabase/migrations/` in order
-   - Create a public storage bucket named `photos`
+   - Create a free project at supabase.com.
+   - In SQL editor, run every file in `supabase/migrations/` in order (0001 → 0002 → 0003).
+   - Storage bucket `photos` is created by migration 0002.
+   - For signup CAPTCHA: Dashboard → Auth → Settings → Bot/Abuse Protection → Turnstile → paste your Cloudflare Turnstile **secret** key.
 
-3. **Environment** (`.env.local`)
+3. **Cloudflare Turnstile** (free)
+   - Create a Turnstile site at `cloudflare.com/products/turnstile`.
+   - Copy the **site** key into `.env.local` as `NEXT_PUBLIC_TURNSTILE_SITE_KEY`.
+   - Copy the **secret** key into Supabase as above (it never touches this app).
+
+4. **Environment** (`.env.local`)
    ```
    NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_KEY
    SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
-   GEMINI_API_KEY=your-gemini-key
+   GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+   NEXT_PUBLIC_TURNSTILE_SITE_KEY=YOUR_TURNSTILE_SITE_KEY
    ```
 
-4. **Run**
+5. **Run**
    ```bash
-   npm run dev    # http://localhost:3002
-   npm test       # Vitest
-   npx playwright test
+   npm run dev               # http://localhost:3002
+   npm test                  # Vitest unit
+   npx playwright test       # E2e (run once: npx playwright install chromium)
+   npx tsc --noEmit          # Typecheck
    ```
-
-## Docs
-
-- [SPEC.md](./SPEC.md) — what we are building and success criteria
-- [tasks/plan.md](./tasks/plan.md) — implementation plan
-- [tasks/todo.md](./tasks/todo.md) — task status
 
 ## PWA
 
-The app is installable. Manifest at `/manifest.json`, minimal service worker at `/sw.js` (registered only in production). Icon is currently a scalable SVG at `/icon.svg` — before public launch, replace with proper 192/512 PNG icons (Real Favicon Generator works well) and update the `icons` array in `public/manifest.json`.
+Installable. Manifest at `/manifest.json`, service worker at `/sw.js` (registered only in production). Icon is a scalable SVG at `/icon.svg`. Before public launch, replace with 192/512 PNG icons (Real Favicon Generator) and update `public/manifest.json`.
 
 ## Deploy
 
-Vercel — connect repo, add the four env vars above, deploy.
+Vercel — connect repo, paste the five env vars above, deploy. See `SHIP.md` for the full pre-flight + post-deploy checklist.
+
+## CI
+
+`.github/workflows/ci.yml` runs typecheck + lint + vitest on every push to `main` and every PR.
 
 ## Known gotchas
 
-- If `npm run build` fails with `Cannot read properties of null (reading 'useContext')` on `/_global-error`, your shell has `NODE_ENV=development` exported. The build script already unsets it; if you call `next build` directly, do `unset NODE_ENV` first. ([Next.js issue #87719](https://github.com/vercel/next.js/issues/87719))
+- If `npm run build` fails with `Cannot read properties of null (reading 'useContext')` on `/_global-error`, your shell has `NODE_ENV=development` exported. The build script already unsets it; if you invoke `next build` directly, do `unset NODE_ENV` first. ([Next.js issue #87719](https://github.com/vercel/next.js/issues/87719))
+- `proxy.ts` (Next.js 16) replaced `middleware.ts`. The exported function is `proxy`, not `middleware`.

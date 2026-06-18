@@ -1,0 +1,61 @@
+# Cursor Rules — Citrus Care v1
+
+> Cursor reads this automatically. Mirrors `CLAUDE.md` for cross-tool consistency.
+
+## What this is
+Photo-driven citrus tree care PWA. Snap a leaf, Gemini diagnoses, every tree keeps a timeline, re-assessment compares vs prior.
+
+## Tech stack
+- Next.js 16 (App Router) + React 19 + TS strict
+- Tailwind 4 + shadcn/ui (`@base-ui/react` primitives)
+- Supabase: Auth + Postgres (RLS) + Storage
+- AI: `@google/genai` → `gemini-2.5-flash` with `responseSchema`
+- Cloudflare Turnstile on signup
+- Vitest (unit) + Playwright (e2e)
+- Vercel (Hobby tier)
+
+## Commands
+- `npm run dev` — port 3002
+- `npm run build` — production build (script unsets NODE_ENV first; do not remove)
+- `npm run lint` — ESLint
+- `npm test` — Vitest
+- `npx playwright test` — e2e
+- `npx tsc --noEmit` — typecheck
+
+## Key files
+- `app/_lib/gemini.ts` — vision + prompt + Zod
+- `app/_lib/rate-limit.ts` — Postgres rate limit
+- `app/api/assess/route.ts` — main AI endpoint
+- `app/(auth)/*` — auth + Turnstile
+- `app/trees/*` — tree CRUD + assess UI
+- `proxy.ts` — session + redirects
+- `supabase/migrations/*.sql` — schema + RLS
+
+## REQUIRED reads before any code change
+
+Read in this order. If you don't have access, ASK the user to paste:
+
+1. `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Citrus Care PRD v1.md` — features + status
+2. `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Project RESOURCES/Citrus Care v1/Architecture.md` — locked decisions
+3. `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Project RESOURCES/Citrus Care v1/Feature Specs/Feature - AI Assess Pipeline.md` — pipeline contract
+
+## Hard rules (do not break)
+
+- Gemini 2.5 Flash, `@google/genai`. No multi-provider fallback.
+- All model JSON re-validated by Zod.
+- RLS on every user-visible table. Service-role key never in user-facing routes.
+- `photoPath.startsWith(user.id + "/")` before any Storage download.
+- All error envelopes are generic strings; details `console.error` server-side.
+- Rate limit `/api/assess`: 5/user/hour (`ASSESS_LIMIT_PER_HOUR`).
+- Build script keeps `unset NODE_ENV`.
+- Trunk-based. CI gates push.
+- No new files unless necessary; edit existing first; refactor at 250 lines.
+- No `tags:` field on any new Obsidian doc.
+
+## Triage when no specific task
+
+Modes A (new feature) / B (bug) / C (continue from latest) / D (summarize) / E (other). Ask which one. Don't assume.
+
+## Session-end
+
+Update Obsidian PRD §9, Security Log if relevant, Architecture §Decisions if a new one locked, `What I learned/` if non-obvious lesson.
