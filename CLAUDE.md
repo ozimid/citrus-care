@@ -42,7 +42,7 @@ npx tsc --noEmit          # Typecheck
 1. Obsidian PRD — `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Citrus Care PRD v1.md` — feature inventory + shipped status.
 2. Obsidian Architecture — `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Project RESOURCES/Citrus Care v1/Architecture.md` — locked decisions (D-01..D-07).
 3. Obsidian Feature Spec — `Project RESOURCES/Citrus Care v1/Feature Specs/Feature - AI Assess Pipeline.md` — full pipeline contract.
-4. Obsidian Security Log — `Project RESOURCES/Citrus Care v1/Security Assessment Log.md` — what's been audited and what hasn't.
+4. Obsidian Security Log — `Project RESOURCES/Citrus Care v1/Security Assessment Log.md` — what's been audited, what's fixed, what's accepted. Pre-launch sweep (2026-06-18): 6 findings, 4 FIXED (b2e284e, d5ccc66, dc47dfc, 58dede0), 2 ACCEPTED, 3 VERIFIED-safe.
 
 If your change conflicts with anything in those docs, stop and surface it before coding.
 
