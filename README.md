@@ -35,6 +35,10 @@ Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis, track
 - [tasks/plan.md](./tasks/plan.md) — implementation plan
 - [tasks/todo.md](./tasks/todo.md) — task status
 
+## PWA
+
+The app is installable. Manifest at `/manifest.json`, minimal service worker at `/sw.js` (registered only in production). Icon is currently a scalable SVG at `/icon.svg` — before public launch, replace with proper 192/512 PNG icons (Real Favicon Generator works well) and update the `icons` array in `public/manifest.json`.
+
 ## Deploy
 
 Vercel — connect repo, add the four env vars above, deploy.

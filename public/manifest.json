@@ -1,0 +1,20 @@
+{
+  "name": "Citrus Care",
+  "short_name": "Citrus Care",
+  "description": "Photo-driven citrus tree care with AI diagnosis and history.",
+  "start_url": "/trees",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fef3c7",
+  "theme_color": "#fef3c7",
+  "categories": ["lifestyle", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
