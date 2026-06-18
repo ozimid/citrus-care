@@ -27,6 +27,8 @@
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `GEMINI_API_KEY` (from https://aistudio.google.com/apikey)
+   - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (from https://www.cloudflare.com/products/turnstile/)
+   - Also: paste the Turnstile **secret** key into Supabase Dashboard → Auth → Settings → Bot/Abuse Protection → Turnstile. The app never sees the secret.
 5. Deploy.
 6. Add the deployed origin to Supabase **Auth → URL Configuration → Site URL** (and Redirect URLs).
 

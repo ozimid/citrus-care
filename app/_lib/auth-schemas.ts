@@ -8,6 +8,7 @@ export const loginSchema = z.object({
 export const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(72),
+  captchaToken: z.string().min(1),
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

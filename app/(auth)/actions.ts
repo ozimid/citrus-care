@@ -34,13 +34,25 @@ export async function signup(
   const parsed = signupSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
+    captchaToken: formData.get("captchaToken"),
   });
   if (!parsed.success) {
-    return { error: "Enter a valid email and an 8+ character password." };
+    const captchaMissing = parsed.error.issues.some(
+      (i) => i.path[0] === "captchaToken",
+    );
+    return {
+      error: captchaMissing
+        ? "Please complete the CAPTCHA before signing up."
+        : "Enter a valid email and an 8+ character password.",
+    };
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signUp(parsed.data);
+  const { error } = await supabase.auth.signUp({
+    email: parsed.data.email,
+    password: parsed.data.password,
+    options: { captchaToken: parsed.data.captchaToken },
+  });
   if (error) return { error: error.message };
 
   revalidatePath("/", "layout");
