@@ -144,6 +144,104 @@ describe("POST /api/assess", () => {
     expect(callClaudeVisionMock).toHaveBeenCalledOnce();
   });
 
+  it("passes previous assessment into the prompt and links compared_to on insert", async () => {
+    callClaudeVisionMock.mockResolvedValue(
+      JSON.stringify({
+        health_score: 78,
+        summary: "Better — fewer chlorotic leaves.",
+        symptoms: [],
+        causes: [],
+        recommendations: [],
+        comparison: { delta: "better", notes: "Less yellowing on lower leaves." },
+      }),
+    );
+
+    const insertSpy = vi.fn().mockReturnValue({
+      select: () => ({
+        single: () => Promise.resolve({ data: { id: "assess-new" }, error: null }),
+      }),
+    });
+
+    createClientMock.mockResolvedValue({
+      auth: {
+        getUser: vi.fn().mockResolvedValue({
+          data: { user: { id: "u1" } },
+          error: null,
+        }),
+      },
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === "trees") {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: {
+                      id: "t1",
+                      user_id: "u1",
+                      name: "Mr Lemon",
+                      cultivar: "Meyer Lemon",
+                      location: null,
+                    },
+                    error: null,
+                  }),
+              }),
+            }),
+          };
+        }
+        if (table === "assessments") {
+          return {
+            select: () => ({
+              eq: () => ({
+                order: () => ({
+                  limit: () => ({
+                    maybeSingle: () =>
+                      Promise.resolve({
+                        data: {
+                          id: "assess-prev",
+                          health_score: 60,
+                          diagnosis: {
+                            summary: "Old leaves yellowing.",
+                            health_score: 60,
+                            symptoms: [],
+                            causes: [],
+                            recommendations: [],
+                          },
+                          created_at: "2026-01-01T00:00:00Z",
+                        },
+                        error: null,
+                      }),
+                  }),
+                }),
+              }),
+            }),
+            insert: insertSpy,
+          };
+        }
+        return {};
+      }),
+      storage: {
+        from: () => ({
+          download: vi
+            .fn()
+            .mockResolvedValue({
+              data: new Blob(["fake"], { type: "image/jpeg" }),
+              error: null,
+            }),
+        }),
+      },
+    });
+
+    const res = await POST(req({ treeId: "t1", photoPath: "u1/t1/x.jpg" }));
+    expect(res.status).toBe(200);
+    expect(insertSpy).toHaveBeenCalledOnce();
+    const row = insertSpy.mock.calls[0][0];
+    expect(row.compared_to_assessment_id).toBe("assess-prev");
+    const promptText = callClaudeVisionMock.mock.calls[0][0].userText as string;
+    expect(promptText).toContain("Previous assessment");
+    expect(promptText).toContain("60");
+  });
+
   it("returns 502 when Claude returns invalid JSON", async () => {
     callClaudeVisionMock.mockResolvedValue("not json at all");
     createClientMock.mockResolvedValue(
