@@ -23,7 +23,9 @@ Start with `Citrus Care PRD v1.md`. This repo only contains code + code-adjacent
    - Create a free project at supabase.com.
    - In SQL editor, run every file in `supabase/migrations/` in order (0001 → 0002 → 0003).
    - Storage bucket `photos` is created by migration 0002.
-   - For signup CAPTCHA: Dashboard → Auth → Settings → Bot/Abuse Protection → Turnstile → paste your Cloudflare Turnstile **secret** key.
+   - **Google sign-in:** Dashboard → **Authentication** → **Providers** → **Google** → Enable. Paste Client ID + Client Secret from [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (OAuth 2.0 Web client). Authorized redirect URI in Google must be `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback` (shown in the Supabase Google provider panel).
+   - For email signup CAPTCHA: Dashboard → **Auth** → **Settings** → **Bot/Abuse Protection** → Turnstile → paste Cloudflare Turnstile **secret** key.
+   - **URL Configuration:** Site URL `http://localhost:3002`, Redirect URLs `http://localhost:3002/**` (and your production URL when deployed).
 
 3. **Cloudflare Turnstile** (free)
    - Create a Turnstile site at `cloudflare.com/products/turnstile`.

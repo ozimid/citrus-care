@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { SignupForm } from "./signup-form";
+import { Suspense } from "react";
+import { AuthPanel } from "@/components/AuthPanel";
+import { GoogleAuthSetupHint } from "@/components/GoogleAuthSetupHint";
 
 export default function SignupPage() {
   return (
@@ -10,7 +12,10 @@ export default function SignupPage() {
           Free account. Add your first tree in under a minute.
         </p>
       </div>
-      <SignupForm />
+      <Suspense fallback={<div className="h-48 animate-pulse rounded-lg bg-muted" />}>
+        <AuthPanel />
+      </Suspense>
+      <GoogleAuthSetupHint />
       <p className="text-center text-sm text-muted-foreground">
         Already in?{" "}
         <Link href="/login" className="font-medium text-amber-700 hover:underline">

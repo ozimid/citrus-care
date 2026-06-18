@@ -14,8 +14,11 @@
 1. Create a Supabase project (free tier).
 2. SQL editor → run `supabase/migrations/0001_init.sql`.
 3. SQL editor → run `supabase/migrations/0002_storage_photos.sql`.
-4. Verify in dashboard: tables `profiles`, `trees`, `assessments` exist with RLS on; bucket `photos` is private.
-5. Copy URL + anon key + service role key into `.env.local`.
+4. SQL editor → run `supabase/migrations/0003_rate_limits.sql`.
+5. Verify in dashboard: tables `profiles`, `trees`, `assessments`, `rate_limits` exist with RLS on; bucket `photos` is private.
+6. **Google OAuth:** Authentication → Providers → Google → Enable. Use Google Cloud OAuth client; redirect URI = `https://<project-ref>.supabase.co/auth/v1/callback`.
+7. **Auth URLs:** Site URL + Redirect URLs include `http://localhost:3002` (dev) and production domain (prod).
+8. Copy URL + anon key + service role key into `.env.local`.
 
 ## Deploy to Vercel
 

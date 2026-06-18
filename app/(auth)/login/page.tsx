@@ -1,7 +1,16 @@
 import Link from "next/link";
-import { LoginForm } from "./login-form";
+import { Suspense } from "react";
+import { AuthPanel } from "@/components/AuthPanel";
+import { GoogleAuthSetupHint } from "@/components/GoogleAuthSetupHint";
+import { CITRUS_SUPABASE_CALLBACK_URL } from "@/app/_lib/google-auth-config";
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -10,7 +19,20 @@ export default function LoginPage() {
           Log in to track your citrus trees.
         </p>
       </div>
-      <LoginForm />
+      {error === "auth" && (
+        <p className="text-sm text-destructive" role="alert">
+          Google sign-in failed after redirect. Enable Google under Supabase →
+          Authentication → Providers, add{" "}
+          <code className="text-xs">{CITRUS_SUPABASE_CALLBACK_URL}</code> to Google
+          Cloud redirect URIs, and allow{" "}
+          <code className="text-xs">http://localhost:3002/**</code> in Supabase
+          redirect URLs.
+        </p>
+      )}
+      <Suspense fallback={<div className="h-48 animate-pulse rounded-lg bg-muted" />}>
+        <AuthPanel />
+      </Suspense>
+      <GoogleAuthSetupHint />
       <p className="text-center text-sm text-muted-foreground">
         New here?{" "}
         <Link href="/signup" className="font-medium text-amber-700 hover:underline">

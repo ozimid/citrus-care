@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/app/_lib/supabase/server";
-import { logout } from "@/app/(auth)/actions";
+import { HeaderAuth } from "@/components/HeaderAuth";
 
 export default async function TreesLayout({
   children,
@@ -20,14 +20,7 @@ export default async function TreesLayout({
         <Link href="/trees" className="text-base font-semibold text-amber-700">
           Citrus Care
         </Link>
-        <form action={logout}>
-          <button
-            type="submit"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            Log out
-          </button>
-        </form>
+        <HeaderAuth />
       </header>
       {children}
     </div>
