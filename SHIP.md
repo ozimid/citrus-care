@@ -7,7 +7,7 @@
 - [ ] `npm run lint` clean
 - [ ] `npm run build` succeeds locally
 - [ ] `npx playwright test` — landing + redirect smoke (requires `npx playwright install chromium` once)
-- [ ] `.env.local` has all four env vars (Supabase URL, anon key, service role, Anthropic key)
+- [ ] `.env.local` has all four env vars (Supabase URL, anon key, service role, Gemini key)
 
 ## Supabase
 
@@ -26,7 +26,7 @@
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
-   - `ANTHROPIC_API_KEY`
+   - `GEMINI_API_KEY` (from https://aistudio.google.com/apikey)
 5. Deploy.
 6. Add the deployed origin to Supabase **Auth → URL Configuration → Site URL** (and Redirect URLs).
 
@@ -56,6 +56,6 @@ delete from storage.buckets where id = 'photos';
 
 ## Post-launch monitoring (manual at MVP scale)
 
-- Watch Vercel function logs for /api/assess errors and Claude 502s.
-- Watch Anthropic console for token spend.
+- Watch Vercel function logs for /api/assess errors and Gemini 502s.
+- Watch Google AI Studio for Gemini token spend.
 - Watch Supabase dashboard for storage usage (photo bucket).

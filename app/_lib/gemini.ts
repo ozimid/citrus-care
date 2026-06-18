@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI, Type } from "@google/genai";
 import { z } from "zod";
 import type { Assessment, AssessmentDiagnosis } from "@/app/_lib/types";
 
@@ -93,7 +93,7 @@ export function parseAssessment(raw: string): AssessmentDiagnosis {
     parsed = JSON.parse(cleaned);
   } catch (e) {
     throw new Error(
-      `Claude returned non-JSON: ${(e as Error).message} :: ${cleaned.slice(0, 200)}`,
+      `Gemini returned non-JSON: ${(e as Error).message} :: ${cleaned.slice(0, 200)}`,
     );
   }
   return assessmentDiagnosisSchema.parse(parsed);
@@ -104,42 +104,94 @@ function stripJsonFences(s: string): string {
   return fenced ? fenced[1] : s;
 }
 
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "gemini-2.5-flash";
 
-export async function callClaudeVision(args: {
+const responseSchema = {
+  type: Type.OBJECT,
+  properties: {
+    health_score: { type: Type.INTEGER, minimum: 0, maximum: 100 },
+    summary: { type: Type.STRING },
+    symptoms: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          label: { type: Type.STRING },
+          severity: { type: Type.STRING, enum: ["low", "medium", "high"] },
+          notes: { type: Type.STRING },
+        },
+        required: ["label", "severity"],
+      },
+    },
+    causes: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          label: { type: Type.STRING },
+          likelihood: { type: Type.STRING, enum: ["low", "medium", "high"] },
+          rationale: { type: Type.STRING },
+        },
+        required: ["label", "likelihood", "rationale"],
+      },
+    },
+    recommendations: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          priority: { type: Type.INTEGER, enum: [1, 2, 3] },
+          action: { type: Type.STRING },
+          detail: { type: Type.STRING },
+        },
+        required: ["priority", "action", "detail"],
+      },
+    },
+    comparison: {
+      type: Type.OBJECT,
+      properties: {
+        delta: { type: Type.STRING, enum: ["better", "same", "worse", "unknown"] },
+        notes: { type: Type.STRING },
+      },
+      required: ["delta", "notes"],
+    },
+  },
+  required: ["health_score", "summary", "symptoms", "causes", "recommendations"],
+};
+
+export async function callGeminiVision(args: {
   systemPrompt: string;
   userText: string;
   imageBase64: string;
   imageMediaType: "image/jpeg" | "image/png" | "image/webp" | "image/heic" | "image/heif";
 }): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
-  const msg = await client.messages.create({
+  const mimeType =
+    args.imageMediaType === "image/heic" || args.imageMediaType === "image/heif"
+      ? "image/jpeg"
+      : args.imageMediaType;
+
+  const response = await ai.models.generateContent({
     model: MODEL,
-    max_tokens: 1500,
-    system: args.systemPrompt,
-    messages: [
+    contents: [
       {
         role: "user",
-        content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type:
-                args.imageMediaType === "image/heic" || args.imageMediaType === "image/heif"
-                  ? "image/jpeg"
-                  : args.imageMediaType,
-              data: args.imageBase64,
-            },
-          },
-          { type: "text", text: args.userText },
+        parts: [
+          { inlineData: { mimeType, data: args.imageBase64 } },
+          { text: args.userText },
         ],
       },
     ],
+    config: {
+      systemInstruction: args.systemPrompt,
+      responseMimeType: "application/json",
+      responseSchema,
+      maxOutputTokens: 1500,
+    },
   });
 
-  const text = msg.content.find((c) => c.type === "text");
-  if (!text || text.type !== "text") throw new Error("Claude returned no text content");
-  return text.text;
+  const text = response.text;
+  if (!text) throw new Error("Gemini returned no text content");
+  return text;
 }

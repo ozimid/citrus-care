@@ -14,8 +14,8 @@
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.105.0",
     "@base-ui/react": "^1.6.0",
+    "@google/genai": "^2.8.0",
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.108.2",
     "class-variance-authority": "^0.7.1",

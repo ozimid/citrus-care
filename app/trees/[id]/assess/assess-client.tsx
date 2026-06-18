@@ -44,7 +44,7 @@ export function AssessClient({ treeId }: { treeId: string }) {
         .upload(path, blob, { contentType: "image/jpeg", upsert: false });
       if (upErr) throw new Error(upErr.message);
 
-      setStatus("Analysing with Claude…");
+      setStatus("Analysing with Gemini…");
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

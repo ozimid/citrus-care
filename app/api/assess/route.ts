@@ -4,9 +4,9 @@ import { createClient } from "@/app/_lib/supabase/server";
 import {
   buildSystemPrompt,
   buildUserMessageText,
-  callClaudeVision,
+  callGeminiVision,
   parseAssessment,
-} from "@/app/_lib/claude";
+} from "@/app/_lib/gemini";
 import type { Assessment, Tree } from "@/app/_lib/types";
 
 export const runtime = "nodejs";
@@ -70,7 +70,7 @@ export async function POST(req: Request) {
 
   let raw: string;
   try {
-    raw = await callClaudeVision({
+    raw = await callGeminiVision({
       systemPrompt,
       userText,
       imageBase64: base64,

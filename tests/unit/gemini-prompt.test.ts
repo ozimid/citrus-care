@@ -4,7 +4,7 @@ import {
   buildUserMessageText,
   parseAssessment,
   assessmentDiagnosisSchema,
-} from "@/app/_lib/claude";
+} from "@/app/_lib/gemini";
 import type { Assessment } from "@/app/_lib/types";
 
 describe("buildSystemPrompt", () => {
@@ -74,7 +74,7 @@ describe("parseAssessment", () => {
     expect(out.causes[0].label).toContain("Iron");
   });
 
-  it("strips ```json fences if the model wraps the JSON", () => {
+  it("strips ```json fences if the model wraps the JSON (defense-in-depth)", () => {
     const json = JSON.stringify({
       health_score: 50,
       summary: "ok",

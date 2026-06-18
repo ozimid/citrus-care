@@ -19,7 +19,7 @@ Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis, track
    NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_KEY
    SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
-   ANTHROPIC_API_KEY=sk-ant-...
+   GEMINI_API_KEY=your-gemini-key
    ```
 
 4. **Run**

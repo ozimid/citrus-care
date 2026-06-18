@@ -1,19 +1,19 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const createClientMock = vi.fn();
-const callClaudeVisionMock = vi.fn();
+const callGeminiVisionMock = vi.fn();
 
 vi.mock("@/app/_lib/supabase/server", () => ({
   createClient: () => createClientMock(),
 }));
 
-vi.mock("@/app/_lib/claude", async () => {
-  const real = await vi.importActual<typeof import("@/app/_lib/claude")>(
-    "@/app/_lib/claude",
+vi.mock("@/app/_lib/gemini", async () => {
+  const real = await vi.importActual<typeof import("@/app/_lib/gemini")>(
+    "@/app/_lib/gemini",
   );
   return {
     ...real,
-    callClaudeVision: (...args: unknown[]) => callClaudeVisionMock(...args),
+    callGeminiVision: (...args: unknown[]) => callGeminiVisionMock(...args),
   };
 });
 
@@ -90,7 +90,7 @@ function req(body: object) {
 
 beforeEach(() => {
   createClientMock.mockReset();
-  callClaudeVisionMock.mockReset();
+  callGeminiVisionMock.mockReset();
 });
 
 describe("POST /api/assess", () => {
@@ -116,8 +116,8 @@ describe("POST /api/assess", () => {
     expect(res.status).toBe(404);
   });
 
-  it("calls Claude with the prompt, persists, returns the new assessment id", async () => {
-    callClaudeVisionMock.mockResolvedValue(
+  it("calls Gemini with the prompt, persists, returns the new assessment id", async () => {
+    callGeminiVisionMock.mockResolvedValue(
       JSON.stringify({
         health_score: 80,
         summary: "Looks healthy.",
@@ -141,11 +141,11 @@ describe("POST /api/assess", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.id).toBe("assess-1");
-    expect(callClaudeVisionMock).toHaveBeenCalledOnce();
+    expect(callGeminiVisionMock).toHaveBeenCalledOnce();
   });
 
   it("passes previous assessment into the prompt and links compared_to on insert", async () => {
-    callClaudeVisionMock.mockResolvedValue(
+    callGeminiVisionMock.mockResolvedValue(
       JSON.stringify({
         health_score: 78,
         summary: "Better — fewer chlorotic leaves.",
@@ -237,13 +237,13 @@ describe("POST /api/assess", () => {
     expect(insertSpy).toHaveBeenCalledOnce();
     const row = insertSpy.mock.calls[0][0];
     expect(row.compared_to_assessment_id).toBe("assess-prev");
-    const promptText = callClaudeVisionMock.mock.calls[0][0].userText as string;
+    const promptText = callGeminiVisionMock.mock.calls[0][0].userText as string;
     expect(promptText).toContain("Previous assessment");
     expect(promptText).toContain("60");
   });
 
-  it("returns 502 when Claude returns invalid JSON", async () => {
-    callClaudeVisionMock.mockResolvedValue("not json at all");
+  it("returns 502 when Gemini returns invalid JSON", async () => {
+    callGeminiVisionMock.mockResolvedValue("not json at all");
     createClientMock.mockResolvedValue(
       buildSupabaseStub({
         user: { id: "u1" },
