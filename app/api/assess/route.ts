@@ -36,6 +36,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
+  if (!photoPath.startsWith(user.id + "/")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { data: treeRow } = await supabase
     .from("trees")
     .select("id,user_id,name,cultivar,location,cover_assessment_id,created_at")
@@ -77,8 +81,9 @@ export async function POST(req: Request) {
       imageMediaType: "image/jpeg",
     });
   } catch (e) {
+    console.error("[/api/assess] Gemini call failed:", (e as Error).message);
     return NextResponse.json(
-      { error: `AI call failed: ${(e as Error).message}` },
+      { error: "AI service unavailable. Please try again." },
       { status: 502 },
     );
   }
@@ -87,8 +92,9 @@ export async function POST(req: Request) {
   try {
     diagnosis = parseAssessment(raw);
   } catch (e) {
+    console.error("[/api/assess] Gemini returned malformed JSON:", (e as Error).message);
     return NextResponse.json(
-      { error: `AI returned malformed JSON: ${(e as Error).message}` },
+      { error: "AI returned an invalid response. Please try again." },
       { status: 502 },
     );
   }
@@ -110,8 +116,9 @@ export async function POST(req: Request) {
     .single();
 
   if (insertErr || !inserted) {
+    console.error("[/api/assess] Insert failed:", insertErr?.message);
     return NextResponse.json(
-      { error: insertErr?.message ?? "Failed to save assessment" },
+      { error: "Failed to save assessment." },
       { status: 500 },
     );
   }

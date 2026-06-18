@@ -37,7 +37,10 @@ export async function createTree(
     .select("id")
     .single();
 
-  if (error || !data) return { error: error?.message ?? "Failed to create" };
+  if (error || !data) {
+    console.error("[createTree] Insert failed:", error?.message);
+    return { error: "Failed to create tree." };
+  }
 
   revalidatePath("/trees");
   redirect(`/trees/${data.id}`);
@@ -46,7 +49,10 @@ export async function createTree(
 export async function deleteTree(treeId: string) {
   const supabase = await createClient();
   const { error } = await supabase.from("trees").delete().eq("id", treeId);
-  if (error) throw new Error(error.message);
+  if (error) {
+    console.error("[deleteTree] Delete failed:", error.message);
+    throw new Error("Failed to delete tree.");
+  }
   revalidatePath("/trees");
   redirect("/trees");
 }

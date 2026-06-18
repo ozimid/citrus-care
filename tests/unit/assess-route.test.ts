@@ -242,6 +242,61 @@ describe("POST /api/assess", () => {
     expect(promptText).toContain("60");
   });
 
+  it("returns 403 when photoPath does not belong to the authenticated user", async () => {
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({
+        user: { id: "u1" },
+        tree: { id: "t1", user_id: "u1", name: "x", cultivar: null, location: null },
+      }),
+    );
+    const res = await POST(req({ treeId: "t1", photoPath: "OTHER-USER/t1/x.jpg" }));
+    expect(res.status).toBe(403);
+    expect(callGeminiVisionMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a generic 502 when Gemini call fails (no internal details leaked)", async () => {
+    callGeminiVisionMock.mockRejectedValue(
+      new Error("Internal: API key abc123 invalid; quota exhausted at https://gen-lang/v1beta"),
+    );
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({
+        user: { id: "u1" },
+        tree: { id: "t1", user_id: "u1", name: "x", cultivar: null, location: null },
+      }),
+    );
+    const res = await POST(req({ treeId: "t1", photoPath: "u1/t1/x.jpg" }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).not.toContain("API key");
+    expect(body.error).not.toContain("abc123");
+    expect(body.error).not.toContain("gen-lang");
+  });
+
+  it("returns a generic 500 when insert fails (no Supabase error message leaked)", async () => {
+    callGeminiVisionMock.mockResolvedValue(
+      JSON.stringify({
+        health_score: 80,
+        summary: "ok.",
+        symptoms: [],
+        causes: [],
+        recommendations: [],
+      }),
+    );
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({
+        user: { id: "u1" },
+        tree: { id: "t1", user_id: "u1", name: "x", cultivar: null, location: null },
+        insertedId: undefined,
+        insertError: { message: "duplicate key value violates unique constraint pk_assessments — table: public.assessments" },
+      }),
+    );
+    const res = await POST(req({ treeId: "t1", photoPath: "u1/t1/x.jpg" }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).not.toContain("duplicate key");
+    expect(body.error).not.toContain("public.assessments");
+  });
+
   it("returns 502 when Gemini returns invalid JSON", async () => {
     callGeminiVisionMock.mockResolvedValue("not json at all");
     createClientMock.mockResolvedValue(
