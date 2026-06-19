@@ -54,7 +54,7 @@ export function PhoneAuthHint() {
         </li>
         <li>
           <span className="text-muted-foreground">Redirect URLs → add</span>{" "}
-          <code className="select-all break-all">{origin}/**</code>
+          <code className="select-all break-all">{`${origin}/**`}</code>
         </li>
       </ul>
       <p className="mt-2 text-muted-foreground">

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/app/_lib/supabase/server";
 import { buttonVariants } from "@/components/ui/button";
 import { PlantCard } from "@/components/PlantCard";
@@ -18,9 +19,9 @@ export default async function PlantsPage() {
     <main className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Your plants</h1>
-        <a href="/plants/new" className={buttonVariants({ size: "sm" })}>
+        <Link href="/plants/new" className={buttonVariants({ size: "sm" })}>
           Add plant
-        </a>
+        </Link>
       </div>
 
       {list.length === 0 ? (
@@ -45,10 +46,9 @@ function EmptyState() {
       <p className="mt-1 text-sm text-muted-foreground">
         Add your first plant to start tracking its health.
       </p>
-      <a href="/plants/new" className={buttonVariants({ size: "sm" }) + " mt-4"}>
+      <Link href="/plants/new" className={buttonVariants({ size: "sm" }) + " mt-4"}>
         Add plant
-      </a>
+      </Link>
     </div>
   );
 }
-

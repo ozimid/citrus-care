@@ -28,9 +28,9 @@ export function DeletePlantButton({ plantId, plantName }: DeletePlantButtonProps
       try {
         await deletePlant(plantId);
         closeDialog();
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error(err);
-        setError(err.message || "Failed to delete plant");
+        setError(err instanceof Error ? err.message : "Failed to delete plant");
       }
     });
   };

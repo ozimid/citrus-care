@@ -41,13 +41,14 @@ describe("downscaleImage", () => {
     const originalWindow = global.window;
     const originalCreateImageBitmap = global.createImageBitmap;
 
-    global.window = {} as any;
-    global.createImageBitmap = vi.fn().mockRejectedValue(new Error("failed"));
+    global.window = {} as Window & typeof globalThis;
+    global.createImageBitmap = vi
+      .fn()
+      .mockRejectedValue(new Error("failed")) as typeof createImageBitmap;
 
-    const fakeHeicFile = {
+    const fakeHeicFile = new File(["fake"], "photo.heic", {
       type: "image/heic",
-      name: "photo.heic",
-    } as any;
+    });
 
     await expect(downscaleImage(fakeHeicFile)).rejects.toThrow("HEIC photos are not supported");
 

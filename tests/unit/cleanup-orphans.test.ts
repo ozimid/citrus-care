@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 
 const createClientMock = vi.fn();
 
@@ -8,10 +8,16 @@ vi.mock("@supabase/supabase-js", () => ({
 
 import { POST } from "@/app/api/cleanup-orphans/route";
 
+interface StorageFileStub {
+  name: string;
+  id: string | null;
+  created_at?: string;
+}
+
 function buildSupabaseStub(opts: {
   assessments?: { photo_path: string }[];
-  storageFiles?: Record<string, any[]>;
-  removeSpy?: any;
+  storageFiles?: Record<string, StorageFileStub[]>;
+  removeSpy?: Mock;
 }) {
   return {
     from: vi.fn().mockImplementation((table: string) => {

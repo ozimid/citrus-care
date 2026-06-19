@@ -21,6 +21,7 @@ export function HeaderAuth() {
   return (
     <div className="flex items-center gap-2">
       {user.avatarUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={user.avatarUrl}
           alt=""

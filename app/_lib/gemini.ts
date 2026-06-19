@@ -213,7 +213,7 @@ export async function callGeminiVision(args: {
       ? "image/jpeg"
       : args.imageMediaType;
 
-  let lastError: any = null;
+  let lastError: unknown = null;
   const maxRetries = 2;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -255,7 +255,9 @@ export async function callGeminiVision(args: {
     }
   }
 
-  throw lastError || new Error("Gemini API call failed after retries");
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gemini API call failed after retries");
 }
 
 export async function assessPhotoWithGemini(args: {

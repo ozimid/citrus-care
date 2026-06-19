@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 
 interface BeforeAfterSliderProps {
@@ -18,7 +18,7 @@ export function BeforeAfterSlider({
 }: BeforeAfterSliderProps) {
   const [sliderPosition, setSliderPosition] = useState(50);
   const containerRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
+  const isDraggingRef = useRef(false);
 
   const handleMove = (clientX: number) => {
     if (!containerRef.current) return;
@@ -27,38 +27,6 @@ export function BeforeAfterSlider({
     const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
     setSliderPosition(percentage);
   };
-
-  const handleTouchMove = (e: TouchEvent) => {
-    if (!isDragging.current) return;
-    if (e.touches.length > 0) {
-      handleMove(e.touches[0].clientX);
-    }
-  };
-
-  const handleMouseMove = (e: MouseEvent) => {
-    if (!isDragging.current) return;
-    handleMove(e.clientX);
-  };
-
-  const handleMouseUp = () => {
-    isDragging.current = false;
-  };
-
-  useEffect(() => {
-    const onTouchMove = (e: TouchEvent) => handleTouchMove(e);
-    const onMouseMove = (e: MouseEvent) => handleMouseMove(e);
-    const onMouseUp = () => handleMouseUp();
-
-    window.addEventListener("touchmove", onTouchMove, { passive: false });
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-
-    return () => {
-      window.removeEventListener("touchmove", onTouchMove);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
 
   return (
     <Card className="overflow-hidden border bg-card text-card-foreground shadow-sm">
@@ -72,12 +40,21 @@ export function BeforeAfterSlider({
       </div>
       <div
         ref={containerRef}
-        className="relative select-none aspect-video w-full overflow-hidden bg-muted cursor-ew-resize"
-        onMouseDown={() => {
-          isDragging.current = true;
+        className="relative aspect-video w-full cursor-ew-resize touch-none select-none overflow-hidden bg-muted"
+        onPointerDown={(event) => {
+          isDraggingRef.current = true;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          handleMove(event.clientX);
         }}
-        onTouchStart={() => {
-          isDragging.current = true;
+        onPointerMove={(event) => {
+          if (isDraggingRef.current) handleMove(event.clientX);
+        }}
+        onPointerUp={(event) => {
+          isDraggingRef.current = false;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          isDraggingRef.current = false;
         }}
       >
         {/* After Image (Background) */}
@@ -101,7 +78,6 @@ export function BeforeAfterSlider({
             src={beforeUrl}
             alt="Before treatment"
             className="absolute inset-0 size-full object-cover max-w-none pointer-events-none"
-            style={{ width: containerRef.current?.getBoundingClientRect().width || "100%" }}
           />
         </div>
         <div className="absolute left-3 top-3 bg-black/60 backdrop-blur-sm text-[10px] text-white px-2 py-1 rounded font-medium z-10">

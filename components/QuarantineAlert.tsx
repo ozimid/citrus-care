@@ -3,7 +3,6 @@
 import { checkQuarantine } from "@/app/_lib/quarantine";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle, Phone, Globe } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
 interface QuarantineAlertProps {
   plant: {
@@ -21,7 +20,6 @@ export function QuarantineAlert({ plant }: QuarantineAlertProps) {
   if (!result.inQuarantine) return null;
 
   const hotline = result.state === "CA" ? "1-800-491-1899" : "1-800-835-5832";
-  const agencyName = result.state === "CA" ? "California Department of Food and Agriculture (CDFA)" : "Texas Department of Agriculture (TDA)";
   const website = result.state === "CA" 
     ? "https://www.cdfa.ca.gov/plant/pe/InteriorExclusion/hlb.html" 
     : "https://texasagriculture.gov/Keep-Texas-Citrus-Healthy";

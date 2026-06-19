@@ -28,7 +28,7 @@ export default async function EditPlantPage({
           Edit {plant.name}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Modify your plant's details below. Keep details accurate to help the AI.
+          Modify this plant record below. Keep details accurate to help the AI.
         </p>
       </div>
       <EditPlantForm plant={plant} />
