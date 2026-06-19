@@ -1,11 +1,14 @@
 export type UUID = string;
 
-export interface Tree {
+export interface Plant {
   id: UUID;
   user_id: UUID;
   name: string;
+  plant_type: string;
+  species: string | null;
   cultivar: string | null;
   location: string | null;
+  zip_code: string | null;
   cover_assessment_id: UUID | null;
   created_at: string;
 }
@@ -44,7 +47,7 @@ export interface AssessmentDiagnosis {
 
 export interface Assessment {
   id: UUID;
-  tree_id: UUID;
+  plant_id: UUID;
   user_id: UUID;
   photo_path: string;
   created_at: string;
@@ -54,4 +57,7 @@ export interface Assessment {
   recommendations: Recommendation[];
   compared_to_assessment_id: UUID | null;
   raw_output: string;
+  is_cut_care: boolean;
+  cut_health_score: number | null;
 }
+

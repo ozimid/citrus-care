@@ -1,0 +1,36 @@
+---
+description: Citrus Care — read PRD §0 first; one doc policy; no Obsidian sprawl
+alwaysApply: true
+---
+
+# Citrus Care
+
+## Read order (before code)
+
+1. **PRD §0 only** for current focus — `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Citrus Care PRD v1.md`
+2. **Architecture** — only if touching auth, RLS, storage, or AI pipeline
+3. **Feature - AI Assess Pipeline** — only if touching `/api/assess` or `gemini.ts`
+
+Do not read or create `activeContext`, `Backlog`, `Shipped Log`, or `Agent Handoff Guide` — merged into PRD §0.
+
+## Doc policy
+
+- **One source of truth:** PRD v1. Update §0 (current state), §6 (features), §9 (roadmap) when you ship.
+- **Extra Obsidian files:** only when user explicitly asks (e.g. Security Log, User Feedback Log, Competitive Landscape).
+- **Never** add `tags:` to new Obsidian frontmatter.
+
+## Triage (no task given)
+
+Ask: **A** new feature · **B** bug · **C** continue (read PRD §0 + `git status`) · **D** summarize · **E** other.
+
+## Hard rules
+
+- Google OAuth only (no email/password). LAN dev: Supabase Site URL = device IP (`192.168.1.205:3002`).
+- Gemini 2.5 Flash, Zod-validated JSON, RLS everywhere, photoPath ownership, generic errors, 5 assess/hour.
+- `npm run dev` → port **3002**, `--hostname 0.0.0.0` for phone testing.
+- Trunk-based `main`. Never overwrite `.env.local` without asking.
+- Kill old dev servers before starting a new one.
+
+## Session end
+
+Update PRD §0/§6/§9. Log bugs in [[User Feedback Log]] only if user-facing. Security → Security Assessment Log.

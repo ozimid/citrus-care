@@ -8,7 +8,7 @@ Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flas
 - **Backend:** Next.js Route Handlers + Server Actions
 - **AI:** Google Gemini API (`@google/genai`, model `gemini-2.5-flash`, structured output via `responseSchema`)
 - **Database:** Supabase (Postgres + Auth + Storage + RLS on every user-visible table)
-- **CAPTCHA:** Cloudflare Turnstile on signup (via Supabase Auth `options.captchaToken`)
+- **Auth:** Google OAuth via Supabase (server routes `app/auth/google`, `app/auth/callback`)
 - **Testing:** Vitest (unit), Playwright (e2e)
 - **CI:** GitHub Actions (typecheck + lint + vitest on push/PR)
 - **Deploy:** Vercel (Hobby tier)
@@ -31,20 +31,22 @@ npx tsc --noEmit          # Typecheck
 - `app/_lib/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
 - `app/_lib/supabase/{client,server,middleware}.ts` — Supabase clients
 - `app/api/assess/route.ts` — main AI endpoint (auth · ownership · rate limit · download · Gemini · parse · insert)
-- `app/(auth)/{login,signup}/...` — auth pages + Turnstile widget
-- `app/trees/...` — tree list / new / detail / assess / single-assessment pages
+- `app/auth/{google,callback}/route.ts` — Google OAuth
+- `components/AuthPanel.tsx` — sign-in UI
+- `app/plants/...` — plant list / new / detail / assess / single-assessment pages
 - `proxy.ts` — Next.js 16 proxy (was `middleware.ts`); session refresh + redirects
 - `supabase/migrations/*.sql` — schema, RLS, photos bucket, rate_limits
 - `tests/unit/*.test.ts` — schemas, prompts, image utils, health bands, assess route, rate limit
 - `tests/e2e/*.spec.ts` — landing + protected redirect
 
 ## Required reads before any code change
-1. Obsidian PRD — `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Citrus Care PRD v1.md` — feature inventory + shipped status.
-2. Obsidian Architecture — `~/Documents/Obsidian Vault/Alex/ARPA/6. FINANCIALS/2. FINANCIALS PROJECTS/3. IN PROGRESS WIP - 1/Citrus Care/Project RESOURCES/Citrus Care v1/Architecture.md` — locked decisions (D-01..D-07).
-3. Obsidian Feature Spec — `Project RESOURCES/Citrus Care v1/Feature Specs/Feature - AI Assess Pipeline.md` — full pipeline contract.
-4. Obsidian Security Log — `Project RESOURCES/Citrus Care v1/Security Assessment Log.md` — what's been audited, what's fixed, what's accepted. Pre-launch sweep (2026-06-18): 6 findings, 4 FIXED (b2e284e, d5ccc66, dc47dfc, 58dede0), 2 ACCEPTED, 3 VERIFIED-safe.
+1. Obsidian PRD **§0** — `.../Citrus Care/Citrus Care PRD v1.md` — current focus, next steps, feature status. **Read first.**
+2. Obsidian Architecture — only if touching auth, RLS, storage, or pipeline boundaries.
+3. Obsidian Feature Spec — `Feature - AI Assess Pipeline.md` — only if touching assess/Gemini.
 
-If your change conflicts with anything in those docs, stop and surface it before coding.
+Do not create separate handoff/backlog/shipped docs — update PRD §0/§6/§9 instead.
+
+If your change conflicts with Architecture or the PRD, stop and surface it before coding.
 
 ## Hard rules (do not break)
 
@@ -63,7 +65,7 @@ If your change conflicts with anything in those docs, stop and surface it before
 
 Before logout, if you touched code or shipped a feature:
 
-1. Update the Obsidian PRD §9 Phased Roadmap (status, commit SHA).
+1. Update the Obsidian PRD §0 + §9 (status, commit SHA).
 2. Add a row to the Obsidian Security Assessment Log if security-relevant.
 3. If you locked a new architecture decision, add it to Obsidian Architecture §"Locked decisions" with the Decision/Why/Trade-off format.
 4. If you learned something non-obvious, add a note under `Project RESOURCES/Citrus Care v1/What I learned/`.
@@ -86,6 +88,4 @@ Required env vars (set in `.env.local` and Vercel — see `Project RESOURCES/Cit
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`
-
-Turnstile **secret** key lives in Supabase Dashboard → Auth → Settings → Bot/Abuse Protection → Turnstile, **not** in the app env.
+- Google OAuth configured in Supabase Dashboard + Google Cloud Console

@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { storagePathFor, fileExtensionFromMime } from "@/app/_lib/image-utils";
+import { describe, expect, it, vi } from "vitest";
+import { storagePathFor, fileExtensionFromMime, downscaleImage } from "@/app/_lib/image-utils";
 
 describe("storagePathFor", () => {
   it("namespaces under user/tree with a unique filename and right ext", () => {
     const p = storagePathFor({
       userId: "user-1",
-      treeId: "tree-2",
+      plantId: "tree-2",
       mime: "image/jpeg",
       name: "abc123",
     });
@@ -15,7 +15,7 @@ describe("storagePathFor", () => {
   it("falls back to .bin for unknown mime", () => {
     const p = storagePathFor({
       userId: "u",
-      treeId: "t",
+      plantId: "t",
       mime: "weird/thing",
       name: "x",
     });
@@ -33,5 +33,25 @@ describe("fileExtensionFromMime", () => {
   });
   it("falls back to bin", () => {
     expect(fileExtensionFromMime("anything/else")).toBe("bin");
+  });
+});
+
+describe("downscaleImage", () => {
+  it("throws error for HEIC files when bitmap creation fails", async () => {
+    const originalWindow = global.window;
+    const originalCreateImageBitmap = global.createImageBitmap;
+
+    global.window = {} as any;
+    global.createImageBitmap = vi.fn().mockRejectedValue(new Error("failed"));
+
+    const fakeHeicFile = {
+      type: "image/heic",
+      name: "photo.heic",
+    } as any;
+
+    await expect(downscaleImage(fakeHeicFile)).rejects.toThrow("HEIC photos are not supported");
+
+    global.window = originalWindow;
+    global.createImageBitmap = originalCreateImageBitmap;
   });
 });

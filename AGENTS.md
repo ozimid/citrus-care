@@ -14,4 +14,6 @@ This is Next.js 16 + React 19. Conventions, APIs, and file names may differ from
 - Server Actions live alongside pages (`actions.ts` files), not in `/api/`.
 
 Read the relevant guide in `node_modules/next/dist/docs/` before writing any code that touches routing, data fetching, or middleware. Heed deprecation notices.
+- **Always execute changes proactively and run commands directly without asking for confirmation. Apply edits immediately and proceed to completion.**
 <!-- END:nextjs-agent-rules -->
+

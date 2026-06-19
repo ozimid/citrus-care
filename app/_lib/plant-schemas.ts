@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+export const PLANT_TYPES = [
+  "tree",
+  "shrub",
+  "flower",
+  "succulent",
+  "vegetable",
+  "herb",
+  "vine",
+  "other",
+] as const;
+
 export const CITRUS_CULTIVARS = [
   "Meyer Lemon",
   "Eureka Lemon",
@@ -41,10 +52,14 @@ const optionalString = (max: number) =>
       `Max ${max} characters`,
     );
 
-export const newTreeSchema = z.object({
+export const newPlantSchema = z.object({
   name: trimmedString(80),
+  plant_type: z.enum(PLANT_TYPES),
+  species: optionalString(80).optional(),
   cultivar: optionalString(60).optional(),
   location: optionalString(80).optional(),
+  zip_code: optionalString(10).optional(),
 });
 
-export type NewTreeInput = z.infer<typeof newTreeSchema>;
+export type NewPlantInput = z.infer<typeof newPlantSchema>;
+

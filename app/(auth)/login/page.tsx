@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { AuthPanel } from "@/components/AuthPanel";
 import { GoogleAuthSetupHint } from "@/components/GoogleAuthSetupHint";
-import { CITRUS_SUPABASE_CALLBACK_URL } from "@/app/_lib/google-auth-config";
+import { PhoneAuthHint } from "@/components/PhoneAuthHint";
+import { createClient } from "@/app/_lib/supabase/server";
 
 export default async function LoginPage({
   searchParams,
@@ -10,25 +12,27 @@ export default async function LoginPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const { error } = await searchParams;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (user) redirect("/plants");
 
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
         <p className="text-sm text-muted-foreground">
-          Log in to track your citrus trees.
+          Log in to track your plants.
         </p>
       </div>
       {error === "auth" && (
         <p className="text-sm text-destructive" role="alert">
-          Google sign-in failed after redirect. Enable Google under Supabase →
-          Authentication → Providers, add{" "}
-          <code className="text-xs">{CITRUS_SUPABASE_CALLBACK_URL}</code> to Google
-          Cloud redirect URIs, and allow{" "}
-          <code className="text-xs">http://localhost:3002/**</code> in Supabase
-          redirect URLs.
+          Google sign-in failed. On your phone, set Supabase Site URL to your LAN
+          address (see blue box below). On Mac, use localhost.
         </p>
       )}
+      <PhoneAuthHint />
       <Suspense fallback={<div className="h-48 animate-pulse rounded-lg bg-muted" />}>
         <AuthPanel />
       </Suspense>

@@ -8,9 +8,9 @@ import {
 import type { Assessment } from "@/app/_lib/types";
 
 describe("buildSystemPrompt", () => {
-  it("frames the model as a citrus expert with structured output rules", () => {
+  it("frames the model as a plant expert with structured output rules", () => {
     const p = buildSystemPrompt();
-    expect(p.toLowerCase()).toContain("citrus");
+    expect(p.toLowerCase()).toContain("plant");
     expect(p).toMatch(/JSON/);
     expect(p).toMatch(/health_score/);
     expect(p).toMatch(/old.*leaves|new.*leaves|pattern/i);
@@ -20,7 +20,14 @@ describe("buildSystemPrompt", () => {
 describe("buildUserMessageText", () => {
   it("includes tree name and cultivar when present", () => {
     const t = buildUserMessageText({
-      tree: { name: "Mr Lemon", cultivar: "Meyer Lemon", location: "patio" },
+      plant: {
+        name: "Mr Lemon",
+        plant_type: "tree",
+        species: null,
+        cultivar: "Meyer Lemon",
+        location: "patio",
+        zip_code: null,
+      },
       previous: null,
     });
     expect(t).toContain("Mr Lemon");
@@ -41,7 +48,14 @@ describe("buildUserMessageText", () => {
       created_at: "2026-01-01T00:00:00Z",
     };
     const t = buildUserMessageText({
-      tree: { name: "X", cultivar: null, location: null },
+      plant: {
+        name: "X",
+        plant_type: "tree",
+        species: null,
+        cultivar: null,
+        location: null,
+        zip_code: null,
+      },
       previous: prev,
     });
     expect(t).toContain("Previous assessment");

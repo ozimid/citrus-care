@@ -1,43 +1,45 @@
 import {
   CITRUS_SUPABASE_CALLBACK_URL,
-  DEV_REDIRECT_URLS,
+  GOOGLE_CLOUD_OAUTH_CLIENT_URL,
   GOOGLE_OAUTH_CLIENT_ID,
 } from "@/app/_lib/google-auth-config";
+import { getDevRedirectUrlHints } from "@/app/_lib/dev-lan-origins";
 
 export function GoogleAuthSetupHint() {
   if (process.env.NODE_ENV !== "development") return null;
 
   return (
-    <details className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+    <details className="rounded-lg border border-amber-300/60 bg-amber-50/80 p-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
       <summary className="cursor-pointer font-medium text-foreground">
-        First-time Google setup (dev)
+        Google setup help (dev only)
       </summary>
       <ol className="mt-3 list-decimal space-y-2 pl-4">
         <li>
-          <span className="font-medium text-foreground">Citrus Care Supabase</span> →
-          Authentication → Providers → Google → Enable with your Google Cloud
-          OAuth client ID + secret.
-          <div className="mt-1 break-all font-mono text-[11px]">
-            Client ID: {GOOGLE_OAUTH_CLIENT_ID}
-          </div>
-        </li>
-        <li>
-          <span className="font-medium text-foreground">Google Cloud Console</span> →
-          APIs &amp; Services → Credentials → your OAuth client → Authorized redirect
-          URIs → add:
-          <div className="mt-1 break-all font-mono text-[11px]">
+          <a
+            href={GOOGLE_CLOUD_OAUTH_CLIENT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium underline"
+          >
+            Google Cloud OAuth client
+          </a>{" "}
+          → Authorized redirect URIs → add:
+          <div className="mt-1 select-all break-all rounded bg-white/70 p-2 font-mono text-[11px] dark:bg-black/30">
             {CITRUS_SUPABASE_CALLBACK_URL}
           </div>
         </li>
         <li>
-          <span className="font-medium text-foreground">Citrus Care Supabase</span> →
-          Authentication → URL Configuration → Site URL{" "}
-          <code className="text-[11px]">http://localhost:3002</code> → Redirect URLs:
+          Supabase → URL Configuration → Redirect URLs (and set Site URL to
+          whichever device you test on — localhost for Mac, LAN IP for phone):
           <ul className="mt-1 list-disc pl-4 font-mono text-[11px]">
-            {DEV_REDIRECT_URLS.map((url) => (
+            {getDevRedirectUrlHints().map((url) => (
               <li key={url}>{url}</li>
             ))}
           </ul>
+        </li>
+        <li>
+          Client ID in Supabase:{" "}
+          <code className="break-all text-[11px]">{GOOGLE_OAUTH_CLIENT_ID}</code>
         </li>
       </ol>
     </details>

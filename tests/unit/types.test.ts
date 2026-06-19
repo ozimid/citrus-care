@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { Tree, Assessment } from "@/app/_lib/types";
+import type { Plant, Assessment } from "@/app/_lib/types";
 
 describe("type shapes (sanity)", () => {
-  it("Tree has required fields", () => {
-    const t: Tree = {
+  it("Plant has required fields", () => {
+    const t: Plant = {
       id: "1",
       user_id: "u",
       name: "Meyer Lemon",
+      plant_type: "tree",
+      species: "Citrus limon",
       cultivar: "Meyer",
       location: "patio",
+      zip_code: "94043",
       cover_assessment_id: null,
       created_at: new Date().toISOString(),
     };
@@ -18,7 +21,7 @@ describe("type shapes (sanity)", () => {
   it("Assessment has required fields", () => {
     const a: Assessment = {
       id: "1",
-      tree_id: "t",
+      plant_id: "t",
       user_id: "u",
       photo_path: "photos/x.jpg",
       created_at: new Date().toISOString(),
@@ -34,6 +37,8 @@ describe("type shapes (sanity)", () => {
       recommendations: [],
       compared_to_assessment_id: null,
       raw_output: "{}",
+      is_cut_care: false,
+      cut_health_score: null,
     };
     expect(a.health_score).toBeGreaterThan(0);
   });

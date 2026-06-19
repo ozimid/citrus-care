@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { RegisterSW } from "@/components/RegisterSW";
+import { DevLanBanner } from "@/components/DevLanBanner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -37,6 +38,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground flex flex-col">
+        <DevLanBanner />
         {children}
         <RegisterSW />
       </body>

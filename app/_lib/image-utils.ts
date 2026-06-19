@@ -13,13 +13,14 @@ export function fileExtensionFromMime(mime: string): string {
 
 export function storagePathFor(args: {
   userId: string;
-  treeId: string;
+  plantId: string;
   mime: string;
   name: string;
 }): string {
   const ext = fileExtensionFromMime(args.mime);
-  return `${args.userId}/${args.treeId}/${args.name}.${ext}`;
+  return `${args.userId}/${args.plantId}/${args.name}.${ext}`;
 }
+
 
 export function randomFileName(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -35,7 +36,17 @@ export async function downscaleImage(file: File): Promise<Blob> {
   if (typeof window === "undefined") return file;
 
   const bitmap = await createImageBitmap(file).catch(() => null);
-  if (!bitmap) return file;
+  if (!bitmap) {
+    const isHeic =
+      file.type === "image/heic" ||
+      file.type === "image/heif" ||
+      file.name.toLowerCase().endsWith(".heic") ||
+      file.name.toLowerCase().endsWith(".heif");
+    if (isHeic) {
+      throw new Error("HEIC photos are not supported in this browser. Please use JPEG or PNG, or convert in your Photos app.");
+    }
+    return file;
+  }
 
   const { width, height } = bitmap;
   const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));

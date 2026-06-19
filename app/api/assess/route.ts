@@ -4,11 +4,11 @@ import { createClient } from "@/app/_lib/supabase/server";
 import {
   buildSystemPrompt,
   buildUserMessageText,
-  callGeminiVision,
-  parseAssessment,
+  assessPhotoWithGemini,
 } from "@/app/_lib/gemini";
 import { tryConsume } from "@/app/_lib/rate-limit";
-import type { Assessment, Tree } from "@/app/_lib/types";
+import type { Assessment, Plant } from "@/app/_lib/types";
+
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -17,8 +17,9 @@ const ASSESS_LIMIT_PER_HOUR = 5;
 const ASSESS_WINDOW_SEC = 3600;
 
 const assessBodySchema = z.object({
-  treeId: z.string().min(1),
+  plantId: z.string().min(1),
   photoPath: z.string().min(3),
+  isCutCare: z.boolean().optional(),
 });
 
 type PreviousLite = Pick<Assessment, "id" | "health_score" | "diagnosis" | "created_at">;
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
-  const { treeId, photoPath } = parsed.data;
+  const { plantId, photoPath, isCutCare } = parsed.data;
 
   const supabase = await createClient();
 
@@ -63,18 +64,18 @@ export async function POST(req: Request) {
     );
   }
 
-  const { data: treeRow } = await supabase
-    .from("trees")
-    .select("id,user_id,name,cultivar,location,cover_assessment_id,created_at")
-    .eq("id", treeId)
+  const { data: plantRow } = await supabase
+    .from("plants")
+    .select("id,user_id,name,plant_type,species,cultivar,location,zip_code,cover_assessment_id,created_at")
+    .eq("id", plantId)
     .maybeSingle();
-  const tree = treeRow as Tree | null;
-  if (!tree) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
+  const plant = plantRow as Plant | null;
+  if (!plant) return NextResponse.json({ error: "Plant not found" }, { status: 404 });
 
   const { data: prevRow } = await supabase
     .from("assessments")
     .select("id,health_score,diagnosis,created_at")
-    .eq("tree_id", treeId)
+    .eq("plant_id", plantId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -89,33 +90,33 @@ export async function POST(req: Request) {
   const buf = Buffer.from(await blob.arrayBuffer());
   const base64 = buf.toString("base64");
 
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildSystemPrompt(isCutCare);
   const userText = buildUserMessageText({
-    tree: { name: tree.name, cultivar: tree.cultivar, location: tree.location },
+    plant: {
+      name: plant.name,
+      plant_type: plant.plant_type,
+      species: plant.species,
+      cultivar: plant.cultivar,
+      location: plant.location,
+      zip_code: plant.zip_code,
+    },
+    isCutCare,
     previous,
   });
 
+  let diagnosis;
   let raw: string;
   try {
-    raw = await callGeminiVision({
+    const result = await assessPhotoWithGemini({
       systemPrompt,
       userText,
       imageBase64: base64,
       imageMediaType: "image/jpeg",
     });
+    diagnosis = result.diagnosis;
+    raw = result.raw;
   } catch (e) {
-    console.error("[/api/assess] Gemini call failed:", (e as Error).message);
-    return NextResponse.json(
-      { error: "AI service unavailable. Please try again." },
-      { status: 502 },
-    );
-  }
-
-  let diagnosis;
-  try {
-    diagnosis = parseAssessment(raw);
-  } catch (e) {
-    console.error("[/api/assess] Gemini returned malformed JSON:", (e as Error).message);
+    console.error("[/api/assess] Gemini assess failed:", (e as Error).message);
     return NextResponse.json(
       { error: "AI returned an invalid response. Please try again." },
       { status: 502 },
@@ -125,7 +126,7 @@ export async function POST(req: Request) {
   const { data: inserted, error: insertErr } = await supabase
     .from("assessments")
     .insert({
-      tree_id: treeId,
+      plant_id: plantId,
       user_id: user.id,
       photo_path: photoPath,
       health_score: diagnosis.health_score,
@@ -134,6 +135,8 @@ export async function POST(req: Request) {
       recommendations: diagnosis.recommendations,
       compared_to_assessment_id: previous?.id ?? null,
       raw_output: raw,
+      is_cut_care: !!isCutCare,
+      cut_health_score: isCutCare ? diagnosis.health_score : null,
     })
     .select("id")
     .single();
@@ -146,5 +149,12 @@ export async function POST(req: Request) {
     );
   }
 
+  // Best-effort: set this assessment as the plant's cover photo.
+  await supabase
+    .from("plants")
+    .update({ cover_assessment_id: inserted.id })
+    .eq("id", plantId);
+
   return NextResponse.json({ id: inserted.id });
 }
+

@@ -20,10 +20,6 @@ function mapUser(user: SupabaseUser): AuthUser {
   };
 }
 
-function authCallbackUrl(next: string): string {
-  return `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`;
-}
-
 export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,28 +42,6 @@ export function useAuth() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const signIn = useCallback(async (next = "/trees"): Promise<{ error: string | null }> => {
-    const supabase = createClient();
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: authCallbackUrl(next),
-        queryParams: { prompt: "select_account" },
-      },
-    });
-    if (error) {
-      const message = error.message.includes("provider is not enabled")
-        ? "Google sign-in is not enabled for this Supabase project yet. Expand “First-time Google setup” below."
-        : error.message;
-      return { error: message };
-    }
-    if (data?.url) {
-      window.location.assign(data.url);
-      return { error: null };
-    }
-    return { error: "Google sign-in could not start. Check Supabase Google provider settings." };
-  }, []);
-
   const signOut = useCallback(async () => {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -76,7 +50,6 @@ export function useAuth() {
   return {
     user,
     loading,
-    signIn,
     signOut,
   };
 }

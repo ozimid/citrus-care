@@ -28,7 +28,7 @@ export function AssessmentCard({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={photoUrl}
-          alt="Tree photo"
+          alt="Plant photo"
           className="aspect-square w-full object-cover"
         />
       )}
@@ -37,7 +37,7 @@ export function AssessmentCard({
         <div className="flex items-baseline justify-between">
           <div>
             <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Health
+              {assessment.is_cut_care ? "Pruning Cut Health" : "Health"}
             </p>
             <p className={`text-3xl font-semibold ${band.color}`}>
               {d.health_score}
@@ -46,6 +46,7 @@ export function AssessmentCard({
               </span>
             </p>
           </div>
+
           <Badge className={`${band.bg} ${band.color}`}>{band.label}</Badge>
         </div>
 

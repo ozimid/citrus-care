@@ -15,7 +15,13 @@ function lanDevOrigins(): string[] {
 }
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: lanDevOrigins(),
+  output: "standalone",
+  allowedDevOrigins: [
+    "localhost",
+    "localhost:3002",
+    ...lanDevOrigins(),
+    ...lanDevOrigins().map((ip) => `${ip}:3002`),
+  ],
 };
 
 export default nextConfig;

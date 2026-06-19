@@ -1,8 +1,8 @@
 {
   "name": "Citrus Care",
   "short_name": "Citrus Care",
-  "description": "Photo-driven citrus tree care with AI diagnosis and history.",
-  "start_url": "/trees",
+  "description": "Photo-driven plant care with AI diagnosis and history.",
+  "start_url": "/plants",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

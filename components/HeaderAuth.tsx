@@ -1,11 +1,9 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/_lib/useAuth";
 
 export function HeaderAuth() {
   const { user, loading, signOut } = useAuth();
-  const router = useRouter();
 
   if (loading) {
     return <div className="h-7 w-16" />;
@@ -17,8 +15,7 @@ export function HeaderAuth() {
 
   async function handleSignOut() {
     await signOut();
-    router.push("/login");
-    router.refresh();
+    window.location.href = "/login";
   }
 
   return (

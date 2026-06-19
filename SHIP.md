@@ -40,12 +40,12 @@
 Go when ALL are true:
 - Landing page loads and `/login`, `/signup` work.
 - Signup creates an auth user and a `profiles` row (trigger fires).
-- `/trees` is protected (anonymous redirects to `/login`).
-- Add tree → tree appears in list and on detail page.
-- Capture photo → photo uploads to Storage under `photos/<user_id>/<tree_id>/…`.
+- `/plants` is protected (anonymous redirects to `/login`).
+- Add plant → plant appears in list and on detail page.
+- Capture photo → photo uploads to Storage under `photos/<user_id>/<plant_id>/…`.
 - AI returns a structured assessment in under ~15 s.
 - Assessment renders with health score, symptoms, causes, recommendations.
-- Re-assess on the same tree shows a `comparison` section.
+- Re-assess on the same plant shows a `comparison` section.
 
 ## Rollback
 
@@ -54,7 +54,7 @@ Vercel: open the prior deployment → **Promote to Production**. Takes ~10 s.
 DB changes (if any): there are only two migrations and both are forward-only. If you need to fully reset, drop tables in reverse order:
 ```sql
 drop table if exists public.assessments;
-drop table if exists public.trees;
+drop table if exists public.plants;
 drop table if exists public.profiles;
 delete from storage.buckets where id = 'photos';
 ```

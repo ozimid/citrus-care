@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useAuth } from "@/app/_lib/useAuth";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 function GoogleIcon() {
   return (
@@ -30,41 +29,17 @@ function GoogleIcon() {
 
 export function AuthPanel() {
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") || "/trees";
-  const { signIn } = useAuth();
+  const next = searchParams.get("next") || "/plants";
+  const googleHref = `/auth/google?next=${encodeURIComponent(next)}`;
 
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function handleGoogle() {
-    setError(null);
-    setBusy(true);
-    const result = await signIn(next);
-    if (result.error) {
-      setError(result.error);
-      setBusy(false);
-    }
-  }
-
+  // Full page navigation — Next.js <Link> soft-nav breaks OAuth on LAN dev.
   return (
-    <div className="space-y-4">
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full gap-2"
-        size="lg"
-        disabled={busy}
-        onClick={handleGoogle}
-      >
-        <GoogleIcon />
-        {busy ? "Redirecting to Google…" : "Continue with Google"}
-      </Button>
-
-      {error && (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
+    <a
+      href={googleHref}
+      className={cn(buttonVariants({ variant: "outline", size: "lg" }), "w-full gap-2")}
+    >
+      <GoogleIcon />
+      Continue with Google
+    </a>
   );
 }
