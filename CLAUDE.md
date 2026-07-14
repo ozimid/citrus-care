@@ -11,7 +11,7 @@ Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flas
 - **Auth:** Google OAuth via Supabase (server routes `app/auth/google`, `app/auth/callback`)
 - **Testing:** Vitest (unit), Playwright (e2e)
 - **CI:** GitHub Actions (typecheck + lint + vitest on push/PR)
-- **Deploy:** Vercel (Hobby tier)
+- **Deploy:** Fly.io (`fly.toml` in repo root)
 
 ## Commands
 ```bash
@@ -38,6 +38,20 @@ npx tsc --noEmit          # Typecheck
 - `supabase/migrations/*.sql` — schema, RLS, photos bucket, rate_limits
 - `tests/unit/*.test.ts` — schemas, prompts, image utils, health bands, assess route, rate limit
 - `tests/e2e/*.spec.ts` — landing + protected redirect
+
+## AI-agent workflow (which skill, when)
+
+Use the installed Claude Code skills instead of improvising the equivalent step by hand:
+
+| Moment | Skill |
+|---|---|
+| Building a feature (test-first) | `tdd` |
+| Stuck on a hard bug / regression | `diagnosing-bugs` |
+| Before calling anything "done" | `verify` (drive the real flow, not just tests) |
+| Before any commit | `code-review`; add `security-review` when touching auth, RLS, storage, or pipeline boundaries |
+| Choosing a library, model, or API | `research` (grounded in primary sources, output committed as Markdown) |
+| Locking an architecture decision | `domain-modeling` (then record it in Obsidian Architecture §"Locked decisions") |
+| A task that smells repeatable | `loopy` — check the Loop Library before inventing a workflow |
 
 ## Required reads before any code change
 1. Obsidian PRD **§0** — `.../Citrus Care/Citrus Care PRD v1.md` — current focus, next steps, feature status. **Read first.**
