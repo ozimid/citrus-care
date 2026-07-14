@@ -13,31 +13,39 @@ Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flas
 - **CI:** GitHub Actions (typecheck + lint + vitest on push/PR)
 - **Deploy:** Fly.io (`fly.toml` in repo root)
 
-## Commands
+## Repo structure (monorepo — strict separation, decision D-12)
+- `apps/web/` — Next.js app: frontend AND its backend-for-frontend (route handlers, server actions, `app/_lib`) — colocated by framework design
+- `apps/mobile/` — Expo/React Native app (D-11). **Not an npm workspace** — own `npm install` inside the folder (React version isolation)
+- `packages/shared/` — types + Zod schemas shared web ↔ mobile (`@citrus/shared`)
+- `supabase/` — database: migrations, RLS, storage config
+- Root `Dockerfile` + `fly.toml` deploy `apps/web`
+
+## Commands (run from repo root — proxies to apps/web)
 ```bash
 npm run dev               # Next dev (port 3002)
 npm run build             # Production build — note: build script does `unset NODE_ENV` before next build
 npm run lint              # ESLint
 npm test                  # Vitest (run mode)
-npx playwright test       # E2e
-npx tsc --noEmit          # Typecheck
+npm run e2e               # Playwright e2e
+npm run typecheck         # tsc --noEmit
 ```
 
 ## Path Aliases
-- `@/*` → project root
+- `@/*` → `apps/web/` root (within the web app)
+- `@citrus/shared` → `packages/shared/src`
 
 ## Key Files
-- `app/_lib/gemini.ts` — Gemini vision call + citrus expert prompt + Zod + responseSchema
-- `app/_lib/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
-- `app/_lib/supabase/{client,server,middleware}.ts` — Supabase clients
-- `app/api/assess/route.ts` — main AI endpoint (auth · ownership · rate limit · download · Gemini · parse · insert)
-- `app/auth/{google,callback}/route.ts` — Google OAuth
-- `components/AuthPanel.tsx` — sign-in UI
-- `app/plants/...` — plant list / new / detail / assess / single-assessment pages
-- `proxy.ts` — Next.js 16 proxy (was `middleware.ts`); session refresh + redirects
+- `apps/web/app/_lib/gemini.ts` — Gemini vision call + citrus expert prompt + Zod + responseSchema
+- `apps/web/app/_lib/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
+- `apps/web/app/_lib/supabase/{client,server,middleware}.ts` — Supabase clients
+- `apps/web/app/api/assess/route.ts` — main AI endpoint (auth · ownership · rate limit · download · Gemini · parse · insert)
+- `apps/web/app/auth/{google,callback}/route.ts` — Google OAuth
+- `apps/web/components/AuthPanel.tsx` — sign-in UI
+- `apps/web/app/plants/...` — plant list / new / detail / assess / single-assessment pages
+- `apps/web/proxy.ts` — Next.js 16 proxy (was `middleware.ts`); session refresh + redirects
 - `supabase/migrations/*.sql` — schema, RLS, photos bucket, rate_limits
-- `tests/unit/*.test.ts` — schemas, prompts, image utils, health bands, assess route, rate limit
-- `tests/e2e/*.spec.ts` — landing + protected redirect
+- `apps/web/tests/unit/*.test.ts` — schemas, prompts, image utils, health bands, assess route, rate limit
+- `apps/web/tests/e2e/*.spec.ts` — landing + protected redirect
 
 ## AI-agent workflow (which skill, when)
 

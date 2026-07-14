@@ -1,8 +1,23 @@
-# Citrus Care PWA
+# Citrus Care
 
 [![CI](https://github.com/ozimid/citrus-care/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ozimid/citrus-care/actions/workflows/ci.yml)
 
-Photo-driven citrus tree care. Snap a leaf, get a structured AI diagnosis from Gemini 2.5 Flash, track each tree over time, see better/same/worse on re-assessment.
+Photo-driven plant care. Snap a leaf, get a structured AI diagnosis from Gemini 2.5 Flash, track each plant over time, see better/same/worse on re-assessment.
+
+## Repo structure (strictly separated)
+
+```
+apps/web/          Frontend + its backend-for-frontend (Next.js 16 App Router:
+                   pages/components AND the API route handlers + server actions —
+                   colocated because that is how Next.js works; app/_lib and
+                   app/api are the backend surface)
+apps/mobile/       Native mobile app (Expo/React Native, decision D-11) —
+                   standalone install, NOT an npm workspace (React version isolation)
+packages/shared/   Types + Zod schemas consumed by web and mobile
+supabase/          Database: migrations, RLS policies, storage bucket config
+```
+
+Root `package.json` is an npm workspace (`apps/web`, `packages/*`); root scripts proxy to the web app (`npm run dev`, `npm test`, …). Deploy: root `Dockerfile` + `fly.toml` build `apps/web`.
 
 ## Product docs (Obsidian)
 

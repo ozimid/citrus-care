@@ -1,0 +1,11 @@
+{
+  "name": "@citrus/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types and Zod schemas shared by the web (Next.js) and mobile (Expo) apps",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

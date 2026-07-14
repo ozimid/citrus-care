@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Citrus Care",
+    "slug": "citrus-care",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#059669"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.citruscare.app"
+    },
+    "android": {
+      "package": "com.citruscare.app"
+    }
+  }
+}
