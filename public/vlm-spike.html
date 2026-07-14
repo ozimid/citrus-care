@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- THROWAWAY SPIKE — delete after go/no-go decision (see docs/research/on-device-vlm-feasibility.md).
+     Tests whether SmolVLM-256M runs in a phone browser via transformers.js WebGPU.
+     Open on a real phone: http://<lan-ip>:3002/vlm-spike.html (WiFi only — ~200MB download).
+     GO bar: load+first inference <20s, steady-state <8s, no crash, sensible output.
+     Not linked from app nav. Nothing here touches the real app or its data. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VLM spike (throwaway)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; max-width: 640px; }
+  button { font-size: 16px; padding: 10px 16px; margin: 4px 0; }
+  #log { white-space: pre-wrap; font-family: monospace; font-size: 12px; background: #f4f4f4; padding: 8px; border-radius: 6px; min-height: 120px; }
+  img { max-width: 100%; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>On-device VLM spike</h1>
+<p><strong>Throwaway test page.</strong> Downloads ~200MB of model weights on first run — WiFi only.</p>
+<div id="env"></div>
+<button id="load">1. Load SmolVLM-256M</button><br />
+<input type="file" id="photo" accept="image/*" capture="environment" disabled />
+<img id="preview" hidden alt="" />
+<button id="run" disabled>2. Analyze photo</button>
+<div id="log">idle</div>
+
+<script type="module">
+const log = (m) => { document.getElementById("log").textContent += "\n" + m; };
+document.getElementById("log").textContent = "idle";
+
+// Environment report first — this alone answers part of the go/no-go.
+const env = document.getElementById("env");
+env.innerHTML = `<p>WebGPU: <strong>${"gpu" in navigator ? "available" : "NOT available (will try WASM fallback)"}</strong> · UA: ${navigator.userAgent.slice(0, 80)}…</p>`;
+
+let pipe = null;
+let imageUrl = null;
+
+document.getElementById("load").onclick = async () => {
+  const t0 = performance.now();
+  try {
+    log("importing transformers.js from CDN…");
+    const { pipeline } = await import(
+      "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0"
+    );
+    log("downloading + initializing SmolVLM-256M (q4)…");
+    pipe = await pipeline(
+      "image-text-to-text",
+      "HuggingFaceTB/SmolVLM-256M-Instruct",
+      {
+        device: "gpu" in navigator ? "webgpu" : "wasm",
+        dtype: "q4",
+        progress_callback: (p) => {
+          if (p.status === "progress" && p.file?.endsWith(".onnx_data"))
+            log(`  ${p.file}: ${Math.round(p.progress)}%`);
+        },
+      },
+    );
+    log(`MODEL READY in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    document.getElementById("photo").disabled = false;
+  } catch (e) {
+    log(`LOAD FAILED after ${((performance.now() - t0) / 1000).toFixed(1)}s: ${e.message}`);
+  }
+};
+
+document.getElementById("photo").onchange = (ev) => {
+  const f = ev.target.files?.[0];
+  if (!f) return;
+  imageUrl = URL.createObjectURL(f);
+  const img = document.getElementById("preview");
+  img.src = imageUrl;
+  img.hidden = false;
+  document.getElementById("run").disabled = false;
+};
+
+document.getElementById("run").onclick = async () => {
+  if (!pipe || !imageUrl) return;
+  const t0 = performance.now();
+  log("running inference…");
+  try {
+    const out = await pipe(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "image", image: imageUrl },
+            {
+              type: "text",
+              text: "You are a plant care assistant. Describe this plant photo: is the plant healthy or unhealthy? Name any visible symptoms (yellowing, spots, pests, wilting). Two sentences max.",
+            },
+          ],
+        },
+      ],
+      { max_new_tokens: 80 },
+    );
+    log(`INFERENCE ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    log("OUTPUT: " + JSON.stringify(out?.[0]?.generated_text ?? out).slice(0, 600));
+  } catch (e) {
+    log(`INFERENCE FAILED after ${((performance.now() - t0) / 1000).toFixed(1)}s: ${e.message}`);
+  }
+};
+</script>
+</body>
+</html>
