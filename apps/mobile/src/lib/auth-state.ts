@@ -41,23 +41,24 @@ export function authReducer(state: AuthState, event: AuthEvent): AuthState {
   }
 }
 
-/** Structural subset of expo-auth-session's AuthSessionResult. */
-export interface GoogleAuthResult {
-  type: string;
-  params?: Record<string, string>;
-}
-
 export type IdTokenResult =
   | { ok: true; idToken: string }
   | { ok: false; reason: "dismissed" | "error" };
 
-export function extractIdToken(result: GoogleAuthResult | null): IdTokenResult {
+// --- native Google Sign-In (@react-native-google-signin) result mapping ---
+
+/** Shape of GoogleSignin.signIn() results we rely on (v13+). */
+export interface NativeSignInResult {
+  type: "success" | "cancelled" | string;
+  data: { idToken?: string | null } | null;
+}
+
+export function idTokenFromNativeSignIn(
+  result: NativeSignInResult | null | undefined,
+): IdTokenResult {
   if (!result) return { ok: false, reason: "error" };
-  if (result.type === "cancel" || result.type === "dismiss" || result.type === "locked") {
-    return { ok: false, reason: "dismissed" };
-  }
-  if (result.type === "success" && result.params?.id_token) {
-    return { ok: true, idToken: result.params.id_token };
-  }
-  return { ok: false, reason: "error" };
+  if (result.type === "cancelled") return { ok: false, reason: "dismissed" };
+  const idToken = result.type === "success" ? result.data?.idToken : null;
+  if (!idToken) return { ok: false, reason: "error" };
+  return { ok: true, idToken };
 }

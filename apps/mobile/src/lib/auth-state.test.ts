@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   GENERIC_SIGN_IN_ERROR,
   authReducer,
-  extractIdToken,
   initialAuthState,
   type AuthState,
 } from "./auth-state";
@@ -63,26 +62,26 @@ describe("authReducer", () => {
   });
 });
 
-describe("extractIdToken", () => {
-  it("returns the id token on a successful auth response", () => {
-    const result = extractIdToken({ type: "success", params: { id_token: "jwt-abc" } });
-    expect(result).toEqual({ ok: true, idToken: "jwt-abc" });
+// --- native Google Sign-In result mapping (v13+ shapes) ---
+import { idTokenFromNativeSignIn } from "./auth-state";
+
+describe("idTokenFromNativeSignIn", () => {
+  it("extracts the idToken from a successful native sign-in", () => {
+    const r = idTokenFromNativeSignIn({ type: "success", data: { idToken: "tok-123" } });
+    expect(r).toEqual({ ok: true, idToken: "tok-123" });
   });
 
-  it("reports a dismissal (cancel/dismiss) as dismissed, not an error", () => {
-    expect(extractIdToken({ type: "cancel" })).toEqual({ ok: false, reason: "dismissed" });
-    expect(extractIdToken({ type: "dismiss" })).toEqual({ ok: false, reason: "dismissed" });
+  it("treats a cancelled sign-in as dismissed", () => {
+    const r = idTokenFromNativeSignIn({ type: "cancelled", data: null });
+    expect(r).toEqual({ ok: false, reason: "dismissed" });
   });
 
-  it("treats a success response without an id_token as an error", () => {
-    expect(extractIdToken({ type: "success", params: {} })).toEqual({ ok: false, reason: "error" });
+  it("fails when success carries no idToken", () => {
+    const r = idTokenFromNativeSignIn({ type: "success", data: { idToken: null } });
+    expect(r).toEqual({ ok: false, reason: "error" });
   });
 
-  it("treats provider errors as errors", () => {
-    expect(extractIdToken({ type: "error" })).toEqual({ ok: false, reason: "error" });
-  });
-
-  it("treats a null response (prompt never resolved) as an error", () => {
-    expect(extractIdToken(null)).toEqual({ ok: false, reason: "error" });
+  it("fails on null/undefined results", () => {
+    expect(idTokenFromNativeSignIn(null)).toEqual({ ok: false, reason: "error" });
   });
 });

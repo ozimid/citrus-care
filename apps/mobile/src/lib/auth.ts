@@ -1,100 +1,97 @@
-// Google sign-in: expo-auth-session Google provider -> id_token ->
-// supabase.auth.signInWithIdToken. On native the provider runs an OAuth code
-// flow against the platform client ID and auto-exchanges the code, surfacing
-// the id_token in response.params. Success is observed via Supabase's
-// onAuthStateChange listener (wired in App.tsx), not here.
+// Google sign-in via the native Google Sign-In SDK
+// (@react-native-google-signin) -> idToken -> supabase.auth.signInWithIdToken.
+// This replaced expo-auth-session's browser-redirect flow, which Google now
+// rejects for Android client types ("Error 400: invalid_request") — the
+// native SDK authenticates via package name + signing SHA-1 instead of
+// redirect URIs. Success is observed via Supabase's onAuthStateChange
+// listener (wired in App.tsx), not here.
 
-import * as Google from "expo-auth-session/providers/google";
-import * as WebBrowser from "expo-web-browser";
-import { useCallback, useEffect } from "react";
-import { extractIdToken, type AuthEvent } from "./auth-state";
+import {
+  GoogleSignin,
+  statusCodes,
+} from "@react-native-google-signin/google-signin";
+import { useCallback, useMemo } from "react";
+import { idTokenFromNativeSignIn, type AuthEvent } from "./auth-state";
 import { appConfig } from "./config";
 import { supabase } from "./supabase";
-
-WebBrowser.maybeCompleteAuthSession();
-
-// The provider hook throws when no client ID exists for the platform; a dummy
-// fallback keeps an unconfigured checkout renderable (the button is disabled
-// via `configured` below).
-const UNCONFIGURED_CLIENT_ID = "unconfigured.apps.googleusercontent.com";
 
 export interface GoogleSignIn {
   /** Kicks off the Google prompt. Dispatches SIGN_IN_* events as it goes. */
   signIn: () => Promise<void>;
-  /** False until the auth request has loaded. */
+  /** Native SDK needs no async request setup. */
   ready: boolean;
-  /** False when Supabase or Google client IDs are missing/placeholders. */
+  /** False when Supabase or the web client ID are missing/placeholders. */
   configured: boolean;
 }
 
-export function useGoogleSignIn(dispatch: (event: AuthEvent) => void): GoogleSignIn {
-  const configured =
-    appConfig.missing.length === 0 &&
-    Boolean(
-      appConfig.googleWebClientId ||
-        appConfig.googleIosClientId ||
-        appConfig.googleAndroidClientId,
-    );
+let googleConfigured = false;
 
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: appConfig.googleWebClientId ?? UNCONFIGURED_CLIENT_ID,
-    webClientId: appConfig.googleWebClientId,
-    iosClientId: appConfig.googleIosClientId,
-    androidClientId: appConfig.googleAndroidClientId,
+function ensureGoogleConfigured(): void {
+  if (googleConfigured) return;
+  GoogleSignin.configure({
+    // The idToken audience: must be the WEB client ID (it is what Supabase
+    // verifies against its Authorized Client IDs list). The Android client is
+    // matched implicitly by package name + SHA-1; iOS uses iosClientId.
+    webClientId: appConfig.googleWebClientId ?? undefined,
+    iosClientId: appConfig.googleIosClientId ?? undefined,
   });
+  googleConfigured = true;
+}
 
-  useEffect(() => {
-    // "opened" is not a terminal result; wait for the real one.
-    if (!response || response.type === "opened") return;
-
-    const extracted = extractIdToken(response);
-    if (!extracted.ok) {
-      if (extracted.reason === "error") {
-        console.error("[auth] Google auth did not return an id_token:", response.type);
-      }
-      dispatch({
-        type: extracted.reason === "dismissed" ? "SIGN_IN_DISMISSED" : "SIGN_IN_FAILED",
-      });
-      return;
-    }
-
-    let cancelled = false;
-    supabase.auth
-      .signInWithIdToken({
-        provider: "google",
-        token: extracted.idToken,
-        // Set only on flows where the provider generated one (web id_token
-        // flow); Google echoes it into the token and Supabase verifies it.
-        nonce: request?.nonce,
-      })
-      .then(({ error }) => {
-        if (error) {
-          console.error("[auth] signInWithIdToken failed:", error.message);
-          if (!cancelled) dispatch({ type: "SIGN_IN_FAILED" });
-        }
-        // On success, App.tsx's onAuthStateChange listener dispatches
-        // SESSION_CHANGED — nothing to do here.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [response, request, dispatch]);
+export function useGoogleSignIn(dispatch: (event: AuthEvent) => void): GoogleSignIn {
+  const configured = useMemo(
+    () => appConfig.missing.length === 0 && Boolean(appConfig.googleWebClientId),
+    [],
+  );
 
   const signIn = useCallback(async () => {
     dispatch({ type: "SIGN_IN_STARTED" });
     try {
-      await promptAsync();
-      // Terminal results are handled by the response effect above.
-    } catch (err) {
-      console.error("[auth] Google prompt failed:", err);
+      ensureGoogleConfigured();
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const result = await GoogleSignin.signIn();
+      const extracted = idTokenFromNativeSignIn(result);
+      if (!extracted.ok) {
+        if (extracted.reason === "error") {
+          console.error("[auth] Google sign-in returned no idToken:", result?.type);
+        }
+        dispatch({
+          type: extracted.reason === "dismissed" ? "SIGN_IN_DISMISSED" : "SIGN_IN_FAILED",
+        });
+        return;
+      }
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: "google",
+        token: extracted.idToken,
+      });
+      if (error) {
+        console.error("[auth] signInWithIdToken failed:", error.message);
+        dispatch({ type: "SIGN_IN_FAILED" });
+      }
+      // On success, App.tsx's onAuthStateChange listener dispatches
+      // SESSION_CHANGED — nothing to do here.
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === statusCodes.SIGN_IN_CANCELLED) {
+        dispatch({ type: "SIGN_IN_DISMISSED" });
+        return;
+      }
+      console.error("[auth] Google sign-in failed:", err);
       dispatch({ type: "SIGN_IN_FAILED" });
     }
-  }, [dispatch, promptAsync]);
+  }, [dispatch]);
 
-  return { signIn, ready: request !== null, configured };
+  return { signIn, ready: true, configured };
 }
 
 export async function signOut(): Promise<void> {
+  // Best-effort native sign-out so the account picker shows next time.
+  try {
+    ensureGoogleConfigured();
+    await GoogleSignin.signOut();
+  } catch {
+    // Non-fatal; Supabase sign-out below is what ends the session.
+  }
   const { error } = await supabase.auth.signOut();
   if (error) {
     // Local session is cleared regardless; server-side revoke failure is

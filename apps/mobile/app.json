@@ -4,7 +4,10 @@
     "slug": "citrus-care",
     "version": "0.1.0",
     "scheme": "citruscare",
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -16,7 +19,11 @@
       "bundleIdentifier": "com.citruscare.app"
     },
     "android": {
-      "package": "com.citruscare.app"
+      "package": "com.citruscare.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
       "expo-web-browser",
@@ -32,7 +39,8 @@
           "photosPermission": "Citrus Care uses your photo library so you can import plant photos for health checks."
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "onDemandFilesystem": false
@@ -42,7 +50,11 @@
       "supabaseAnonKey": "YOUR_SUPABASE_ANON_KEY",
       "googleWebClientId": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com",
       "googleIosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
-      "googleAndroidClientId": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com"
-    }
+      "googleAndroidClientId": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com",
+      "eas": {
+        "projectId": "db82c83f-6bce-4302-890e-54d22876a148"
+      }
+    },
+    "owner": "ozimid"
   }
 }
