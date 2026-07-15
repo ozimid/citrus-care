@@ -1,51 +1,67 @@
 import { StatusBar } from "expo-status-bar";
-import { Pressable, StyleSheet, Text, View, useColorScheme } from "react-native";
+import { useEffect, useReducer, useState } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { TabBar, type Tab } from "./src/components/TabBar";
+import { authReducer, initialAuthState } from "./src/lib/auth-state";
+import { supabase } from "./src/lib/supabase";
+import { useTheme } from "./src/lib/theme";
+import { PlantsScreen } from "./src/screens/PlantsScreen";
+import { ProfileScreen } from "./src/screens/ProfileScreen";
+import { WelcomeScreen } from "./src/screens/WelcomeScreen";
 
-// Welcome screen per the native design doc (Obsidian: "Design - Citrus Care Native App").
-// Landing/login/signup collapse into this single screen; Google sign-in wiring
-// (expo-auth-session -> Supabase signInWithIdToken) is the next implementation step.
-
-const tokens = {
-  light: { canvas: "#eef0ed", text: "#191c19", sub: "#5c635c", green: "#059669", onGreen: "#ffffff" },
-  dark: { canvas: "#0d0f0d", text: "#f1f3f0", sub: "#a7ada5", green: "#34d399", onGreen: "#06281b" },
-};
+// Root: restores the persisted Supabase session, then renders Welcome
+// (signed out) or the tabbed main app (signed in). Navigation is a
+// conditional render + tab state on purpose — no nav library until a
+// stacked flow (plant detail) actually needs one.
 
 export default function App() {
-  const scheme = useColorScheme();
-  const t = tokens[scheme === "dark" ? "dark" : "light"];
+  const [auth, dispatch] = useReducer(authReducer, initialAuthState);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      dispatch({ type: "SESSION_CHANGED", email: session ? (session.user.email ?? "") : null });
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      dispatch({ type: "SESSION_CHANGED", email: session ? (session.user.email ?? "") : null });
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (auth.phase === "restoring") return <Restoring />;
+  if (auth.phase !== "signedIn") {
+    return <WelcomeScreen phase={auth.phase} error={auth.error} dispatch={dispatch} />;
+  }
+  return <Main userEmail={auth.userEmail} />;
+}
+
+function Main({ userEmail }: { userEmail: string | null }) {
+  const { t } = useTheme();
+  const [tab, setTab] = useState<Tab>("plants");
 
   return (
-    <View style={[styles.container, { backgroundColor: t.canvas }]}>
-      <View style={[styles.mark, { backgroundColor: t.green }]}>
-        <Text style={styles.markGlyph}>🍋</Text>
+    <View style={[styles.fill, { backgroundColor: t.canvas }]}>
+      <View style={styles.fill}>
+        {tab === "plants" ? <PlantsScreen /> : <ProfileScreen email={userEmail} />}
       </View>
-      <Text style={[styles.title, { color: t.text }]}>Citrus Care</Text>
-      <Text style={[styles.sub, { color: t.sub }]}>
-        Snap a photo. Get a health score and a care plan in seconds.
-      </Text>
-      <Pressable
-        style={[styles.cta, { backgroundColor: t.green }]}
-        onPress={() => {
-          // TODO: expo-auth-session Google flow -> supabase.auth.signInWithIdToken
-        }}
-      >
-        <Text style={[styles.ctaText, { color: t.onGreen }]}>Continue with Google</Text>
-      </Pressable>
-      <Text style={[styles.foot, { color: t.sub }]}>
-        Same account and plants as the web app.
-      </Text>
+      <TabBar active={tab} onSelect={setTab} />
+      <StatusBar style="auto" />
+    </View>
+  );
+}
+
+function Restoring() {
+  const { t } = useTheme();
+  return (
+    <View style={[styles.fill, styles.center, { backgroundColor: t.canvas }]}>
+      <ActivityIndicator color={t.green} />
       <StatusBar style="auto" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 14 },
-  mark: { width: 84, height: 84, borderRadius: 42, alignItems: "center", justifyContent: "center" },
-  markGlyph: { fontSize: 40 },
-  title: { fontSize: 30, fontWeight: "700", letterSpacing: -0.5 },
-  sub: { fontSize: 15, textAlign: "center", lineHeight: 22, maxWidth: 280 },
-  cta: { marginTop: 18, paddingVertical: 15, paddingHorizontal: 26, borderRadius: 10, minWidth: 260, alignItems: "center" },
-  ctaText: { fontSize: 16, fontWeight: "600" },
-  foot: { fontSize: 12, marginTop: 6 },
+  fill: { flex: 1 },
+  center: { alignItems: "center", justifyContent: "center" },
 });

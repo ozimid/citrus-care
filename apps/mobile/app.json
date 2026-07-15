@@ -3,6 +3,8 @@
     "name": "Citrus Care",
     "slug": "citrus-care",
     "version": "0.1.0",
+    "scheme": "citruscare",
+    "platforms": ["ios", "android"],
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -15,6 +17,19 @@
     },
     "android": {
       "package": "com.citruscare.app"
+    },
+    "plugins": [
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "onDemandFilesystem": false
+    },
+    "extra": {
+      "supabaseUrl": "YOUR_SUPABASE_URL",
+      "supabaseAnonKey": "YOUR_SUPABASE_ANON_KEY",
+      "googleWebClientId": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com",
+      "googleIosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
+      "googleAndroidClientId": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com"
     }
   }
 }
