@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/app/_lib/supabase/server";
 import { HeaderAuth } from "@/components/HeaderAuth";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default async function PlantsLayout({
   children,
@@ -22,7 +23,10 @@ export default async function PlantsLayout({
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-6 py-8">
       <header className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Link href="/plants" className="text-base font-semibold text-emerald-700">
+          <Link
+            href="/plants"
+            className="text-base font-semibold text-emerald-700 dark:text-emerald-400"
+          >
             Citrus Care
           </Link>
           {count !== null && (
@@ -31,7 +35,10 @@ export default async function PlantsLayout({
             </span>
           )}
         </div>
-        <HeaderAuth />
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <HeaderAuth />
+        </div>
       </header>
       {children}
     </div>

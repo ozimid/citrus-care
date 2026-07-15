@@ -39,7 +39,10 @@ export default async function LoginPage({
       <GoogleAuthSetupHint />
       <p className="text-center text-sm text-muted-foreground">
         New here?{" "}
-        <Link href="/signup" className="font-medium text-amber-700 hover:underline">
+        <Link
+          href="/signup"
+          className="font-medium text-amber-700 hover:underline dark:text-amber-400"
+        >
           Create an account
         </Link>
       </p>
