@@ -39,29 +39,24 @@ Start with `Citrus Care PRD v1.md`. This repo only contains code + code-adjacent
    - In SQL editor, run every file in `supabase/migrations/` in order (0001 → 0002 → 0003).
    - Storage bucket `photos` is created by migration 0002.
    - **Google sign-in:** Dashboard → **Authentication** → **Providers** → **Google** → Enable. Paste Client ID + Client Secret from [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (OAuth 2.0 Web client). Authorized redirect URI in Google must be `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback` (shown in the Supabase Google provider panel).
-   - For email signup CAPTCHA: Dashboard → **Auth** → **Settings** → **Bot/Abuse Protection** → Turnstile → paste Cloudflare Turnstile **secret** key.
    - **URL Configuration:** Site URL `http://localhost:3002`, Redirect URLs `http://localhost:3002/**` (and your production URL when deployed).
 
-3. **Cloudflare Turnstile** (free)
-   - Create a Turnstile site at `cloudflare.com/products/turnstile`.
-   - Copy the **site** key into `.env.local` as `NEXT_PUBLIC_TURNSTILE_SITE_KEY`.
-   - Copy the **secret** key into Supabase as above (it never touches this app).
+   > **No CAPTCHA setup needed.** Cloudflare Turnstile was removed when auth went Google-only (PRD F12; Architecture D-06 superseded) — there is no email signup form to protect. Skip anything you see about Turnstile in older notes.
 
-4. **Environment** (`.env.local`)
+3. **Environment** (`apps/web/.env.local`)
    ```
    NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_KEY
    SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
    GEMINI_API_KEY=YOUR_GEMINI_API_KEY
-   NEXT_PUBLIC_TURNSTILE_SITE_KEY=YOUR_TURNSTILE_SITE_KEY
    ```
 
-5. **Run**
+4. **Run**
    ```bash
-   npm run dev               # http://localhost:3002
-   npm test                  # Vitest unit
-   npx playwright test       # E2e (run once: npx playwright install chromium)
-   npx tsc --noEmit          # Typecheck
+   npm run dev               # web http://localhost:3002 + api :3003
+   npm test                  # Vitest unit (web + api)
+   npm run e2e               # Playwright (run once: npx playwright install chromium)
+   npm run typecheck         # tsc --noEmit
    ```
 
 ## PWA
