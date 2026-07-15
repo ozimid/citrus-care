@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { latestScore, mapPlantRows, plantSubLabel, type PlantRow } from "./plants";
+import { latestScore, mapPlantRows, plantSubLabel, PLANTS_SELECT, type PlantRow } from "./plants";
 
 function row(overrides: Partial<PlantRow> = {}): PlantRow {
   return {
@@ -75,5 +75,14 @@ describe("mapPlantRows", () => {
   it("returns an empty list for null/undefined data", () => {
     expect(mapPlantRows(null)).toEqual([]);
     expect(mapPlantRows(undefined)).toEqual([]);
+  });
+});
+
+// Regression: PGRST201 on device — plants↔assessments have TWO relationships
+// (assessments.plant_id and plants.cover_assessment_id), so the embed must
+// name the FK explicitly or PostgREST rejects the whole query.
+describe("PLANTS_SELECT", () => {
+  it("disambiguates the assessments embed with the plant_id FK hint", () => {
+    expect(PLANTS_SELECT).toContain("assessments!plant_id(");
   });
 });

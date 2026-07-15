@@ -25,7 +25,7 @@ export interface PlantListItem {
 }
 
 export const PLANTS_SELECT =
-  "id,name,plant_type,species,cultivar,location,created_at,assessments(health_score,created_at)";
+  "id,name,plant_type,species,cultivar,location,created_at,assessments!plant_id(health_score,created_at)";
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
 export function plantSubLabel(row: PlantRow): string {
