@@ -114,14 +114,26 @@ export function CaptureScreen({ onClose, onAssessed }: Props) {
 
   const pickFromGallery = useCallback(async () => {
     setError(null);
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 1,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    await prepare(asset.uri, asset.width, asset.height);
-  }, [prepare]);
+    // Gallery import doesn't need the camera, but a photo still needs a plant
+    // to belong to — so if none is chosen yet, open the picker instead of a
+    // silent no-op.
+    if (selectedPlantId === null) {
+      setPickerOpen(true);
+      return;
+    }
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 1,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      await prepare(asset.uri, asset.width, asset.height);
+    } catch (e) {
+      console.error("[CaptureScreen] gallery import failed:", (e as Error).message);
+      setError("Couldn't open your photos. Please try again.");
+    }
+  }, [prepare, selectedPlantId]);
 
   if (result && selectedPlant) {
     return (
@@ -195,7 +207,7 @@ export function CaptureScreen({ onClose, onAssessed }: Props) {
               label="Import from gallery"
               glyph="🖼️"
               size={56}
-              disabled={!ready}
+              disabled={busy}
               onPress={pickFromGallery}
             />
             <Text style={styles.controlCaption}>Gallery</Text>
