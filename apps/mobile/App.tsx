@@ -41,11 +41,18 @@ function Main({ userEmail }: { userEmail: string | null }) {
   const { t } = useTheme();
   const [tab, setTab] = useState<Tab>("plants");
   const [capturing, setCapturing] = useState(false);
+  // Bumped when an assessment persists so the Plants tab behind the capture
+  // modal reloads and the new score is visible the moment the modal closes.
+  const [plantsVersion, setPlantsVersion] = useState(0);
 
   return (
     <View style={[styles.fill, { backgroundColor: t.canvas }]}>
       <View style={styles.fill}>
-        {tab === "plants" ? <PlantsScreen /> : <ProfileScreen email={userEmail} />}
+        {tab === "plants" ? (
+          <PlantsScreen refreshToken={plantsVersion} />
+        ) : (
+          <ProfileScreen email={userEmail} />
+        )}
       </View>
       <TabBar active={tab} onSelect={setTab} onAssess={() => setCapturing(true)} />
       {/* Full-screen capture flow over the tabs (design doc §3) — a Modal so
@@ -55,7 +62,10 @@ function Main({ userEmail }: { userEmail: string | null }) {
         animationType="slide"
         onRequestClose={() => setCapturing(false)}
       >
-        <CaptureScreen onClose={() => setCapturing(false)} />
+        <CaptureScreen
+          onClose={() => setCapturing(false)}
+          onAssessed={() => setPlantsVersion((v) => v + 1)}
+        />
       </Modal>
       <StatusBar style="auto" />
     </View>

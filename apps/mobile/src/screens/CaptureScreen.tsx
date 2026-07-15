@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { GuideOverlay, ModeHint, ModePill, RoundButton } from "../components/CaptureOverlay";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
+import type { AssessResult } from "../lib/assess";
 import {
   DEFAULT_CAPTURE_MODE,
   preselectedPlantId,
@@ -13,22 +14,25 @@ import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { fetchPlants, type PlantListItem } from "../lib/plants";
 import { supabase } from "../lib/supabase";
 import { RADIUS } from "../lib/theme";
+import { DiagnosisScreen } from "./DiagnosisScreen";
 import { ReviewScreen } from "./ReviewScreen";
 
 // Full-screen capture flow (design doc §3/§6), opened from the tab-bar FAB:
 // camera with the three-mode guide, gallery import at equal prominence, plant
-// target selection, then the review step (ReviewScreen). This wave ends at
-// review — the "Analyze" button is disabled until the /assess wiring lands
-// (wave 2); nothing is stored.
+// target selection, then review (ReviewScreen) → analyze → diagnosis
+// (DiagnosisScreen). onAssessed fires as soon as /assess persists a result so
+// the Plants tab behind the modal can refresh its scores.
 
 const GENERIC_PHOTO_ERROR = "Couldn't process that photo. Please try again.";
 const GENERIC_PLANTS_ERROR = "Could not load your plants. Close and try again.";
 
 interface Props {
   onClose: () => void;
+  /** An assessment was saved server-side (before the modal closes). */
+  onAssessed?: () => void;
 }
 
-export function CaptureScreen({ onClose }: Props) {
+export function CaptureScreen({ onClose, onAssessed }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const askedRef = useRef(false);
@@ -39,6 +43,7 @@ export function CaptureScreen({ onClose }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [mode, setMode] = useState<CaptureModeKey>(DEFAULT_CAPTURE_MODE);
   const [photo, setPhoto] = useState<PreparedPhoto | null>(null);
+  const [result, setResult] = useState<AssessResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -118,14 +123,31 @@ export function CaptureScreen({ onClose }: Props) {
     await prepare(asset.uri, asset.width, asset.height);
   }, [prepare]);
 
+  if (result && selectedPlant) {
+    return (
+      <DiagnosisScreen
+        diagnosis={result.diagnosis}
+        plantId={selectedPlant.id}
+        plantName={selectedPlant.name}
+        mode={mode}
+        onDone={onClose}
+      />
+    );
+  }
+
   if (photo && selectedPlant) {
     return (
       <ReviewScreen
         photo={photo}
+        plantId={selectedPlant.id}
         plantName={selectedPlant.name}
         mode={mode}
         onRetake={() => setPhoto(null)}
         onClose={onClose}
+        onAssessed={(r) => {
+          setResult(r);
+          onAssessed?.();
+        }}
       />
     );
   }

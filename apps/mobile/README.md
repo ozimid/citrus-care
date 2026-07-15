@@ -1,6 +1,6 @@
 # Citrus Care — Mobile (Expo)
 
-Native mobile app per locked decision **D-11** (Obsidian: Architecture § Locked decisions) and the design doc **Design - Citrus Care Native App**. Implemented so far: **Google sign-in + authenticated Plants list** (Welcome screen → Plants tab with health rings, pull-to-refresh, Profile tab with sign-out), the **new-plant sheet** (same fields/validation as web, shared `newPlantSchema`), and **camera capture** (FAB → full-screen `expo-camera` viewfinder with the three-mode guide Leaf/Whole plant/Cut, gallery import, plant selector, downscale to 1600px JPEG q0.85, review screen — the `/assess` call itself is the next wave). Backend is the same Supabase project + `/api/assess` pipeline as `apps/web` — same account, same plants.
+Native mobile app per locked decision **D-11** (Obsidian: Architecture § Locked decisions) and the design doc **Design - Citrus Care Native App**. Implemented so far: **Google sign-in + authenticated Plants list** (Welcome screen → Plants tab with health rings, pull-to-refresh, Profile tab with sign-out), the **new-plant sheet** (same fields/validation as web, shared `newPlantSchema`), **camera capture** (FAB → full-screen `expo-camera` viewfinder with the three-mode guide Leaf/Whole plant/Cut, gallery import, plant selector, downscale to 1600px JPEG q0.85, review screen), the **full assess pipeline** (sign-upload → signed-URL PUT → `/assess` → diagnosis screen with score ring, symptom chips, causes, ranked care plan; Plants list refreshes with the new score), and **re-assessment reminders** (local notifications scheduled from the diagnosis screen; listed/cancellable on Profile). Backend is the same Supabase project + `apps/api` pipeline as `apps/web` — same account, same plants.
 
 ## Deliberately NOT an npm workspace
 
@@ -24,9 +24,20 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=...       # = NEXT_PUBLIC_SUPABASE_ANON_KEY in app
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...    # existing web OAuth client (apps/web/app/_lib/google-auth-config.ts)
 EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=...    # created below
 EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=...# created below
+EXPO_PUBLIC_API_ORIGIN=...              # optional — see "API origin" below
 ```
 
 Until Supabase + at least one Google client ID are set, the Welcome screen renders with the button disabled and a "not configured" hint.
+
+### API origin (assess pipeline)
+
+The assess flow talks to the standalone Hono service (`apps/api`, dev port 3003) with `Authorization: Bearer <supabase access token>`. The phone can't reach `localhost` on your dev machine, so the base URL defaults to the LAN address **`http://192.168.1.205:3003`** (see `DEFAULT_API_ORIGIN` in `src/lib/api.ts`). If your machine has a different LAN IP — or you're pointing at a deployed API — set `EXPO_PUBLIC_API_ORIGIN` in `.env` (or `extra.apiOrigin` in `app.json`; env wins, `YOUR_*` placeholders are ignored, trailing slash stripped):
+
+```bash
+EXPO_PUBLIC_API_ORIGIN=http://<your-lan-ip>:3003   # `npm run dev` at the repo root starts the api on 3003
+```
+
+Note for Android dev builds: the default origin is plain `http`, which Android permits in debug builds only; production builds should point at an `https` origin.
 
 ## Google Cloud Console setup (the one manual step)
 
@@ -65,14 +76,18 @@ npx expo export        # metro production bundle (proves the app builds)
 
 ## Testing (vitest, not jest-expo — why)
 
-Tests target **pure logic modules only** (`src/lib/*.test.ts`): auth session reducer + id_token extraction, plants row mapping/sub-labels/latest-score, health-band thresholds, config resolution, new-plant validation/insert-row building, photo downscale math (1600px/q0.85 web parity), capture-mode definitions + plant preselection. vitest was chosen over jest-expo because these modules import no react-native/expo code, the rest of the monorepo already uses vitest, and it needs zero Babel/transform config. Anything importing react-native stays thin and is exercised by `expo export` bundling instead. Health-band thresholds intentionally mirror `apps/web/app/_lib/health-style.ts` (<40 Poor, <70 Fair, ≥70 Good) — web/mobile parity.
+Tests target **pure logic modules only** (`src/lib/*.test.ts`): auth session reducer + id_token extraction, plants row mapping/sub-labels/latest-score, health-band thresholds, config resolution, new-plant validation/insert-row building, photo downscale math (1600px/q0.85 web parity), capture-mode definitions + plant preselection, API origin resolution + Bearer fetch (`api.test.ts`), the assess flow + web-parity error strings (`assess.test.ts`), and reminder scheduling/permission logic (`reminders.test.ts`). vitest was chosen over jest-expo because these modules import no react-native/expo code, the rest of the monorepo already uses vitest, and it needs zero Babel/transform config. Anything importing react-native stays thin (`*-io.ts`, screens) and is exercised by `expo export` bundling instead. Health-band thresholds intentionally mirror `apps/web/app/_lib/health-style.ts` (<40 Poor, <70 Fair, ≥70 Good) — web/mobile parity.
 
 ## Structure
 
 - `App.tsx` — session restore + conditional render (Welcome ⇄ tabs, capture as a full-screen Modal); no nav library yet on purpose
-- `src/lib/` — `supabase.ts` (AsyncStorage-persisted client), `auth.ts` (Google → `signInWithIdToken`), `auth-state.ts` (reducer), `plants.ts` (query + mapping), `new-plant.ts` (form validation → insert payload, shared `newPlantSchema` + 5-digit ZIP rule), `photo.ts` (downscale math mirroring web image-utils) / `photo-io.ts` (thin `expo-image-manipulator` wrapper), `capture-modes.ts` (Leaf/Whole plant/Cut definitions + plant preselection), `health.ts` (bands), `config.ts`/`app-config.ts` (env/extra resolution), `theme.ts` (design-doc §5 tokens)
-- `src/screens/` — `WelcomeScreen`, `PlantsScreen`, `ProfileScreen`, `CaptureScreen` (camera + permission flow), `ReviewScreen` (post-capture, pre-analyze)
+- `src/lib/` — `supabase.ts` (AsyncStorage-persisted client), `auth.ts` (Google → `signInWithIdToken`), `auth-state.ts` (reducer), `plants.ts` (query + mapping), `new-plant.ts` (form validation → insert payload, shared `newPlantSchema` + 5-digit ZIP rule), `photo.ts` (downscale math mirroring web image-utils) / `photo-io.ts` (thin `expo-image-manipulator` wrapper), `capture-modes.ts` (Leaf/Whole plant/Cut definitions + plant preselection), `health.ts` (bands), `api.ts` (origin resolution + Bearer fetch) / `api-io.ts` (expo-constants + Supabase wiring), `assess.ts` (sign-upload → PUT → `/assess` → Zod-parsed diagnosis, web-parity error strings), `reminders.ts` (schedule/cancel/list logic) / `reminders-io.ts` (thin `expo-notifications` wrapper), `config.ts`/`app-config.ts` (env/extra resolution), `theme.ts` (design-doc §5 tokens)
+- `src/screens/` — `WelcomeScreen`, `PlantsScreen`, `ProfileScreen` (account, reminders, sign-out), `CaptureScreen` (camera + permission flow), `ReviewScreen` (post-capture → Analyze with progress states), `DiagnosisScreen` (score ring, symptoms, causes, care plan, remind-me CTA)
 - `src/components/` — `TabBar.tsx` (Plants · Assess FAB · Profile per design §3), `NewPlantSheet.tsx`, `CaptureOverlay.tsx` (mode pill + guide shapes + hint), `PlantPickerSheet.tsx`
+
+## Re-assessment reminders (local-only, by design)
+
+"🔔 Remind me in 2 weeks" on the diagnosis screen schedules a **local** `expo-notifications` notification (design doc §9 open question 6 resolved pragmatically: local first, server-driven push later). Notification permission is requested at that tap — contextual opt-in, never at launch. Scheduled reminders are listed and cancellable on the Profile tab. Known limitations of local scheduling: **deleting (or on iOS, offloading) the app silently loses all reminders**, they don't sync across devices, and they fire in the device's local timezone as scheduled — a future server-push upgrade (EAS + a scheduler table) would fix all three. Capture modes leaf/whole-plant remain client-side framing guidance only; the server's `/assess` accepts just `isCutCare` (Cut mode), so no unsupported fields are sent.
 
 ## Testing on a phone (never done mobile testing?)
 
@@ -81,6 +96,8 @@ Full from-zero walkthrough (Expo Go preview → credentials → installable EAS 
 ## Next implementation steps (from the design doc)
 
 1. ~~Google sign-in~~ ✅  2. ~~Plants tab~~ ✅  3. ~~New-plant sheet~~ ✅
-4. ~~Camera capture (`expo-camera`) with the three-mode guide: Leaf close-up (default) / Whole plant / Pruning cut~~ ✅ (ends at the review screen; "Analyze" is disabled until the next step)
-5. `/api/assess` call + diagnosis result screen
-6. Push re-assessment reminders (`expo-notifications`)
+4. ~~Camera capture (`expo-camera`) with the three-mode guide: Leaf close-up (default) / Whole plant / Pruning cut~~ ✅
+5. ~~`/api/assess` call + diagnosis result screen~~ ✅
+6. ~~Re-assessment reminders (`expo-notifications`, local — see the reminders section above)~~ ✅
+
+All design-doc implementation steps are done; remaining parity items (plant detail/edit/delete, timeline with deltas, before/after slider, quarantine alerts) live on the §8 parity checklist in the design doc.

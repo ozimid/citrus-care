@@ -22,7 +22,7 @@ import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 
 const GENERIC_LOAD_ERROR = "Could not load your plants. Pull to retry.";
 
-export function PlantsScreen() {
+export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const { t, scheme } = useTheme();
   const [items, setItems] = useState<PlantListItem[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,9 +41,11 @@ export function PlantsScreen() {
     }
   }, []);
 
+  // refreshToken bumps when a new assessment lands (App.tsx) so the fresh
+  // score is already on screen when the capture modal closes.
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshToken]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

@@ -1,14 +1,41 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { signOut } from "../lib/auth";
+import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
+import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, useTheme } from "../lib/theme";
 
-// Profile tab stub per the native design doc §3 — account + sign out today;
-// reminders, units, and storage & privacy land with later features.
+// Profile tab per the native design doc §3 — account, scheduled re-assessment
+// reminders (local notifications; listed + cancellable), sign out. Units and
+// storage & privacy land with later features.
 
 export function ProfileScreen({ email }: { email: string | null }) {
   const { t } = useTheme();
   const [busy, setBusy] = useState(false);
+  const [reminders, setReminders] = useState<ReminderListItem[] | null>(null);
+
+  const loadReminders = useCallback(async () => {
+    try {
+      setReminders(mapScheduledReminders(await notificationScheduler.getScheduled()));
+    } catch (e) {
+      // Show the empty state rather than an error — reminders are best-effort.
+      console.error("[ProfileScreen] loading reminders failed:", (e as Error).message);
+      setReminders([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadReminders();
+  }, [loadReminders]);
+
+  async function cancel(id: string) {
+    try {
+      await cancelReminder(notificationScheduler, id);
+    } catch (e) {
+      console.error("[ProfileScreen] cancelling reminder failed:", (e as Error).message);
+    }
+    loadReminders();
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: t.canvas }]}>
@@ -17,6 +44,34 @@ export function ProfileScreen({ email }: { email: string | null }) {
         <Text style={[styles.label, { color: t.sub }]}>Signed in as</Text>
         <Text style={[styles.email, { color: t.text }]}>{email ?? "—"}</Text>
       </View>
+
+      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+        <Text style={[styles.label, { color: t.sub }]}>Reminders</Text>
+        {reminders === null ? (
+          <ActivityIndicator color={t.green} />
+        ) : reminders.length === 0 ? (
+          <Text style={[styles.remindersEmpty, { color: t.sub }]}>
+            None scheduled. Set one from a diagnosis to get a re-check nudge.
+          </Text>
+        ) : (
+          reminders.map((r) => (
+            <View key={r.id} style={styles.reminderRow}>
+              <Text style={[styles.reminderText, { color: t.text }]} numberOfLines={1}>
+                🔔 {r.plantName} · {r.dateLabel}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Cancel reminder for ${r.plantName}`}
+                onPress={() => cancel(r.id)}
+                hitSlop={8}
+              >
+                <Text style={[styles.reminderCancel, { color: t.danger }]}>Cancel</Text>
+              </Pressable>
+            </View>
+          ))
+        )}
+      </View>
+
       <Pressable
         accessibilityRole="button"
         disabled={busy}
@@ -36,7 +91,7 @@ export function ProfileScreen({ email }: { email: string | null }) {
         )}
       </Pressable>
       <Text style={[styles.foot, { color: t.sub }]}>
-        Reminders, units, and privacy settings are coming soon.
+        Reminders are on-device notifications; units and privacy settings are coming soon.
       </Text>
     </View>
   );
@@ -53,6 +108,16 @@ const styles = StyleSheet.create({
   },
   label: { fontSize: 12 },
   email: { fontSize: 15, fontWeight: "500" },
+  remindersEmpty: { fontSize: 13, lineHeight: 19 },
+  reminderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 4,
+  },
+  reminderText: { fontSize: 14, fontWeight: "500", flexShrink: 1 },
+  reminderCancel: { fontSize: 13, fontWeight: "600" },
   signOut: {
     borderWidth: 1,
     borderRadius: RADIUS,
