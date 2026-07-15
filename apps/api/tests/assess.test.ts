@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const createClientMock = vi.fn();
 const assessPhotoWithGeminiMock = vi.fn();
+const downloadMock = vi.fn();
 
 vi.mock("../src/auth", () => ({
   getAuth: async () => {
@@ -12,6 +13,11 @@ vi.mock("../src/auth", () => ({
     if (!user) return null;
     return { supabase, user };
   },
+}));
+
+// Photo I/O now flows through the storage abstraction, not supabase.storage.
+vi.mock("../src/storage", () => ({
+  getStorage: () => ({ download: (...args: unknown[]) => downloadMock(...args) }),
 }));
 
 vi.mock("../src/gemini", async () => {
@@ -114,6 +120,8 @@ function geminiOk(payload: Record<string, unknown>) {
 beforeEach(() => {
   createClientMock.mockReset();
   assessPhotoWithGeminiMock.mockReset();
+  downloadMock.mockReset();
+  downloadMock.mockResolvedValue(Buffer.from("fake-image-bytes"));
 });
 
 describe("POST /assess", () => {

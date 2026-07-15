@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { loadLocalEnv } from "./env";
 import assess from "./routes/assess";
 import cleanupOrphans from "./routes/cleanup-orphans";
+import photos from "./routes/photos";
 
 loadLocalEnv();
 
@@ -21,6 +22,7 @@ app.onError((err, c) => {
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/assess", assess);
 app.route("/cleanup-orphans", cleanupOrphans);
+app.route("/photos", photos);
 
 export default app;
 

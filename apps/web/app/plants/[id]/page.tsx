@@ -53,45 +53,33 @@ export default async function PlantDetailPage({
 
   const assessments = (rows ?? []) as TimelineRow[];
 
-  const items: TimelineItem[] = await Promise.all(
-    assessments.map(async (a) => {
-      const { data: signed } = await supabase.storage
-        .from("photos")
-        .createSignedUrl(a.photo_path, 60 * 60);
-      return {
-        id: a.id,
-        plant_id: plant.id,
-        created_at: a.created_at,
-        health_score: a.health_score,
-        summary: a.diagnosis?.summary ?? "",
-        thumbnailUrl: signed?.signedUrl ?? null,
-        comparisonDelta: a.diagnosis?.comparison?.delta ?? null,
-      };
-    }),
-  );
+  // Photos are served through the API read proxy: the <img> request carries the
+  // user's auth cookie, and apps/api auth + ownership-checks the path before
+  // redirecting to a short-lived signed URL. No server-side signing here.
+  const photoProxyUrl = (photoPath: string) =>
+    `/api/photos?path=${encodeURIComponent(photoPath)}`;
 
-  // Generate signed URLs for Before/After recovery slider if 2+ assessments exist
+  const items: TimelineItem[] = assessments.map((a) => ({
+    id: a.id,
+    plant_id: plant.id,
+    created_at: a.created_at,
+    health_score: a.health_score,
+    summary: a.diagnosis?.summary ?? "",
+    thumbnailUrl: photoProxyUrl(a.photo_path),
+    comparisonDelta: a.diagnosis?.comparison?.delta ?? null,
+  }));
+
+  // Before/After recovery slider if 2+ assessments exist.
   let sliderData = null;
   if (assessments.length >= 2) {
     const latest = assessments[0];
     const oldest = assessments[assessments.length - 1];
-    
-    const { data: latestSigned } = await supabase.storage
-      .from("photos")
-      .createSignedUrl(latest.photo_path, 60 * 60);
-      
-    const { data: oldestSigned } = await supabase.storage
-      .from("photos")
-      .createSignedUrl(oldest.photo_path, 60 * 60);
-      
-    if (latestSigned?.signedUrl && oldestSigned?.signedUrl) {
-      sliderData = {
-        beforeUrl: oldestSigned.signedUrl,
-        afterUrl: latestSigned.signedUrl,
-        beforeDate: formatDate(oldest.created_at),
-        afterDate: formatDate(latest.created_at),
-      };
-    }
+    sliderData = {
+      beforeUrl: photoProxyUrl(oldest.photo_path),
+      afterUrl: photoProxyUrl(latest.photo_path),
+      beforeDate: formatDate(oldest.created_at),
+      afterDate: formatDate(latest.created_at),
+    };
   }
 
   const typeLabel = plant.plant_type ? plant.plant_type.charAt(0).toUpperCase() + plant.plant_type.slice(1) : "";

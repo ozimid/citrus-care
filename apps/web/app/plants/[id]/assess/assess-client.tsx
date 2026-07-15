@@ -4,12 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PhotoCapture } from "@/components/PhotoCapture";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { createClient } from "@/app/_lib/supabase/client";
-import {
-  downscaleImage,
-  randomFileName,
-  storagePathFor,
-} from "@/app/_lib/image-utils";
+import { downscaleImage } from "@/app/_lib/image-utils";
 
 import { QuarantineAlert } from "@/components/QuarantineAlert";
 import type { Plant } from "@citrus/shared";
@@ -62,13 +57,6 @@ export function AssessClient({ plant }: { plant: Plant }) {
     setError(null);
     setBusy(true);
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-      if (userErr || !user) throw new Error("Not signed in");
-
       let photoPath = uploadedPath;
 
       if (!photoPath) {
@@ -76,17 +64,31 @@ export function AssessClient({ plant }: { plant: Plant }) {
         const blob = await downscaleImage(file);
 
         setStatus("Uploading…");
-        photoPath = storagePathFor({
-          userId: user.id,
-          plantId: plant.id, // using plant.id as storage folder segment (retaining folder structures)
-          mime: "image/jpeg",
-          name: randomFileName(),
+        // The API constructs the object path server-side from the authed user
+        // and hands back a short-lived signed upload URL. We PUT the bytes to
+        // it directly, then hand the returned photoPath to /api/assess.
+        const signRes = await fetch("/api/photos/sign-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plantId: plant.id, mime: "image/jpeg" }),
         });
+        if (!signRes.ok) {
+          const j = await signRes.json().catch(() => ({}));
+          throw new AssessError(signRes.status, j.error);
+        }
+        const { photoPath: signedPath, uploadUrl } = (await signRes.json()) as {
+          photoPath: string;
+          uploadUrl: string;
+        };
 
-        const { error: upErr } = await supabase.storage
-          .from("photos")
-          .upload(photoPath, blob, { contentType: "image/jpeg", upsert: false });
-        if (upErr) throw new Error(upErr.message);
+        const putRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "image/jpeg" },
+          body: blob,
+        });
+        if (!putRes.ok) throw new Error("Upload failed. Please try again.");
+
+        photoPath = signedPath;
         setUploadedPath(photoPath);
       }
 

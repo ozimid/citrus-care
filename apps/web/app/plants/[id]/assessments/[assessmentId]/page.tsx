@@ -36,9 +36,9 @@ export default async function AssessmentDetailPage({
   const assessment = aRow as Assessment | null;
   if (!plant || !assessment) notFound();
 
-  const { data: signed } = await supabase.storage
-    .from("photos")
-    .createSignedUrl(assessment.photo_path, 60 * 60);
+  // Served via the API read proxy (auth + ownership-checked, then redirected to
+  // a signed URL) — the browser's cookie authorizes the <img> request.
+  const photoUrl = `/api/photos?path=${encodeURIComponent(assessment.photo_path)}`;
 
   return (
     <main className="space-y-6">
@@ -61,7 +61,7 @@ export default async function AssessmentDetailPage({
         </div>
       </div>
 
-      <AssessmentCard assessment={assessment} photoUrl={signed?.signedUrl ?? null} />
+      <AssessmentCard assessment={assessment} photoUrl={photoUrl} />
     </main>
   );
 }

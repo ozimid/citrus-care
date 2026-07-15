@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { createClient } from "@/app/_lib/supabase/server";
 import { newPlantSchema } from "@citrus/shared";
 
@@ -54,28 +55,33 @@ export async function createPlant(
 
 export async function deletePlant(plantId: string) {
   const supabase = await createClient();
-
-  // Get photo paths of assessments for storage cleanup
-  const { data: assessments } = await supabase
-    .from("assessments")
-    .select("photo_path")
-    .eq("plant_id", plantId);
-
-  if (assessments && assessments.length > 0) {
-    const paths = assessments.map((a) => a.photo_path);
-    const { error: storageError } = await supabase.storage
-      .from("photos")
-      .remove(paths);
-    if (storageError) {
-      console.error("[deletePlant] Storage cleanup failed:", storageError.message);
-    }
-  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const { error } = await supabase.from("plants").delete().eq("id", plantId);
   if (error) {
     console.error("[deletePlant] Delete failed:", error.message);
     throw new Error("Failed to delete plant.");
   }
+
+  // Best-effort storage cleanup. The API owns storage credentials now, so we
+  // forward the user's auth cookie and let it auth + ownership-check the prefix
+  // (must start with the user's id). Never block the delete on this.
+  if (user) {
+    try {
+      const api = process.env.API_ORIGIN ?? "http://localhost:3003";
+      const cookieHeader = (await cookies()).toString();
+      const prefix = `${user.id}/${plantId}/`;
+      await fetch(`${api}/photos?prefix=${encodeURIComponent(prefix)}`, {
+        method: "DELETE",
+        headers: { Cookie: cookieHeader },
+      });
+    } catch (e) {
+      console.error("[deletePlant] Storage cleanup failed:", (e as Error).message);
+    }
+  }
+
   revalidatePath("/plants");
   redirect("/plants");
 }

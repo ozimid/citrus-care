@@ -32,6 +32,11 @@ const nextConfig: NextConfig = {
     return [
       { source: "/api/assess", destination: `${apiOrigin}/assess` },
       { source: "/api/cleanup-orphans", destination: `${apiOrigin}/cleanup-orphans` },
+      { source: "/api/photos/sign-upload", destination: `${apiOrigin}/photos/sign-upload` },
+      // Read proxy (GET ?path=) and storage cleanup (DELETE ?prefix=) share this
+      // one rewrite — Next preserves the method and query string on the way to
+      // apps/api, which auth + ownership-checks before touching storage.
+      { source: "/api/photos", destination: `${apiOrigin}/photos` },
     ];
   },
 };

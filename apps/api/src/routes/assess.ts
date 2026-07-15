@@ -7,6 +7,7 @@ import {
   assessPhotoWithGemini,
 } from "../gemini";
 import { tryConsume } from "../rate-limit";
+import { getStorage } from "../storage";
 import type { Assessment, Plant } from "@citrus/shared";
 
 const ASSESS_LIMIT_PER_HOUR = 5;
@@ -74,13 +75,13 @@ assess.post("/", async (c) => {
     .maybeSingle();
   const previous = prevRow as PreviousLite | null;
 
-  const { data: blob, error: dlErr } = await supabase.storage
-    .from("photos")
-    .download(photoPath);
-  if (dlErr || !blob) {
+  let buf: Buffer;
+  try {
+    buf = await getStorage().download(photoPath);
+  } catch (e) {
+    console.error("[/assess] photo download failed:", (e as Error).message);
     return c.json({ error: "Photo not found" }, 404);
   }
-  const buf = Buffer.from(await blob.arrayBuffer());
   const base64 = buf.toString("base64");
 
   const systemPrompt = buildSystemPrompt(isCutCare);
