@@ -4,8 +4,12 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Assessment, Plant } from "@citrus/shared";
+import { comparisonDelta } from "./plant-detail";
 
-export type AssessmentScoreRow = Pick<Assessment, "health_score" | "created_at">;
+export type AssessmentScoreRow = Pick<Assessment, "health_score" | "created_at"> & {
+  /** jsonb from the embed — untrusted; only comparison.delta is read, safely. */
+  diagnosis?: unknown;
+};
 
 /** The columns PLANTS_SELECT pulls, tied to the shared Plant/Assessment types
  * so schema drift shows up as a compile error. */
@@ -21,11 +25,14 @@ export interface PlantListItem {
   name: string;
   subLabel: string;
   latestScore: number | null;
+  /** Card trend chip: "Better"/"Same"/"Worse"/"Unknown" from the latest
+   * assessment's comparison, "First assessment" when nothing prior existed. */
+  trend: string | null;
   createdAt: string;
 }
 
 export const PLANTS_SELECT =
-  "id,name,plant_type,species,cultivar,location,created_at,assessments!plant_id(health_score,created_at)";
+  "id,name,plant_type,species,cultivar,location,created_at,assessments!plant_id(health_score,created_at,diagnosis)";
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
 export function plantSubLabel(row: PlantRow): string {
@@ -37,13 +44,30 @@ export function plantSubLabel(row: PlantRow): string {
     .join(" · ");
 }
 
-export function latestScore(assessments: AssessmentScoreRow[] | null | undefined): number | null {
+function latestAssessment(
+  assessments: AssessmentScoreRow[] | null | undefined,
+): AssessmentScoreRow | null {
   if (!assessments || assessments.length === 0) return null;
   let latest = assessments[0];
   for (const a of assessments) {
     if (a.created_at > latest.created_at) latest = a;
   }
-  return latest.health_score;
+  return latest;
+}
+
+export function latestScore(assessments: AssessmentScoreRow[] | null | undefined): number | null {
+  return latestAssessment(assessments)?.health_score ?? null;
+}
+
+/** Trend chip for the plant card, from the latest assessment's comparison
+ * delta (web AssessmentTimeline badge wording). A latest assessment with no
+ * comparison had nothing prior to compare — "First assessment". */
+export function latestTrend(assessments: AssessmentScoreRow[] | null | undefined): string | null {
+  const latest = latestAssessment(assessments);
+  if (!latest) return null;
+  const delta = comparisonDelta(latest.diagnosis);
+  if (!delta) return "First assessment";
+  return delta.charAt(0).toUpperCase() + delta.slice(1);
 }
 
 export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem[] {
@@ -52,6 +76,7 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
     name: row.name,
     subLabel: plantSubLabel(row),
     latestScore: latestScore(row.assessments),
+    trend: latestTrend(row.assessments),
     createdAt: row.created_at,
   }));
 }

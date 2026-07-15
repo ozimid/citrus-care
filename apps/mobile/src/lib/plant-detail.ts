@@ -1,0 +1,172 @@
+// Plant detail data: the plant row (incl. zip_code for the quarantine check)
+// plus the full assessment timeline, mapped into render-ready entries. Pure
+// mapping half is tested (plant-detail.test.ts); the queries are thin and kept
+// in sync with the web detail page (apps/web/app/plants/[id]/page.tsx).
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { assessmentDiagnosisSchema, type AssessmentDiagnosis, type Plant } from "@citrus/shared";
+
+export const PLANT_DETAIL_LOAD_ERROR = "Could not load this plant.";
+
+export type PlantDetailRow = Pick<
+  Plant,
+  "id" | "name" | "plant_type" | "species" | "cultivar" | "location" | "zip_code" | "created_at"
+>;
+
+export const PLANT_DETAIL_SELECT =
+  "id,name,plant_type,species,cultivar,location,zip_code,created_at";
+
+/** Timeline columns, mirroring the web detail page's TimelineRow plus
+ * is_cut_care so tapping a row can restore the assessment's capture mode. */
+export const TIMELINE_SELECT = "id,created_at,health_score,photo_path,diagnosis,is_cut_care";
+
+export interface TimelineRow {
+  id: string;
+  created_at: string;
+  health_score: number;
+  photo_path: string;
+  /** jsonb straight from Postgres — untrusted until Zod-parsed. */
+  diagnosis: unknown;
+  is_cut_care: boolean | null;
+}
+
+export type TimelineDelta = "better" | "same" | "worse" | "unknown";
+
+export interface TimelineEntry {
+  id: string;
+  createdAt: string;
+  dateLabel: string;
+  score: number;
+  delta: TimelineDelta | null;
+  /** Chip text mirroring the web badge wording; "First" marks the plant's
+   * earliest assessment (nothing prior to compare against). */
+  deltaLabel: string | null;
+  summary: string;
+  photoPath: string;
+  isCutCare: boolean;
+  /** Raw jsonb, parsed on tap via parseTimelineDiagnosis. */
+  diagnosis: unknown;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Jul 10, 2026" — UTC-based for determinism (same convention as reminders.ts). */
+export function formatTimelineDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "Unknown date";
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
+
+const DELTAS: ReadonlySet<string> = new Set(["better", "same", "worse", "unknown"]);
+
+/** Safely pull comparison.delta out of the untrusted diagnosis jsonb. */
+export function comparisonDelta(diagnosis: unknown): TimelineDelta | null {
+  if (typeof diagnosis !== "object" || diagnosis === null) return null;
+  const comparison = (diagnosis as { comparison?: unknown }).comparison;
+  if (typeof comparison !== "object" || comparison === null) return null;
+  const delta = (comparison as { delta?: unknown }).delta;
+  return typeof delta === "string" && DELTAS.has(delta) ? (delta as TimelineDelta) : null;
+}
+
+function summaryOf(diagnosis: unknown): string {
+  if (typeof diagnosis !== "object" || diagnosis === null) return "";
+  const summary = (diagnosis as { summary?: unknown }).summary;
+  return typeof summary === "string" ? summary : "";
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Rows arrive reverse-chron (newest first); the last row is the plant's
+ * first assessment and gets the "First" chip when it carries no comparison. */
+export function mapTimelineRows(rows: TimelineRow[] | null | undefined): TimelineEntry[] {
+  const list = rows ?? [];
+  return list.map((row, i) => {
+    const delta = comparisonDelta(row.diagnosis);
+    const isEarliest = i === list.length - 1;
+    return {
+      id: row.id,
+      createdAt: row.created_at,
+      dateLabel: formatTimelineDate(row.created_at),
+      score: row.health_score,
+      delta,
+      deltaLabel: delta ? capitalize(delta) : isEarliest ? "First" : null,
+      summary: summaryOf(row.diagnosis),
+      photoPath: row.photo_path,
+      isCutCare: row.is_cut_care === true,
+      diagnosis: row.diagnosis,
+    };
+  });
+}
+
+/** Header trend chip: the latest delta, or "First assessment" for a plant
+ * with exactly one; null when there is nothing meaningful to say. */
+export function trendChipLabel(entries: TimelineEntry[]): string | null {
+  if (entries.length === 0) return null;
+  const latest = entries[0];
+  if (latest.delta) return capitalize(latest.delta);
+  return entries.length === 1 ? "First assessment" : null;
+}
+
+/** Oldest vs latest photo for the before/after slider; null under 2 assessments. */
+export function sliderPair(
+  entries: TimelineEntry[],
+): { before: TimelineEntry; after: TimelineEntry } | null {
+  if (entries.length < 2) return null;
+  return { before: entries[entries.length - 1], after: entries[0] };
+}
+
+/** Authorized read-proxy URL (apps/api GET /photos): the Image request carries
+ * the Bearer token and the API 302s to a short-lived signed URL. */
+export function photoUri(apiOrigin: string, photoPath: string): string {
+  return `${apiOrigin}/photos?path=${encodeURIComponent(photoPath)}`;
+}
+
+/** Zod-parse a timeline row's stored diagnosis before opening DiagnosisScreen
+ * (same shared-schema guard as the assess flow). Null = don't navigate. */
+export function parseTimelineDiagnosis(raw: unknown): AssessmentDiagnosis | null {
+  const parsed = assessmentDiagnosisSchema.safeParse(raw);
+  if (!parsed.success) {
+    console.error("[parseTimelineDiagnosis] stored diagnosis failed schema:", parsed.error.message);
+    return null;
+  }
+  return parsed.data;
+}
+
+export interface PlantDetailData {
+  plant: PlantDetailRow;
+  timeline: TimelineEntry[];
+}
+
+/** Thin two-query fetch (plant row + all assessments, newest first). Generic
+ * client-facing message; details stay in the console (web parity rule). */
+export async function fetchPlantDetail(
+  client: SupabaseClient,
+  plantId: string,
+): Promise<PlantDetailData> {
+  const { data: plant, error: plantError } = await client
+    .from("plants")
+    .select(PLANT_DETAIL_SELECT)
+    .eq("id", plantId)
+    .maybeSingle();
+  if (plantError || !plant) {
+    console.error("[fetchPlantDetail] plant query failed:", plantError?.message ?? "not found");
+    throw new Error(PLANT_DETAIL_LOAD_ERROR);
+  }
+
+  const { data: rows, error: rowsError } = await client
+    .from("assessments")
+    .select(TIMELINE_SELECT)
+    .eq("plant_id", plantId)
+    .order("created_at", { ascending: false });
+  if (rowsError) {
+    console.error("[fetchPlantDetail] timeline query failed:", rowsError.message);
+    throw new Error(PLANT_DETAIL_LOAD_ERROR);
+  }
+
+  return {
+    plant: plant as unknown as PlantDetailRow,
+    timeline: mapTimelineRows(rows as unknown as TimelineRow[]),
+  };
+}

@@ -28,6 +28,25 @@ export const emptyNewPlantForm: NewPlantForm = {
   zip_code: "",
 };
 
+/** Prefill for the edit sheet: DB row (nulls) → form state (empty strings). */
+export function formFromPlant(plant: {
+  name: string;
+  plant_type: string;
+  species: string | null;
+  cultivar: string | null;
+  location: string | null;
+  zip_code: string | null;
+}): NewPlantForm {
+  return {
+    name: plant.name,
+    plant_type: plant.plant_type,
+    species: plant.species ?? "",
+    cultivar: plant.cultivar ?? "",
+    location: plant.location ?? "",
+    zip_code: plant.zip_code ?? "",
+  };
+}
+
 /** The web form (apps/web/app/plants/new/new-plant-form.tsx) shows the citrus
  * cultivar select only for plant_type "tree"; every other type gets a free
  * text input. Same gating here. */

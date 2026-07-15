@@ -19,8 +19,8 @@ function response(overrides: Partial<ApiResponse> = {}): ApiResponse {
 
 describe("resolveApiOrigin", () => {
   it("defaults to the LAN dev origin when nothing is configured", () => {
-    expect(resolveApiOrigin(undefined, {})).toBe("http://192.168.1.205:3003");
-    expect(DEFAULT_API_ORIGIN).toBe("http://192.168.1.205:3003");
+    expect(resolveApiOrigin(undefined, {})).toBe("http://192.168.1.205:3002/api");
+    expect(DEFAULT_API_ORIGIN).toBe("http://192.168.1.205:3002/api");
   });
 
   it("prefers the EXPO_PUBLIC_API_ORIGIN env var over extra", () => {

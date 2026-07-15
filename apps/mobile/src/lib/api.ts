@@ -7,7 +7,10 @@
 /** LAN dev default: the phone must reach `npm run dev`'s api service (port
  * 3003) on the developer machine's LAN address — localhost on-device is the
  * phone itself. Override via EXPO_PUBLIC_API_ORIGIN (see README). */
-export const DEFAULT_API_ORIGIN = "http://192.168.1.205:3003";
+// Default routes through the web dev server's /api rewrites on port 3002 —
+// the one port this phone has provably reached for weeks (PWA dogfooding).
+// Direct api access (http://<lan-ip>:3003) remains a valid override.
+export const DEFAULT_API_ORIGIN = "http://192.168.1.205:3002/api";
 
 type Extra = Record<string, unknown> | undefined | null;
 type Env = Record<string, string | undefined>;

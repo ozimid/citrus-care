@@ -42,4 +42,12 @@ describe("preselectedPlantId", () => {
   it("selects nothing when there are no plants", () => {
     expect(preselectedPlantId([])).toBeNull();
   });
+
+  it("prefers an explicitly requested plant (detail screen's 'Assess this plant')", () => {
+    expect(preselectedPlantId([{ id: "p1" }, { id: "p2" }], "p2")).toBe("p2");
+  });
+
+  it("ignores a preferred id that is not in the list", () => {
+    expect(preselectedPlantId([{ id: "p1" }, { id: "p2" }], "p9")).toBeNull();
+  });
 });

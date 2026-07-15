@@ -12,8 +12,8 @@ import { WelcomeScreen } from "./src/screens/WelcomeScreen";
 
 // Root: restores the persisted Supabase session, then renders Welcome
 // (signed out) or the tabbed main app (signed in). Navigation is a
-// conditional render + tab state on purpose — no nav library until a
-// stacked flow (plant detail) actually needs one.
+// conditional render + tab state on purpose — stacked flows (capture,
+// plant detail) are Modals, so no nav library is needed yet.
 
 export default function App() {
   const [auth, dispatch] = useReducer(authReducer, initialAuthState);

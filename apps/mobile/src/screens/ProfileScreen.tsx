@@ -1,12 +1,15 @@
+import * as Application from "expo-application";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { apiOrigin } from "../lib/api-io";
 import { signOut } from "../lib/auth";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, useTheme } from "../lib/theme";
 
 // Profile tab per the native design doc §3 — account, scheduled re-assessment
-// reminders (local notifications; listed + cancellable), sign out. Units and
+// reminders (local notifications; listed + cancellable), read-only About rows
+// (app version + resolved API origin, for debuggability), sign out. Units and
 // storage & privacy land with later features.
 
 export function ProfileScreen({ email }: { email: string | null }) {
@@ -72,6 +75,22 @@ export function ProfileScreen({ email }: { email: string | null }) {
         )}
       </View>
 
+      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+        <Text style={[styles.label, { color: t.sub }]}>About</Text>
+        <View style={styles.aboutRow}>
+          <Text style={[styles.aboutKey, { color: t.sub }]}>App version</Text>
+          <Text style={[styles.aboutValue, { color: t.text }]} numberOfLines={1}>
+            {Application.nativeApplicationVersion ?? "—"}
+          </Text>
+        </View>
+        <View style={styles.aboutRow}>
+          <Text style={[styles.aboutKey, { color: t.sub }]}>API origin</Text>
+          <Text style={[styles.aboutValue, { color: t.text }]} numberOfLines={1}>
+            {apiOrigin}
+          </Text>
+        </View>
+      </View>
+
       <Pressable
         accessibilityRole="button"
         disabled={busy}
@@ -118,6 +137,15 @@ const styles = StyleSheet.create({
   },
   reminderText: { fontSize: 14, fontWeight: "500", flexShrink: 1 },
   reminderCancel: { fontSize: 13, fontWeight: "600" },
+  aboutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 3,
+  },
+  aboutKey: { fontSize: 13 },
+  aboutValue: { fontSize: 13, fontWeight: "500", flexShrink: 1 },
   signOut: {
     borderWidth: 1,
     borderRadius: RADIUS,

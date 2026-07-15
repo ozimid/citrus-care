@@ -42,8 +42,13 @@ export function captureMode(key: CaptureModeKey): CaptureMode {
   return CAPTURE_MODES.find((m) => m.key === key) as CaptureMode;
 }
 
-/** The FAB needs a target plant: preselect only when the choice is forced
- * (exactly one plant); otherwise the user picks in the selector sheet. */
-export function preselectedPlantId(plants: ReadonlyArray<{ id: string }>): string | null {
+/** The FAB needs a target plant: an explicitly requested plant wins (the
+ * detail screen's "Assess this plant"), then the forced choice when there is
+ * exactly one plant; otherwise the user picks in the selector sheet. */
+export function preselectedPlantId(
+  plants: ReadonlyArray<{ id: string }>,
+  preferredId?: string | null,
+): string | null {
+  if (preferredId && plants.some((p) => p.id === preferredId)) return preferredId;
   return plants.length === 1 ? plants[0].id : null;
 }

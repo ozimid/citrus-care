@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { latestScore, mapPlantRows, plantSubLabel, PLANTS_SELECT, type PlantRow } from "./plants";
+import {
+  latestScore,
+  latestTrend,
+  mapPlantRows,
+  plantSubLabel,
+  PLANTS_SELECT,
+  type PlantRow,
+} from "./plants";
 
 function row(overrides: Partial<PlantRow> = {}): PlantRow {
   return {
@@ -53,10 +60,64 @@ describe("latestScore", () => {
   });
 });
 
+describe("latestTrend", () => {
+  it("is null when the plant has no assessments", () => {
+    expect(latestTrend([])).toBeNull();
+    expect(latestTrend(null)).toBeNull();
+    expect(latestTrend(undefined)).toBeNull();
+  });
+
+  it("labels the latest assessment's comparison delta with the web badge wording", () => {
+    expect(
+      latestTrend([
+        {
+          health_score: 82,
+          created_at: "2026-07-10T00:00:00Z",
+          diagnosis: { comparison: { delta: "better", notes: "n" } },
+        },
+      ]),
+    ).toBe("Better");
+  });
+
+  it("uses the newest assessment even when rows arrive unordered", () => {
+    expect(
+      latestTrend([
+        {
+          health_score: 40,
+          created_at: "2026-06-01T00:00:00Z",
+          diagnosis: { comparison: { delta: "worse", notes: "n" } },
+        },
+        {
+          health_score: 82,
+          created_at: "2026-07-10T00:00:00Z",
+          diagnosis: { comparison: { delta: "same", notes: "n" } },
+        },
+      ]),
+    ).toBe("Same");
+  });
+
+  it("says 'First assessment' when the latest has no comparison (nothing prior to compare)", () => {
+    expect(latestTrend([{ health_score: 70, created_at: "2026-07-10T00:00:00Z" }])).toBe(
+      "First assessment",
+    );
+    expect(
+      latestTrend([{ health_score: 70, created_at: "2026-07-10T00:00:00Z", diagnosis: {} }]),
+    ).toBe("First assessment");
+  });
+});
+
 describe("mapPlantRows", () => {
-  it("maps rows into list items with sub label and latest score", () => {
+  it("maps rows into list items with sub label, latest score and trend", () => {
     const items = mapPlantRows([
-      row({ assessments: [{ health_score: 91, created_at: "2026-07-11T00:00:00Z" }] }),
+      row({
+        assessments: [
+          {
+            health_score: 91,
+            created_at: "2026-07-11T00:00:00Z",
+            diagnosis: { comparison: { delta: "better", notes: "n" } },
+          },
+        ],
+      }),
       row({ id: "plant-2", name: "Kitchen Basil", plant_type: "herb", species: null, cultivar: null, location: null, assessments: [] }),
     ]);
 
@@ -66,9 +127,11 @@ describe("mapPlantRows", () => {
       name: "Backyard Meyer",
       subLabel: "Tree · Citrus × meyeri · Meyer Lemon · Patio",
       latestScore: 91,
+      trend: "Better",
       createdAt: "2026-07-01T00:00:00Z",
     });
     expect(items[1].latestScore).toBeNull();
+    expect(items[1].trend).toBeNull();
     expect(items[1].subLabel).toBe("Herb · Unknown cultivar");
   });
 
@@ -84,5 +147,10 @@ describe("mapPlantRows", () => {
 describe("PLANTS_SELECT", () => {
   it("disambiguates the assessments embed with the plant_id FK hint", () => {
     expect(PLANTS_SELECT).toContain("assessments!plant_id(");
+  });
+
+  it("pulls the embedded diagnosis so cards can show the trend chip", () => {
+    const embed = PLANTS_SELECT.slice(PLANTS_SELECT.indexOf("assessments!plant_id("));
+    expect(embed).toContain("diagnosis");
   });
 });

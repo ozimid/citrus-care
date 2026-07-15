@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -14,6 +14,7 @@ import {
 import { CITRUS_CULTIVARS, PLANT_TYPES } from "@citrus/shared";
 import {
   emptyNewPlantForm,
+  formFromPlant,
   GENERIC_CREATE_PLANT_ERROR,
   insertPlant,
   showsCitrusCultivarPicker,
@@ -21,29 +22,56 @@ import {
   type NewPlantFieldErrors,
   type NewPlantForm,
 } from "../lib/new-plant";
+import { GENERIC_UPDATE_PLANT_ERROR, updatePlant } from "../lib/plant-mutations";
 import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 
-// New-plant bottom sheet per the native design doc §4 (#5): same fields and
-// validation as the web form (apps/web/app/plants/new/new-plant-form.tsx) —
-// name required, citrus cultivar list only for trees, everything else
-// optional. All logic lives in src/lib/new-plant.ts (tested); this file is
+// New/edit plant bottom sheet per the native design doc §4 (#5/#7): same
+// fields and validation as the web form (apps/web/app/plants/new/
+// new-plant-form.tsx) — name required, citrus cultivar list only for trees,
+// everything else optional. Passing `plant` flips the sheet into edit mode
+// (prefilled values, "Save changes", update instead of insert). All logic
+// lives in src/lib/new-plant.ts + plant-mutations.ts (tested); this file is
 // only the sheet UI.
+
+interface EditablePlant {
+  id: string;
+  name: string;
+  plant_type: string;
+  species: string | null;
+  cultivar: string | null;
+  location: string | null;
+  zip_code: string | null;
+}
 
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** Called after a successful insert — parent refreshes the list and closes. */
-  onCreated: () => void;
+  /** Called after a successful insert/update — parent refreshes and closes. */
+  onSaved: () => void;
+  /** Edit mode: prefill from this plant and update it on submit. */
+  plant?: EditablePlant | null;
 }
 
-export function NewPlantSheet({ visible, onClose, onCreated }: Props) {
+export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
   const { t } = useTheme();
   const [form, setForm] = useState<NewPlantForm>(emptyNewPlantForm);
   const [errors, setErrors] = useState<NewPlantFieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cultivarOpen, setCultivarOpen] = useState(false);
+  const editing = plant != null;
+
+  // Edit mode: re-prefill from the plant row on every open, discarding
+  // unsaved edits. (Create mode keeps typed values across an accidental
+  // close, as before; submit resets them on success.)
+  useEffect(() => {
+    if (!visible || !plant) return;
+    setForm(formFromPlant(plant));
+    setErrors({});
+    setSubmitError(null);
+    setCultivarOpen(false);
+  }, [visible, plant]);
 
   const set = (field: keyof NewPlantForm, value: string) =>
     setForm((f) => ({ ...f, [field]: value }));
@@ -65,13 +93,17 @@ export function NewPlantSheet({ visible, onClose, onCreated }: Props) {
     setSubmitError(null);
     setBusy(true);
     try {
-      await insertPlant(supabase, result.data);
-      setForm(emptyNewPlantForm);
+      if (plant) {
+        await updatePlant(supabase, plant.id, result.data);
+      } else {
+        await insertPlant(supabase, result.data);
+        setForm(emptyNewPlantForm);
+      }
       setCultivarOpen(false);
-      onCreated();
+      onSaved();
     } catch {
-      // insertPlant already logged details; show only the generic message.
-      setSubmitError(GENERIC_CREATE_PLANT_ERROR);
+      // insertPlant/updatePlant already logged details; generic message only.
+      setSubmitError(editing ? GENERIC_UPDATE_PLANT_ERROR : GENERIC_CREATE_PLANT_ERROR);
     } finally {
       setBusy(false);
     }
@@ -86,7 +118,9 @@ export function NewPlantSheet({ visible, onClose, onCreated }: Props) {
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={[styles.sheet, { backgroundColor: t.card }]}>
             <View style={styles.header}>
-              <Text style={[styles.title, { color: t.text }]}>New plant</Text>
+              <Text style={[styles.title, { color: t.text }]}>
+                {editing ? "Edit plant" : "New plant"}
+              </Text>
               <Pressable accessibilityRole="button" onPress={close} hitSlop={10}>
                 <Text style={[styles.cancel, { color: t.sub }]}>Cancel</Text>
               </Pressable>
@@ -252,7 +286,7 @@ export function NewPlantSheet({ visible, onClose, onCreated }: Props) {
 
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Add plant"
+                accessibilityLabel={editing ? "Save changes" : "Add plant"}
                 disabled={busy}
                 onPress={submit}
                 style={[styles.submit, { backgroundColor: t.green, opacity: busy ? 0.6 : 1 }]}
@@ -260,7 +294,9 @@ export function NewPlantSheet({ visible, onClose, onCreated }: Props) {
                 {busy ? (
                   <ActivityIndicator color={t.onGreen} />
                 ) : (
-                  <Text style={[styles.submitText, { color: t.onGreen }]}>Add plant</Text>
+                  <Text style={[styles.submitText, { color: t.onGreen }]}>
+                    {editing ? "Save changes" : "Add plant"}
+                  </Text>
                 )}
               </Pressable>
             </ScrollView>

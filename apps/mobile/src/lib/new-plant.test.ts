@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPlantInsertRow,
   emptyNewPlantForm,
+  formFromPlant,
   showsCitrusCultivarPicker,
   validateNewPlant,
 } from "./new-plant";
@@ -18,6 +19,28 @@ function filled(overrides: Partial<typeof emptyNewPlantForm> = {}) {
     ...overrides,
   };
 }
+
+describe("formFromPlant", () => {
+  it("prefills the edit sheet from an existing row, mapping nulls to empty strings", () => {
+    expect(
+      formFromPlant({
+        name: "Mr Lemon",
+        plant_type: "tree",
+        species: null,
+        cultivar: "Meyer Lemon",
+        location: null,
+        zip_code: "92866",
+      }),
+    ).toEqual({
+      name: "Mr Lemon",
+      plant_type: "tree",
+      species: "",
+      cultivar: "Meyer Lemon",
+      location: "",
+      zip_code: "92866",
+    });
+  });
+});
 
 describe("showsCitrusCultivarPicker", () => {
   it("shows the citrus cultivar list only for trees (mirrors web new-plant-form gating)", () => {

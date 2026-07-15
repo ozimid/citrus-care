@@ -1,6 +1,6 @@
 "use client";
 
-import { checkQuarantine } from "@/app/_lib/quarantine";
+import { checkQuarantine } from "@citrus/shared";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle, Phone, Globe } from "lucide-react";
 

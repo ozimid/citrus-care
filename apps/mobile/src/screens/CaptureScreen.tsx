@@ -30,9 +30,11 @@ interface Props {
   onClose: () => void;
   /** An assessment was saved server-side (before the modal closes). */
   onAssessed?: () => void;
+  /** Preselect this plant (detail screen's "Assess this plant"). */
+  initialPlantId?: string;
 }
 
-export function CaptureScreen({ onClose, onAssessed }: Props) {
+export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const askedRef = useRef(false);
@@ -63,7 +65,7 @@ export function CaptureScreen({ onClose, onAssessed }: Props) {
       .then((items) => {
         if (cancelled) return;
         setPlants(items);
-        const preselected = preselectedPlantId(items);
+        const preselected = preselectedPlantId(items, initialPlantId);
         setSelectedPlantId(preselected);
         // More than one plant: the FAB needs a target, so ask right away.
         if (!preselected && items.length > 1) setPickerOpen(true);
@@ -75,7 +77,7 @@ export function CaptureScreen({ onClose, onAssessed }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialPlantId]);
 
   const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
   const ready = selectedPlantId !== null && !busy;

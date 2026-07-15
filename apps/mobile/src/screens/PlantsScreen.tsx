@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -14,11 +15,13 @@ import { bandColor, healthBand } from "../lib/health";
 import { fetchPlants, type PlantListItem } from "../lib/plants";
 import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { PlantDetailScreen } from "./PlantDetailScreen";
 
 // Plants tab per the native design doc §3/§4: card rows with name, species
-// line and a health ring colored by the shared score bands. RLS scopes the
-// query to the signed-in user; pull-to-refresh re-runs it. The "Add plant"
-// button (header + empty state) opens the new-plant sheet.
+// line, latest-trend chip and a health ring colored by the shared score
+// bands. RLS scopes the query to the signed-in user; pull-to-refresh re-runs
+// it. Tapping a card opens the plant detail modal; the "Add plant" button
+// (header + empty state) opens the new-plant sheet.
 
 const GENERIC_LOAD_ERROR = "Could not load your plants. Pull to retry.";
 
@@ -28,6 +31,7 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -82,17 +86,33 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           ListEmptyComponent={
             error ? null : <EmptyState t={t} onAdd={() => setAdding(true)} />
           }
-          renderItem={({ item }) => <PlantCard item={item} t={t} scheme={scheme} />}
+          renderItem={({ item }) => (
+            <PlantCard item={item} t={t} scheme={scheme} onPress={() => setDetailId(item.id)} />
+          )}
         />
       )}
       <NewPlantSheet
         visible={adding}
         onClose={() => setAdding(false)}
-        onCreated={() => {
+        onSaved={() => {
           setAdding(false);
           load();
         }}
       />
+      {/* Plant detail over the tab (Modal pattern like the capture flow). */}
+      <Modal
+        visible={detailId !== null}
+        animationType="slide"
+        onRequestClose={() => setDetailId(null)}
+      >
+        {detailId ? (
+          <PlantDetailScreen
+            plantId={detailId}
+            onClose={() => setDetailId(null)}
+            onChanged={load}
+          />
+        ) : null}
+      </Modal>
     </View>
   );
 }
@@ -101,13 +121,20 @@ function PlantCard({
   item,
   t,
   scheme,
+  onPress,
 }: {
   item: PlantListItem;
   t: Tokens;
   scheme: "light" | "dark";
+  onPress: () => void;
 }) {
   return (
-    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${item.name}`}
+      onPress={onPress}
+      style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}
+    >
       <View style={styles.cardText}>
         <Text style={[styles.cardName, { color: t.text }]} numberOfLines={1}>
           {item.name}
@@ -117,8 +144,26 @@ function PlantCard({
             {item.subLabel}
           </Text>
         ) : null}
+        {item.trend ? <TrendChip trend={item.trend} t={t} scheme={scheme} /> : null}
       </View>
       <HealthRing score={item.latestScore} t={t} scheme={scheme} />
+    </Pressable>
+  );
+}
+
+/** "Better"/"Same"/"Worse"/"Unknown"/"First assessment" in the web badge colors. */
+function TrendChip({ trend, t, scheme }: { trend: string; t: Tokens; scheme: "light" | "dark" }) {
+  const color =
+    trend === "Better"
+      ? bandColor("good", scheme)
+      : trend === "Same"
+        ? bandColor("fair", scheme)
+        : trend === "Worse"
+          ? bandColor("poor", scheme)
+          : t.sub;
+  return (
+    <View style={[styles.trendChip, { backgroundColor: color + "22" }]}>
+      <Text style={[styles.trendChipText, { color }]}>{trend}</Text>
     </View>
   );
 }
@@ -208,9 +253,16 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS,
     padding: 16,
   },
-  cardText: { flex: 1, gap: 2 },
+  cardText: { flex: 1, gap: 2, alignItems: "flex-start" },
   cardName: { fontSize: 16, fontWeight: "600" },
   cardSub: { fontSize: 13 },
+  trendChip: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginTop: 3,
+  },
+  trendChipText: { fontSize: 11, fontWeight: "700" },
   ring: {
     width: 44,
     height: 44,
