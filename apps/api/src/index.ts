@@ -32,7 +32,12 @@ if (!process.env.VITEST) {
   // to a sibling process (e.g. the web dev server's harness) — binding it
   // here steals the web app's port.
   const port = Number(process.env.API_PORT ?? 3003);
-  serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
+  // vite-node --watch re-executes this module on file changes without closing
+  // the previous listener, which then EADDRINUSEs its own zombie. Close the
+  // prior server (stashed on globalThis) before binding again.
+  const g = globalThis as { __citrusApiServer?: { close: (cb?: () => void) => void } };
+  g.__citrusApiServer?.close();
+  g.__citrusApiServer = serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
     console.log(`[api] listening on http://localhost:${info.port}`);
   });
 }
