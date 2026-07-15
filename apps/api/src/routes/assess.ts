@@ -1,17 +1,13 @@
-import { NextResponse } from "next/server";
+import { Hono } from "hono";
 import { z } from "zod";
-import { createClient } from "@/app/_lib/supabase/server";
+import { getAuth } from "../auth";
 import {
   buildSystemPrompt,
   buildUserMessageText,
   assessPhotoWithGemini,
-} from "@/app/_lib/gemini";
-import { tryConsume } from "@/app/_lib/rate-limit";
+} from "../gemini";
+import { tryConsume } from "../rate-limit";
 import type { Assessment, Plant } from "@citrus/shared";
-
-
-export const runtime = "nodejs";
-export const maxDuration = 60;
 
 const ASSESS_LIMIT_PER_HOUR = 5;
 const ASSESS_WINDOW_SEC = 3600;
@@ -24,25 +20,24 @@ const assessBodySchema = z.object({
 
 type PreviousLite = Pick<Assessment, "id" | "health_score" | "diagnosis" | "created_at">;
 
-export async function POST(req: Request) {
-  const json = await req.json().catch(() => null);
+const assess = new Hono();
+
+assess.post("/", async (c) => {
+  const json = await c.req.json().catch(() => null);
   const parsed = assessBodySchema.safeParse(json);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+    return c.json({ error: "Invalid input" }, 400);
   }
   const { plantId, photoPath, isCutCare } = parsed.data;
 
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  const auth = await getAuth(c.req.raw);
+  if (!auth) {
+    return c.json({ error: "Not authenticated" }, 401);
   }
+  const { supabase, user } = auth;
 
   if (!photoPath.startsWith(user.id + "/")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return c.json({ error: "Forbidden" }, 403);
   }
 
   const rl = await tryConsume({
@@ -52,15 +47,13 @@ export async function POST(req: Request) {
     windowSec: ASSESS_WINDOW_SEC,
   });
   if (!rl.ok) {
-    return NextResponse.json(
+    return c.json(
       {
         error: "Too many assessments. Please try again later.",
         retryAfter: rl.retryAfterSec,
       },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rl.retryAfterSec) },
-      },
+      429,
+      { "Retry-After": String(rl.retryAfterSec) },
     );
   }
 
@@ -70,7 +63,7 @@ export async function POST(req: Request) {
     .eq("id", plantId)
     .maybeSingle();
   const plant = plantRow as Plant | null;
-  if (!plant) return NextResponse.json({ error: "Plant not found" }, { status: 404 });
+  if (!plant) return c.json({ error: "Plant not found" }, 404);
 
   const { data: prevRow } = await supabase
     .from("assessments")
@@ -85,7 +78,7 @@ export async function POST(req: Request) {
     .from("photos")
     .download(photoPath);
   if (dlErr || !blob) {
-    return NextResponse.json({ error: "Photo not found" }, { status: 404 });
+    return c.json({ error: "Photo not found" }, 404);
   }
   const buf = Buffer.from(await blob.arrayBuffer());
   const base64 = buf.toString("base64");
@@ -116,10 +109,10 @@ export async function POST(req: Request) {
     diagnosis = result.diagnosis;
     raw = result.raw;
   } catch (e) {
-    console.error("[/api/assess] Gemini assess failed:", (e as Error).message);
-    return NextResponse.json(
+    console.error("[/assess] Gemini assess failed:", (e as Error).message);
+    return c.json(
       { error: "AI returned an invalid response. Please try again." },
-      { status: 502 },
+      502,
     );
   }
 
@@ -142,11 +135,8 @@ export async function POST(req: Request) {
     .single();
 
   if (insertErr || !inserted) {
-    console.error("[/api/assess] Insert failed:", insertErr?.message);
-    return NextResponse.json(
-      { error: "Failed to save assessment." },
-      { status: 500 },
-    );
+    console.error("[/assess] Insert failed:", insertErr?.message);
+    return c.json({ error: "Failed to save assessment." }, 500);
   }
 
   // Best-effort: set this assessment as the plant's cover photo.
@@ -155,6 +145,7 @@ export async function POST(req: Request) {
     .update({ cover_assessment_id: inserted.id })
     .eq("id", plantId);
 
-  return NextResponse.json({ id: inserted.id });
-}
+  return c.json({ id: inserted.id });
+});
 
+export default assess;

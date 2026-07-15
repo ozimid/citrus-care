@@ -1,0 +1,23 @@
+# fly.toml for the Citrus Care API service (Hono).
+# NOTE: deployment is prepared but NOT wired up yet. When deploying, run from
+# the repo root so the Docker build context includes the npm workspaces:
+#   fly deploy --config apps/api/fly.toml --dockerfile apps/api/Dockerfile
+# Required secrets: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+# SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY, CLEANUP_SECRET.
+# The web app must be built/deployed with API_ORIGIN pointing at this app.
+
+app = "citrus-care-api"
+primary_region = "lax"
+
+[http_service]
+  internal_port = 3003
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[vm]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

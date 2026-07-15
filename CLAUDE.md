@@ -5,7 +5,7 @@ Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flas
 
 ## Tech Stack
 - **Frontend:** Next.js 16 (App Router), React 19, Tailwind CSS 4, shadcn/ui (`@base-ui/react` primitives)
-- **Backend:** Next.js Route Handlers + Server Actions
+- **Backend:** standalone Hono service (`apps/api`) for the AI/photo pipeline + Next.js Server Actions for form mutations
 - **AI:** Google Gemini API (`@google/genai`, model `gemini-2.5-flash`, structured output via `responseSchema`)
 - **Database:** Supabase (Postgres + Auth + Storage + RLS on every user-visible table)
 - **Auth:** Google OAuth via Supabase (server routes `app/auth/google`, `app/auth/callback`)
@@ -14,7 +14,8 @@ Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flas
 - **Deploy:** Fly.io (`fly.toml` in repo root)
 
 ## Repo structure (monorepo — strict separation, decision D-12)
-- `apps/web/` — Next.js app: frontend AND its backend-for-frontend (route handlers, server actions, `app/_lib`) — colocated by framework design
+- `apps/web/` — Next.js frontend (pages, server components, form server-actions; `/api/assess` proxies to apps/api via rewrites)
+- `apps/api/` — standalone Hono backend service (D-13): AI/photo pipeline (`/assess`, `/cleanup-orphans`), serves web (cookie auth via rewrite) AND mobile (Bearer auth). Dev port 3003
 - `apps/mobile/` — Expo/React Native app (D-11). **Not an npm workspace** — own `npm install` inside the folder (React version isolation)
 - `packages/shared/` — types + Zod schemas shared web ↔ mobile (`@citrus/shared`)
 - `supabase/` — database: migrations, RLS, storage config
@@ -22,7 +23,7 @@ Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flas
 
 ## Commands (run from repo root — proxies to apps/web)
 ```bash
-npm run dev               # Next dev (port 3002)
+npm run dev               # web (3002) + api (3003) via concurrently
 npm run build             # Production build — note: build script does `unset NODE_ENV` before next build
 npm run lint              # ESLint
 npm test                  # Vitest (run mode)
@@ -35,10 +36,11 @@ npm run typecheck         # tsc --noEmit
 - `@citrus/shared` → `packages/shared/src`
 
 ## Key Files
-- `apps/web/app/_lib/gemini.ts` — Gemini vision call + citrus expert prompt + Zod + responseSchema
-- `apps/web/app/_lib/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
+- `apps/api/src/gemini.ts` — Gemini vision call + expert prompt (Zod schema in `packages/shared`)
+- `apps/api/src/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
 - `apps/web/app/_lib/supabase/{client,server,middleware}.ts` — Supabase clients
-- `apps/web/app/api/assess/route.ts` — main AI endpoint (auth · ownership · rate limit · download · Gemini · parse · insert)
+- `apps/api/src/routes/assess.ts` — main AI endpoint (auth · ownership · rate limit · download · Gemini · parse · insert)
+- `apps/api/src/auth.ts` — Bearer-or-cookie auth → RLS-scoped Supabase client
 - `apps/web/app/auth/{google,callback}/route.ts` — Google OAuth
 - `apps/web/components/AuthPanel.tsx` — sign-in UI
 - `apps/web/app/plants/...` — plant list / new / detail / assess / single-assessment pages

@@ -23,6 +23,17 @@ const nextConfig: NextConfig = {
     ...lanDevOrigins(),
     ...lanDevOrigins().map((ip) => `${ip}:3002`),
   ],
+  // The AI/photo pipeline lives in the standalone API service (apps/api).
+  // Same-origin fetches from the web client proxy through these rewrites so
+  // Supabase auth cookies flow along; the mobile app calls the API directly
+  // with Bearer auth. API_ORIGIN is read at build time (set it when deploying).
+  async rewrites() {
+    const apiOrigin = process.env.API_ORIGIN ?? "http://localhost:3003";
+    return [
+      { source: "/api/assess", destination: `${apiOrigin}/assess` },
+      { source: "/api/cleanup-orphans", destination: `${apiOrigin}/cleanup-orphans` },
+    ];
+  },
 };
 
 export default nextConfig;

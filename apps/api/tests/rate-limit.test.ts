@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { tryConsume } from "@/app/_lib/rate-limit";
+import { tryConsume } from "../src/rate-limit";
 
 function rpcReturning(row: object | null, error: { message: string } | null = null) {
   const rpc = vi.fn().mockResolvedValue({ data: row ? [row] : null, error });

@@ -3,13 +3,20 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const createClientMock = vi.fn();
 const assessPhotoWithGeminiMock = vi.fn();
 
-vi.mock("@/app/_lib/supabase/server", () => ({
-  createClient: () => createClientMock(),
+vi.mock("../src/auth", () => ({
+  getAuth: async () => {
+    const supabase = await createClientMock();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    return { supabase, user };
+  },
 }));
 
-vi.mock("@/app/_lib/gemini", async () => {
-  const real = await vi.importActual<typeof import("@/app/_lib/gemini")>(
-    "@/app/_lib/gemini",
+vi.mock("../src/gemini", async () => {
+  const real = await vi.importActual<typeof import("../src/gemini")>(
+    "../src/gemini",
   );
   return {
     ...real,
@@ -17,7 +24,7 @@ vi.mock("@/app/_lib/gemini", async () => {
   };
 });
 
-import { POST } from "@/app/api/assess/route";
+import app from "../src/index";
 
 function buildSupabaseStub(opts: {
   user?: { id: string } | null;
@@ -92,7 +99,7 @@ function buildSupabaseStub(opts: {
 }
 
 function req(body: object) {
-  return new Request("http://localhost/api/assess", {
+  return new Request("http://localhost/assess", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -109,18 +116,18 @@ beforeEach(() => {
   assessPhotoWithGeminiMock.mockReset();
 });
 
-describe("POST /api/assess", () => {
+describe("POST /assess", () => {
   it("returns 401 when not authenticated", async () => {
     createClientMock.mockResolvedValue(
       buildSupabaseStub({ user: null, plant: { id: "t1", user_id: "u1" } }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(401);
   });
 
   it("returns 400 on invalid input", async () => {
     createClientMock.mockResolvedValue(buildSupabaseStub({}));
-    const res = await POST(req({ plantId: "" }));
+    const res = await app.request(req({ plantId: "" }));
     expect(res.status).toBe(400);
   });
 
@@ -128,7 +135,7 @@ describe("POST /api/assess", () => {
     createClientMock.mockResolvedValue(
       buildSupabaseStub({ user: { id: "u1" }, plant: null }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(404);
   });
 
@@ -153,9 +160,9 @@ describe("POST /api/assess", () => {
         insertedId: "assess-1",
       }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
     expect(body.id).toBe("assess-1");
     expect(assessPhotoWithGeminiMock).toHaveBeenCalledOnce();
   });
@@ -258,7 +265,7 @@ describe("POST /api/assess", () => {
       },
     });
 
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(200);
     expect(insertSpy).toHaveBeenCalledOnce();
     const row = insertSpy.mock.calls[0][0];
@@ -275,7 +282,7 @@ describe("POST /api/assess", () => {
         plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
       }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "OTHER-USER/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "OTHER-USER/t1/x.jpg" }));
     expect(res.status).toBe(403);
     expect(assessPhotoWithGeminiMock).not.toHaveBeenCalled();
   });
@@ -290,9 +297,9 @@ describe("POST /api/assess", () => {
         plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
       }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(502);
-    const body = await res.json();
+    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
     expect(body.error).not.toContain("API key");
     expect(body.error).not.toContain("abc123");
     expect(body.error).not.toContain("gen-lang");
@@ -316,9 +323,9 @@ describe("POST /api/assess", () => {
         insertError: { message: "duplicate key value violates unique constraint pk_assessments — table: public.assessments" },
       }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(500);
-    const body = await res.json();
+    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
     expect(body.error).not.toContain("duplicate key");
     expect(body.error).not.toContain("public.assessments");
   });
@@ -331,10 +338,10 @@ describe("POST /api/assess", () => {
         rateLimit: { count: 6, allowed: false, retry_after_sec: 1234 },
       }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("1234");
-    const body = await res.json();
+    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
     expect(body.retryAfter).toBe(1234);
     expect(assessPhotoWithGeminiMock).not.toHaveBeenCalled();
   });
@@ -348,7 +355,7 @@ describe("POST /api/assess", () => {
         insertedId: "a",
       }),
     );
-    const res = await POST(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
     expect(res.status).toBe(502);
   });
 });

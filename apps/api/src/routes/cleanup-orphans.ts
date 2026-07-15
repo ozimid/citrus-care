@@ -1,22 +1,23 @@
-import { NextResponse } from "next/server";
+import { Hono } from "hono";
 import { createClient } from "@supabase/supabase-js";
 
-export const dynamic = "force-dynamic";
+const cleanupOrphans = new Hono();
 
-export async function POST(req: Request) {
-  const authHeader = req.headers.get("Authorization");
+cleanupOrphans.post("/", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? null;
   const secret = process.env.CLEANUP_SECRET;
 
   if (!secret || authHeader !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseUrl =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
     console.error("[cleanup-orphans] Missing service role keys");
-    return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
+    return c.json({ error: "Server configuration error" }, 500);
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
 
   if (dbErr) {
     console.error("[cleanup-orphans] Failed to fetch assessments:", dbErr.message);
-    return NextResponse.json({ error: "Database error" }, { status: 500 });
+    return c.json({ error: "Database error" }, 500);
   }
 
   const activePaths = new Set((assessments ?? []).map((a) => a.photo_path));
@@ -101,9 +102,11 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json({ deleted: deletedCount });
+    return c.json({ deleted: deletedCount });
   } catch (error) {
     console.error("[cleanup-orphans] Execution failed:", (error as Error).message);
-    return NextResponse.json({ error: "Cleanup failed" }, { status: 500 });
+    return c.json({ error: "Cleanup failed" }, 500);
   }
-}
+});
+
+export default cleanupOrphans;

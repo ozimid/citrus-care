@@ -6,7 +6,7 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: () => createClientMock(),
 }));
 
-import { POST } from "@/app/api/cleanup-orphans/route";
+import app from "../src/index";
 
 interface StorageFileStub {
   name: string;
@@ -46,7 +46,7 @@ function buildSupabaseStub(opts: {
 }
 
 function req(headers: Record<string, string>) {
-  return new Request("http://localhost/api/cleanup-orphans", {
+  return new Request("http://localhost/cleanup-orphans", {
     method: "POST",
     headers,
   });
@@ -59,16 +59,16 @@ beforeEach(() => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
 });
 
-describe("POST /api/cleanup-orphans", () => {
+describe("POST /cleanup-orphans", () => {
   it("returns 401 when Authorization header is invalid", async () => {
-    const res = await POST(req({ Authorization: "Bearer wrong" }));
+    const res = await app.request(req({ Authorization: "Bearer wrong" }));
     expect(res.status).toBe(401);
   });
 
   it("lists, checks age/active status, and removes orphans successfully", async () => {
     const removeSpy = vi.fn().mockResolvedValue({ error: null });
     const now = new Date();
-    
+
     const oneDayAgo = new Date(now.getTime() - 25 * 60 * 60 * 1000);
     const oneHourAgo = new Date(now.getTime() - 1 * 60 * 60 * 1000);
 
@@ -87,10 +87,10 @@ describe("POST /api/cleanup-orphans", () => {
     });
     createClientMock.mockReturnValue(client);
 
-    const res = await POST(req({ Authorization: "Bearer test-secret" }));
+    const res = await app.request(req({ Authorization: "Bearer test-secret" }));
     expect(res.status).toBe(200);
-    
-    const body = await res.json();
+
+    const body = (await res.json()) as { deleted?: number };
     expect(body.deleted).toBe(1);
     expect(removeSpy).toHaveBeenCalledWith(["user1/plant1/delete-old-orphan.jpg"]);
   });

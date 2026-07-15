@@ -1,0 +1,28 @@
+{
+  "name": "@citrus/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite-node --watch src/index.ts",
+    "start": "vite-node src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@citrus/shared": "*",
+    "@google/genai": "^2.8.0",
+    "@hono/node-server": "^1.14.0",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.2",
+    "hono": "^4.7.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.19.0",
+    "typescript": "^5",
+    "vite-node": "^6.0.0",
+    "vitest": "^4.1.9"
+  }
+}

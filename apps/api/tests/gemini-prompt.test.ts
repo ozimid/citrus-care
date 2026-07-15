@@ -3,8 +3,8 @@ import {
   buildSystemPrompt,
   buildUserMessageText,
   parseAssessment,
-  assessmentDiagnosisSchema,
-} from "@/app/_lib/gemini";
+} from "../src/gemini";
+import { assessmentDiagnosisSchema } from "@citrus/shared";
 import type { Assessment } from "@citrus/shared";
 
 describe("buildSystemPrompt", () => {
