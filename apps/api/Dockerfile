@@ -31,7 +31,7 @@ COPY apps/api ./apps/api
 USER hono
 
 EXPOSE 3003
-ENV PORT=3003
+ENV API_PORT=3003
 
 # vite-node runs the TypeScript sources directly (same resolution as vitest).
 CMD ["npm", "run", "start", "-w", "apps/api"]

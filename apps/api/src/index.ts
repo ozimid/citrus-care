@@ -26,7 +26,10 @@ export default app;
 
 // Vitest exercises the app via app.request(); only bind a port outside tests.
 if (!process.env.VITEST) {
-  const port = Number(process.env.PORT ?? 3003);
+  // API_PORT (namespaced) wins: a bare PORT in the environment often belongs
+  // to a sibling process (e.g. the web dev server's harness) — binding it
+  // here steals the web app's port.
+  const port = Number(process.env.API_PORT ?? 3003);
   serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
     console.log(`[api] listening on http://localhost:${info.port}`);
   });
