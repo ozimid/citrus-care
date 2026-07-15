@@ -63,6 +63,10 @@ Use the installed Claude Code skills instead of improvising the equivalent step 
 | Locking an architecture decision | `domain-modeling` (then record it in Obsidian Architecture §"Locked decisions") |
 | A task that smells repeatable | `loopy` — check the Loop Library before inventing a workflow |
 
+Two rules from the Vibe Coding template that apply to ALL builds, including subagent-delegated ones:
+- **Test-first, even in subagents.** Delegated implementation prompts must require a failing test before the implementation (red → green), not tests written alongside.
+- **E2e runs are demo evidence.** Playwright records video on every run (`video: "on"`); recordings land in `apps/web/test-results/` (gitignored) — reference them when demoing a feature.
+
 ## Required reads before any code change
 1. Obsidian PRD **§0** — `.../Citrus Care/Citrus Care PRD v1.md` — current focus, next steps, feature status. **Read first.**
 2. Obsidian Architecture — only if touching auth, RLS, storage, or pipeline boundaries.

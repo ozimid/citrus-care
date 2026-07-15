@@ -9,7 +9,8 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:3002",
     trace: "on-first-retry",
-    video: "retain-on-failure",
+    // Vibe Coding template §7: e2e runs double as demo recordings.
+    video: "on",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
