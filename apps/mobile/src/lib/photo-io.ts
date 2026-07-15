@@ -4,7 +4,7 @@
 // bundling, the math via photo.test.ts.
 
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
-import { JPEG_QUALITY, resizeActionsFor, type PhotoSize } from "./photo";
+import { JPEG_QUALITY, MAX_DIMENSION, resizeActionsFor, type PhotoSize } from "./photo";
 
 export interface PreparedPhoto {
   uri: string;
@@ -12,13 +12,19 @@ export interface PreparedPhoto {
   height: number;
 }
 
-/** Downscale to max 1600px on the long side and re-encode as JPEG q0.85 —
- * exactly what the web uploader produces (apps/web/app/_lib/image-utils.ts),
- * so the assess pipeline sees identical input from both clients. Photos
- * already within bounds are still re-encoded to JPEG (normalizes HEIC). */
-export async function downscalePhoto(uri: string, size: PhotoSize): Promise<PreparedPhoto> {
+/** Downscale to max 1600px on the long side (default) and re-encode as JPEG
+ * q0.85 — exactly what the web uploader produces
+ * (apps/web/app/_lib/image-utils.ts), so the assess pipeline sees identical
+ * input from both clients. Photos already within bounds are still re-encoded
+ * to JPEG (normalizes HEIC). The D-15 spike passes SPIKE_MAX_DIMENSION (512)
+ * instead — on-device inference needs a much smaller input. */
+export async function downscalePhoto(
+  uri: string,
+  size: PhotoSize,
+  maxDimension: number = MAX_DIMENSION,
+): Promise<PreparedPhoto> {
   const context = ImageManipulator.manipulate(uri);
-  for (const action of resizeActionsFor(size)) {
+  for (const action of resizeActionsFor(size, maxDimension)) {
     context.resize(action.resize);
   }
   const image = await context.renderAsync();

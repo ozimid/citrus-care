@@ -1,6 +1,6 @@
 import * as Application from "expo-application";
-import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { apiOrigin } from "../lib/api-io";
 import { signOut } from "../lib/auth";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
@@ -12,10 +12,18 @@ import { RADIUS, useTheme } from "../lib/theme";
 // (app version + resolved API origin, for debuggability), sign out. Units and
 // storage & privacy land with later features.
 
+// Lazily loaded on purpose: importing VlmSpikeScreen installs the
+// react-native-executorch native runtime, which only exists in dev builds —
+// a static import would crash the whole app in Expo Go at startup.
+const VlmSpikeScreen = lazy(() =>
+  import("./VlmSpikeScreen").then((m) => ({ default: m.VlmSpikeScreen })),
+);
+
 export function ProfileScreen({ email }: { email: string | null }) {
   const { t } = useTheme();
   const [busy, setBusy] = useState(false);
   const [reminders, setReminders] = useState<ReminderListItem[] | null>(null);
+  const [spikeOpen, setSpikeOpen] = useState(false);
 
   const loadReminders = useCallback(async () => {
     try {
@@ -89,7 +97,31 @@ export function ProfileScreen({ email }: { email: string | null }) {
             {apiOrigin}
           </Text>
         </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open the on-device model spike"
+          onPress={() => setSpikeOpen(true)}
+          hitSlop={8}
+        >
+          <Text style={[styles.devRow, { color: t.green }]}>Developer: on-device model spike</Text>
+        </Pressable>
       </View>
+
+      {/* D-15 Stage 1 spike, hidden behind the row above. Mounted only while
+          open so the lazy executorch import never runs in normal use. */}
+      {spikeOpen && (
+        <Modal visible animationType="slide" onRequestClose={() => setSpikeOpen(false)}>
+          <Suspense
+            fallback={
+              <View style={[styles.spikeFallback, { backgroundColor: t.canvas }]}>
+                <ActivityIndicator color={t.green} />
+              </View>
+            }
+          >
+            <VlmSpikeScreen onClose={() => setSpikeOpen(false)} />
+          </Suspense>
+        </Modal>
+      )}
 
       <Pressable
         accessibilityRole="button"
@@ -146,6 +178,8 @@ const styles = StyleSheet.create({
   },
   aboutKey: { fontSize: 13 },
   aboutValue: { fontSize: 13, fontWeight: "500", flexShrink: 1 },
+  devRow: { fontSize: 13, fontWeight: "600", paddingVertical: 6 },
+  spikeFallback: { flex: 1, alignItems: "center", justifyContent: "center" },
   signOut: {
     borderWidth: 1,
     borderRadius: RADIUS,

@@ -48,7 +48,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "onDemandFilesystem": false

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   JPEG_QUALITY,
   MAX_DIMENSION,
+  SPIKE_MAX_DIMENSION,
   needsDownscale,
   resizeActionsFor,
   targetSize,
@@ -58,5 +59,40 @@ describe("resizeActionsFor", () => {
 
   it("returns no actions when the photo is already small enough", () => {
     expect(resizeActionsFor({ width: 1200, height: 1600 })).toEqual([]);
+  });
+});
+
+describe("spike 512px target (D-15 on-device input discipline)", () => {
+  it("SPIKE_MAX_DIMENSION is 512 per the research doc latency rule", () => {
+    expect(SPIKE_MAX_DIMENSION).toBe(512);
+  });
+
+  it("targetSize honors a custom max dimension", () => {
+    expect(targetSize({ width: 1600, height: 1200 }, SPIKE_MAX_DIMENSION)).toEqual({
+      width: 512,
+      height: 384,
+    });
+    expect(targetSize({ width: 400, height: 300 }, SPIKE_MAX_DIMENSION)).toEqual({
+      width: 400,
+      height: 300,
+    });
+  });
+
+  it("needsDownscale honors a custom max dimension", () => {
+    expect(needsDownscale({ width: 513, height: 300 }, SPIKE_MAX_DIMENSION)).toBe(true);
+    expect(needsDownscale({ width: 512, height: 512 }, SPIKE_MAX_DIMENSION)).toBe(false);
+  });
+
+  it("resizeActionsFor emits 512-target actions for the long side", () => {
+    expect(resizeActionsFor({ width: 4000, height: 3000 }, SPIKE_MAX_DIMENSION)).toEqual([
+      { resize: { width: 512 } },
+    ]);
+    expect(resizeActionsFor({ width: 3000, height: 4000 }, SPIKE_MAX_DIMENSION)).toEqual([
+      { resize: { height: 512 } },
+    ]);
+  });
+
+  it("keeps 1600 as the default so the assess pipeline path is untouched", () => {
+    expect(targetSize({ width: 3200, height: 2400 })).toEqual({ width: 1600, height: 1200 });
   });
 });
