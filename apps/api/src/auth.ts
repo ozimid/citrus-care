@@ -59,8 +59,8 @@ export async function getAuth(req: Request): Promise<AuthContext | null> {
         }));
       },
       setAll() {
-        // No-op: the API never sets auth cookies. Session refresh is owned by
-        // the web app's proxy (apps/web/proxy.ts) before requests reach us.
+        // No-op: the API never sets auth cookies (mobile refreshes via supabase-js;
+        // the web surface is a static landing since D-16 and sends no cookies).
       },
     },
   });

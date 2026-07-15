@@ -49,7 +49,8 @@ export interface Assessment {
   id: UUID;
   plant_id: UUID;
   user_id: UUID;
-  photo_path: string;
+  /** Legacy bucket path. Null since D-16 — photos live only on the phone. */
+  photo_path: string | null;
   created_at: string;
   health_score: number;
   symptoms: Symptom[];

@@ -1,6 +1,6 @@
 import { networkInterfaces } from "node:os";
 
-/** LAN origins for Supabase redirect URL hints (dev only). */
+/** LAN origins this dev server is reachable at (dev-only phone testing). */
 export function getDevLanOrigins(): string[] {
   const origins: string[] = [];
   for (const iface of Object.values(networkInterfaces())) {
@@ -11,16 +11,4 @@ export function getDevLanOrigins(): string[] {
     }
   }
   return origins;
-}
-
-export function getDevRedirectUrlHints(): string[] {
-  const hints = new Set<string>([
-    "http://localhost:3002/**",
-    "http://localhost:3002/auth/callback",
-  ]);
-  for (const origin of getDevLanOrigins()) {
-    hints.add(`${origin}/**`);
-    hints.add(`${origin}/auth/callback`);
-  }
-  return [...hints];
 }

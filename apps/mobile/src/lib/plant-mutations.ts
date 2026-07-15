@@ -1,11 +1,10 @@
 // Edit + delete plant flows. Pure/tested: update payload building, the
-// delete sequencing (best-effort photo cleanup via apps/api, then the RLS-
-// scoped row delete), and generic error mapping. Mirrors the web server
-// actions in apps/web/app/plants/actions.ts (updatePlant / deletePlant).
+// delete sequencing (best-effort local photo cleanup, then the RLS-scoped
+// row delete), and generic error mapping. D-16: photos live only on the
+// phone, so plant delete clears the local photo store — no API photo call.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NewPlantInput } from "@citrus/shared";
-import type { AuthorizedFetch } from "./api";
 
 export const GENERIC_UPDATE_PLANT_ERROR = "Could not save the changes. Please try again.";
 export const GENERIC_DELETE_PLANT_ERROR = "Could not delete the plant. Please try again.";
@@ -35,37 +34,23 @@ export async function updatePlant(
   }
 }
 
-/** The storage prefix apps/api's DELETE /photos ownership check expects. */
-export function photoPrefix(userId: string, plantId: string): string {
-  return `${userId}/${plantId}/`;
-}
-
 export interface DeletePlantDeps {
   client: SupabaseClient;
-  /** Bearer-authenticated fetch to apps/api (api.ts / api-io.ts). */
-  api: AuthorizedFetch;
+  /** Removes the plant's on-phone photos + index entries
+   * (photo-store-io deleteLocalPlantPhotos). */
+  deleteLocalPhotos: (plantId: string) => Promise<void>;
 }
 
-/** Photo cleanup first (best-effort — never blocks the delete, web parity),
+/** Local photo cleanup first (best-effort — never blocks the delete),
  * then the plants row; assessments cascade server-side. */
 export async function deletePlantWithPhotos(
   deps: DeletePlantDeps,
   plantId: string,
 ): Promise<void> {
-  const {
-    data: { user },
-  } = await deps.client.auth.getUser();
-  if (!user) {
-    console.error("[deletePlantWithPhotos] no authenticated user");
-    throw new Error(GENERIC_DELETE_PLANT_ERROR);
-  }
-
   try {
-    await deps.api(`/photos?prefix=${encodeURIComponent(photoPrefix(user.id, plantId))}`, {
-      method: "DELETE",
-    });
+    await deps.deleteLocalPhotos(plantId);
   } catch (e) {
-    console.error("[deletePlantWithPhotos] photo cleanup failed:", (e as Error).message);
+    console.error("[deletePlantWithPhotos] local photo cleanup failed:", (e as Error).message);
   }
 
   const { error } = await deps.client.from("plants").delete().eq("id", plantId);

@@ -1,10 +1,12 @@
 // Plant detail data: the plant row (incl. zip_code for the quarantine check)
 // plus the full assessment timeline, mapped into render-ready entries. Pure
-// mapping half is tested (plant-detail.test.ts); the queries are thin and kept
-// in sync with the web detail page (apps/web/app/plants/[id]/page.tsx).
+// mapping half is tested (plant-detail.test.ts); the queries are thin.
+// Photos are local-only (D-16): entries join to on-phone uris through the
+// photo-store index; entries without a local photo render a placeholder.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assessmentDiagnosisSchema, type AssessmentDiagnosis, type Plant } from "@citrus/shared";
+import { photoForAssessment, type PhotoIndex } from "./photo-store";
 
 export const PLANT_DETAIL_LOAD_ERROR = "Could not load this plant.";
 
@@ -16,15 +18,14 @@ export type PlantDetailRow = Pick<
 export const PLANT_DETAIL_SELECT =
   "id,name,plant_type,species,cultivar,location,zip_code,created_at";
 
-/** Timeline columns, mirroring the web detail page's TimelineRow plus
- * is_cut_care so tapping a row can restore the assessment's capture mode. */
-export const TIMELINE_SELECT = "id,created_at,health_score,photo_path,diagnosis,is_cut_care";
+/** Timeline columns; photo_path is gone (D-16 — photos never reach the
+ * server), is_cut_care lets a row tap restore the assessment's capture mode. */
+export const TIMELINE_SELECT = "id,created_at,health_score,diagnosis,is_cut_care";
 
 export interface TimelineRow {
   id: string;
   created_at: string;
   health_score: number;
-  photo_path: string;
   /** jsonb straight from Postgres — untrusted until Zod-parsed. */
   diagnosis: unknown;
   is_cut_care: boolean | null;
@@ -42,7 +43,9 @@ export interface TimelineEntry {
    * earliest assessment (nothing prior to compare against). */
   deltaLabel: string | null;
   summary: string;
-  photoPath: string;
+  /** On-phone photo uri from the local index; null (placeholder) when this
+   * device has no photo for the assessment (old rows, other devices). */
+  localUri: string | null;
   isCutCare: boolean;
   /** Raw jsonb, parsed on tap via parseTimelineDiagnosis. */
   diagnosis: unknown;
@@ -93,11 +96,20 @@ export function mapTimelineRows(rows: TimelineRow[] | null | undefined): Timelin
       delta,
       deltaLabel: delta ? capitalize(delta) : isEarliest ? "First" : null,
       summary: summaryOf(row.diagnosis),
-      photoPath: row.photo_path,
+      localUri: null,
       isCutCare: row.is_cut_care === true,
       diagnosis: row.diagnosis,
     };
   });
+}
+
+/** Join timeline entries to their on-phone photos via the photo-store index.
+ * Entries with no local photo keep localUri null — placeholder, never an error. */
+export function attachLocalPhotos(entries: TimelineEntry[], index: PhotoIndex): TimelineEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    localUri: photoForAssessment(index, entry.id)?.localUri ?? null,
+  }));
 }
 
 /** Header trend chip: the latest delta, or "First assessment" for a plant
@@ -109,18 +121,14 @@ export function trendChipLabel(entries: TimelineEntry[]): string | null {
   return entries.length === 1 ? "First assessment" : null;
 }
 
-/** Oldest vs latest photo for the before/after slider; null under 2 assessments. */
+/** Oldest vs latest LOCALLY AVAILABLE photo for the before/after slider;
+ * null when fewer than two entries have an on-phone photo. */
 export function sliderPair(
   entries: TimelineEntry[],
 ): { before: TimelineEntry; after: TimelineEntry } | null {
-  if (entries.length < 2) return null;
-  return { before: entries[entries.length - 1], after: entries[0] };
-}
-
-/** Authorized read-proxy URL (apps/api GET /photos): the Image request carries
- * the Bearer token and the API 302s to a short-lived signed URL. */
-export function photoUri(apiOrigin: string, photoPath: string): string {
-  return `${apiOrigin}/photos?path=${encodeURIComponent(photoPath)}`;
+  const withPhotos = entries.filter((entry) => entry.localUri !== null);
+  if (withPhotos.length < 2) return null;
+  return { before: withPhotos[withPhotos.length - 1], after: withPhotos[0] };
 }
 
 /** Zod-parse a timeline row's stored diagnosis before opening DiagnosisScreen

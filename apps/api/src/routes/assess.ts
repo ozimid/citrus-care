@@ -7,17 +7,28 @@ import {
   assessPhotoWithGemini,
 } from "../gemini";
 import { tryConsume } from "../rate-limit";
-import { getStorage } from "../storage";
 import type { Assessment, Plant } from "@citrus/shared";
 
 const ASSESS_LIMIT_PER_HOUR = 5;
 const ASSESS_WINDOW_SEC = 3600;
 
+// D-16: photos live only on the phone. The escalation request carries the
+// downscaled JPEG directly; nothing is written to any storage bucket and
+// assessments persist with photo_path null.
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+
 const assessBodySchema = z.object({
   plantId: z.string().min(1),
-  photoPath: z.string().min(3),
+  imageBase64: z.string().min(1),
+  mime: z.literal("image/jpeg"),
   isCutCare: z.boolean().optional(),
 });
+
+/** Decoded byte size of a base64 string, without decoding it. */
+export function base64DecodedBytes(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
 
 type PreviousLite = Pick<Assessment, "id" | "health_score" | "diagnosis" | "created_at">;
 
@@ -29,17 +40,17 @@ assess.post("/", async (c) => {
   if (!parsed.success) {
     return c.json({ error: "Invalid input" }, 400);
   }
-  const { plantId, photoPath, isCutCare } = parsed.data;
+  const { plantId, imageBase64, mime, isCutCare } = parsed.data;
+
+  if (base64DecodedBytes(imageBase64) > MAX_IMAGE_BYTES) {
+    return c.json({ error: "Image too large. Please retry." }, 400);
+  }
 
   const auth = await getAuth(c.req.raw);
   if (!auth) {
     return c.json({ error: "Not authenticated" }, 401);
   }
   const { supabase, user } = auth;
-
-  if (!photoPath.startsWith(user.id + "/")) {
-    return c.json({ error: "Forbidden" }, 403);
-  }
 
   const rl = await tryConsume({
     supabase,
@@ -58,6 +69,8 @@ assess.post("/", async (c) => {
     );
   }
 
+  // RLS-filtered read doubles as the ownership check: another user's plant is
+  // invisible to this client, so the row comes back null.
   const { data: plantRow } = await supabase
     .from("plants")
     .select("id,user_id,name,plant_type,species,cultivar,location,zip_code,cover_assessment_id,created_at")
@@ -74,15 +87,6 @@ assess.post("/", async (c) => {
     .limit(1)
     .maybeSingle();
   const previous = prevRow as PreviousLite | null;
-
-  let buf: Buffer;
-  try {
-    buf = await getStorage().download(photoPath);
-  } catch (e) {
-    console.error("[/assess] photo download failed:", (e as Error).message);
-    return c.json({ error: "Photo not found" }, 404);
-  }
-  const base64 = buf.toString("base64");
 
   const systemPrompt = buildSystemPrompt(isCutCare);
   const userText = buildUserMessageText({
@@ -104,8 +108,8 @@ assess.post("/", async (c) => {
     const result = await assessPhotoWithGemini({
       systemPrompt,
       userText,
-      imageBase64: base64,
-      imageMediaType: "image/jpeg",
+      imageBase64,
+      imageMediaType: mime,
     });
     diagnosis = result.diagnosis;
     raw = result.raw;
@@ -122,7 +126,7 @@ assess.post("/", async (c) => {
     .insert({
       plant_id: plantId,
       user_id: user.id,
-      photo_path: photoPath,
+      photo_path: null,
       health_score: diagnosis.health_score,
       symptoms: diagnosis.symptoms,
       diagnosis,

@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NewPlantInput } from "@citrus/shared";
-import type { AuthorizedFetch } from "./api";
 import {
   buildPlantUpdateRow,
   deletePlantWithPhotos,
   GENERIC_DELETE_PLANT_ERROR,
   GENERIC_UPDATE_PLANT_ERROR,
-  photoPrefix,
   updatePlant,
 } from "./plant-mutations";
 
@@ -21,7 +19,7 @@ const input: NewPlantInput = {
 };
 
 describe("buildPlantUpdateRow", () => {
-  it("mirrors the web updatePlant field mapping (nulls for absent optionals, no user_id)", () => {
+  it("mirrors the historical web updatePlant field mapping (nulls for absent optionals, no user_id)", () => {
     expect(buildPlantUpdateRow(input)).toEqual({
       name: "Mr Lemon",
       plant_type: "tree",
@@ -86,12 +84,9 @@ describe("updatePlant", () => {
 
 function fakeDeleteClient(
   order: string[],
-  opts: { user: { id: string } | null; deleteError?: { message: string } | null },
+  opts: { deleteError?: { message: string } | null } = {},
 ): SupabaseClient {
   return {
-    auth: {
-      getUser: async () => ({ data: { user: opts.user } }),
-    },
     from(_table: string) {
       return {
         delete() {
@@ -107,40 +102,35 @@ function fakeDeleteClient(
   } as unknown as SupabaseClient;
 }
 
-function fakeApi(order: string[], paths: string[], fail = false): AuthorizedFetch {
-  return async (path, init) => {
-    order.push("photos-delete");
-    paths.push(`${init?.method ?? "GET"} ${path}`);
-    if (fail) throw new Error("network down");
-    return { ok: true, status: 200, json: async () => ({}) };
+function fakeLocalCleanup(order: string[], plants: string[], fail = false) {
+  return async (plantId: string) => {
+    order.push("local-photos-delete");
+    plants.push(plantId);
+    if (fail) throw new Error("filesystem error: /data/user/0/...");
   };
 }
 
-describe("photoPrefix", () => {
-  it("is the user-scoped storage prefix the API ownership check expects", () => {
-    expect(photoPrefix("u-1", "p-1")).toBe("u-1/p-1/");
-  });
-});
-
+// D-16: plant delete removes the phone-local photos (photo-store) and the
+// plants row. No API photo call — the /photos route no longer exists.
 describe("deletePlantWithPhotos", () => {
-  it("deletes photos (best-effort) before the plants row, with the encoded prefix", async () => {
+  it("deletes local photos (best-effort) before the plants row", async () => {
     const order: string[] = [];
-    const paths: string[] = [];
+    const plants: string[] = [];
     await deletePlantWithPhotos(
-      { client: fakeDeleteClient(order, { user: { id: "u-1" } }), api: fakeApi(order, paths) },
+      { client: fakeDeleteClient(order), deleteLocalPhotos: fakeLocalCleanup(order, plants) },
       "p-1",
     );
-    expect(order).toEqual(["photos-delete", "row-delete"]);
-    expect(paths).toEqual([`DELETE /photos?prefix=${encodeURIComponent("u-1/p-1/")}`]);
+    expect(order).toEqual(["local-photos-delete", "row-delete"]);
+    expect(plants).toEqual(["p-1"]);
   });
 
-  it("still deletes the row when photo cleanup fails (best-effort, web parity)", async () => {
+  it("still deletes the row when local photo cleanup fails (best-effort)", async () => {
     const order: string[] = [];
     await deletePlantWithPhotos(
-      { client: fakeDeleteClient(order, { user: { id: "u-1" } }), api: fakeApi(order, [], true) },
+      { client: fakeDeleteClient(order), deleteLocalPhotos: fakeLocalCleanup(order, [], true) },
       "p-1",
     );
-    expect(order).toEqual(["photos-delete", "row-delete"]);
+    expect(order).toEqual(["local-photos-delete", "row-delete"]);
   });
 
   it("maps a row-delete failure to the generic string", async () => {
@@ -148,22 +138,11 @@ describe("deletePlantWithPhotos", () => {
     await expect(
       deletePlantWithPhotos(
         {
-          client: fakeDeleteClient(order, { user: { id: "u-1" }, deleteError: { message: "boom" } }),
-          api: fakeApi(order, []),
+          client: fakeDeleteClient(order, { deleteError: { message: "boom" } }),
+          deleteLocalPhotos: fakeLocalCleanup(order, []),
         },
         "p-1",
       ),
     ).rejects.toThrow(GENERIC_DELETE_PLANT_ERROR);
-  });
-
-  it("fails generically without an authenticated user and never calls the API", async () => {
-    const order: string[] = [];
-    await expect(
-      deletePlantWithPhotos(
-        { client: fakeDeleteClient(order, { user: null }), api: fakeApi(order, []) },
-        "p-1",
-      ),
-    ).rejects.toThrow(GENERIC_DELETE_PLANT_ERROR);
-    expect(order).toEqual([]);
   });
 });

@@ -1,24 +1,25 @@
 # CLAUDE.md — Citrus Care v1
 
 ## What this is
-Photo-driven citrus tree care PWA. User snaps a leaf/tree photo, Gemini 2.5 Flash returns a structured diagnosis (health score, symptoms, causes, ranked actions); each tree has a timeline; re-assessment shows better/same/worse vs the prior.
+Photo-driven plant care, native-app-first (D-16). User snaps a leaf/tree photo in the Android app, Gemini 2.5 Flash returns a structured diagnosis (health score, symptoms, causes, ranked actions); each plant has a timeline; re-assessment shows better/same/worse vs the prior. **Photos live only on the phone** — a photo travels the network exactly once, inside the `/assess` request body, and is never stored server-side. The web app is a static marketing landing.
 
 ## Tech Stack
-- **Frontend:** Next.js 16 (App Router), React 19, Tailwind CSS 4, shadcn/ui (`@base-ui/react` primitives)
-- **Backend:** standalone Hono service (`apps/api`) for the AI/photo pipeline + Next.js Server Actions for form mutations
+- **Product:** Expo/React Native Android app (`apps/mobile`)
+- **Backend:** standalone Hono service (`apps/api`) for the AI pipeline (`/assess`)
+- **Web:** Next.js 16 (App Router), React 19, Tailwind CSS 4 — static landing only
 - **AI:** Google Gemini API (`@google/genai`, model `gemini-2.5-flash`, structured output via `responseSchema`)
-- **Database:** Supabase (Postgres + Auth + Storage + RLS on every user-visible table)
-- **Auth:** Google OAuth via Supabase (server routes `app/auth/google`, `app/auth/callback`)
-- **Testing:** Vitest (unit), Playwright (e2e)
+- **Database:** Supabase (Postgres + Auth + RLS on every user-visible table; no Storage use since D-16)
+- **Auth:** Google sign-in via Supabase (native Google SDK in the mobile app)
+- **Testing:** Vitest (unit), Playwright (e2e, landing only)
 - **CI:** GitHub Actions (typecheck + lint + vitest on push/PR)
 - **Deploy:** Fly.io (`fly.toml` in repo root)
 
 ## Repo structure (monorepo — strict separation, decision D-12)
-- `apps/web/` — Next.js frontend (pages, server components, form server-actions; `/api/assess` proxies to apps/api via rewrites)
-- `apps/api/` — standalone Hono backend service (D-13): AI/photo pipeline (`/assess`, `/cleanup-orphans`), serves web (cookie auth via rewrite) AND mobile (Bearer auth). Dev port 3003
-- `apps/mobile/` — Expo/React Native app (D-11). **Not an npm workspace** — own `npm install` inside the folder (React version isolation)
-- `packages/shared/` — types + Zod schemas shared web ↔ mobile (`@citrus/shared`)
-- `supabase/` — database: migrations, RLS, storage config
+- `apps/mobile/` — THE product: Expo/React Native app (D-11). **Not an npm workspace** — own `npm install` inside the folder (React version isolation). Local-first photo store: `src/lib/photo-store.ts` (pure, tested) + `photo-store-io.ts` (expo-file-system/AsyncStorage wiring)
+- `apps/api/` — standalone Hono backend service (D-13): AI pipeline (`/assess`, Bearer or cookie auth). Dev port 3003
+- `apps/web/` — static marketing landing; keeps the `/api/assess` rewrite to apps/api (the phone reaches the API through port 3002 in dev) and `/api/health`
+- `packages/shared/` — types + Zod schemas (`@citrus/shared`), consumed by mobile + web tests
+- `supabase/` — database: migrations, RLS (0005 made `assessments.photo_path` nullable — new rows write null)
 - Root `Dockerfile` + `fly.toml` deploy `apps/web`
 
 ## Commands (run from repo root — proxies to apps/web)
@@ -38,16 +39,15 @@ npm run typecheck         # tsc --noEmit
 ## Key Files
 - `apps/api/src/gemini.ts` — Gemini vision call + expert prompt (Zod schema in `packages/shared`)
 - `apps/api/src/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
-- `apps/web/app/_lib/supabase/{client,server,middleware}.ts` — Supabase clients
-- `apps/api/src/routes/assess.ts` — main AI endpoint (auth · ownership · rate limit · download · Gemini · parse · insert)
+- `apps/api/src/routes/assess.ts` — main AI endpoint. Body `{plantId, imageBase64, mime: "image/jpeg", isCutCare?}`; order: parse (incl. 3MB decoded-size cap) · auth · rate limit · plant RLS lookup · Gemini · Zod · insert (photo_path null) · cover update
 - `apps/api/src/auth.ts` — Bearer-or-cookie auth → RLS-scoped Supabase client
-- `apps/web/app/auth/{google,callback}/route.ts` — Google OAuth
-- `apps/web/components/AuthPanel.tsx` — sign-in UI
-- `apps/web/app/plants/...` — plant list / new / detail / assess / single-assessment pages
-- `apps/web/proxy.ts` — Next.js 16 proxy (was `middleware.ts`); session refresh + redirects
-- `supabase/migrations/*.sql` — schema, RLS, photos bucket, rate_limits
-- `apps/web/tests/unit/*.test.ts` — schemas, prompts, image utils, health bands, assess route, rate limit
-- `apps/web/tests/e2e/*.spec.ts` — landing + protected redirect
+- `apps/mobile/src/lib/assess.ts` — mobile assess flow: local save FIRST, then direct-image escalation, then photo-index link (engine seam for D-15)
+- `apps/mobile/src/lib/photo-store.ts` + `photo-store-io.ts` — on-phone photo files (`photos/{plantId}/…`) + AsyncStorage index (assessmentId → localUri)
+- `apps/web/app/page.tsx` + `components/landing/` — the landing (all that's left of the web surface)
+- `supabase/migrations/*.sql` — schema, RLS, rate_limits, photo_path nullable (0005)
+- `apps/api/tests/*.test.ts` — assess contract (size cap, generic errors), prompts, rate limit
+- `apps/mobile/src/lib/*.test.ts` — photo store/index, assess flow, timelines, mutations
+- `apps/web/tests/e2e/landing.spec.ts` — landing renders; `/plants` 404s
 
 ## AI-agent workflow (which skill, when)
 
@@ -80,8 +80,8 @@ If your change conflicts with Architecture or the PRD, stop and surface it befor
 
 - **One AI model, one provider.** Gemini 2.5 Flash via `@google/genai`. Swap the constant at top of `gemini.ts` if needed; don't add Anthropic / OpenAI fallbacks.
 - **All response parsing is Zod-validated.** Never trust raw model JSON.
-- **RLS on every user-visible table** (`trees`, `assessments`, `rate_limits`, Storage `photos` bucket). No service-role key in user-facing routes.
-- **photoPath ownership check before any Storage download.** `photoPath.startsWith(user.id + "/")`.
+- **RLS on every user-visible table** (`plants`, `assessments`, `rate_limits`). No service-role key in user-facing routes.
+- **Photos never reach a server-side store (D-16).** `/assess` takes the image in the request body (3MB decoded cap, jpeg only) and inserts `photo_path: null`; the phone's photo-store is the only copy.
 - **All error responses are generic strings.** Log details server-side via `console.error`, never leak to clients.
 - **Rate limit /api/assess at 5/user/hour.** Constant `ASSESS_LIMIT_PER_HOUR`.
 - **Build script must `unset NODE_ENV`** before `next build`. Don't remove it.
@@ -111,9 +111,8 @@ Don't pick for the user.
 
 ## Environment
 
-Required env vars (set in `.env.local` and Vercel — see `Project RESOURCES/Citrus Care v1/Citrus Care Secrets (DO NOT SHARE).md`):
+Required env vars (set in `apps/web/.env.local`, read by apps/api in dev — see `Project RESOURCES/Citrus Care v1/Citrus Care Secrets (DO NOT SHARE).md`):
 - `GEMINI_API_KEY`
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- Google OAuth configured in Supabase Dashboard + Google Cloud Console
+- Google sign-in configured in Supabase Dashboard + Google Cloud Console (native SDK client for the app)

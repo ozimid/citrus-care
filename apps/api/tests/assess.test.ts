@@ -2,7 +2,6 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const createClientMock = vi.fn();
 const assessPhotoWithGeminiMock = vi.fn();
-const downloadMock = vi.fn();
 
 vi.mock("../src/auth", () => ({
   getAuth: async () => {
@@ -13,11 +12,6 @@ vi.mock("../src/auth", () => ({
     if (!user) return null;
     return { supabase, user };
   },
-}));
-
-// Photo I/O now flows through the storage abstraction, not supabase.storage.
-vi.mock("../src/storage", () => ({
-  getStorage: () => ({ download: (...args: unknown[]) => downloadMock(...args) }),
 }));
 
 vi.mock("../src/gemini", async () => {
@@ -36,13 +30,24 @@ function buildSupabaseStub(opts: {
   user?: { id: string } | null;
   plant?: Record<string, unknown> | null;
   prev?: Record<string, unknown> | null;
-  download?: Blob | null;
   insertedId?: string;
   insertError?: { message: string } | null;
+  insertSpy?: ReturnType<typeof vi.fn>;
   rateLimit?: { count: number; allowed: boolean; retry_after_sec: number };
 }) {
   const user = "user" in opts ? opts.user : { id: "user-1" };
   const rl = opts.rateLimit ?? { count: 1, allowed: true, retry_after_sec: 0 };
+  const insert =
+    opts.insertSpy ??
+    vi.fn().mockReturnValue({
+      select: () => ({
+        single: () =>
+          Promise.resolve({
+            data: opts.insertedId ? { id: opts.insertedId } : null,
+            error: opts.insertError ?? null,
+          }),
+      }),
+    });
   return {
     rpc: vi.fn().mockImplementation((fn: string) => {
       if (fn === "consume_rate_limit") {
@@ -81,34 +86,45 @@ function buildSupabaseStub(opts: {
               }),
             }),
           }),
-          insert: () => ({
-            select: () => ({
-              single: () =>
-                Promise.resolve({
-                  data: opts.insertedId ? { id: opts.insertedId } : null,
-                  error: opts.insertError ?? null,
-                }),
-            }),
-          }),
+          insert,
         };
       }
       return {};
     }),
-    storage: {
-      from: () => ({
-        download: vi
-          .fn()
-          .mockResolvedValue({ data: opts.download ?? new Blob(["hi"]), error: null }),
-      }),
-    },
   };
 }
 
-function req(body: object) {
+const PLANT = {
+  id: "t1",
+  user_id: "u1",
+  name: "Mr Lemon",
+  plant_type: "tree",
+  species: null,
+  cultivar: null,
+  location: null,
+  zip_code: null,
+};
+
+// A small but real JPEG-ish payload; content is irrelevant, size is what matters.
+const SMALL_IMAGE_BASE64 = Buffer.from("fake-jpeg-bytes").toString("base64");
+
+/** Base64 whose DECODED size exceeds the 3MB cap (decoded = len/4*3). */
+const OVERSIZED_IMAGE_BASE64 = "A".repeat(4 * 1024 * 1024 + 4);
+
+function body(overrides: Record<string, unknown> = {}) {
+  return {
+    plantId: "t1",
+    imageBase64: SMALL_IMAGE_BASE64,
+    mime: "image/jpeg",
+    ...overrides,
+  };
+}
+
+function req(payload: object) {
   return new Request("http://localhost/assess", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -117,182 +133,135 @@ function geminiOk(payload: Record<string, unknown>) {
   return { diagnosis: payload, raw };
 }
 
+const DIAGNOSIS_OK = {
+  health_score: 80,
+  summary: "Looks healthy.",
+  symptoms: [],
+  causes: [],
+  recommendations: [
+    { priority: 1, action: "Water deeply weekly", detail: "Until drains." },
+  ],
+};
+
 beforeEach(() => {
   createClientMock.mockReset();
   assessPhotoWithGeminiMock.mockReset();
-  downloadMock.mockReset();
-  downloadMock.mockResolvedValue(Buffer.from("fake-image-bytes"));
 });
 
-describe("POST /assess", () => {
+describe("POST /assess (direct-image contract, D-16)", () => {
   it("returns 401 when not authenticated", async () => {
     createClientMock.mockResolvedValue(
-      buildSupabaseStub({ user: null, plant: { id: "t1", user_id: "u1" } }),
+      buildSupabaseStub({ user: null, plant: PLANT }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(401);
   });
 
-  it("returns 400 on invalid input", async () => {
-    createClientMock.mockResolvedValue(buildSupabaseStub({}));
-    const res = await app.request(req({ plantId: "" }));
+  it("returns 400 when the image is missing", async () => {
+    createClientMock.mockResolvedValue(buildSupabaseStub({ plant: PLANT }));
+    const res = await app.request(req({ plantId: "t1", mime: "image/jpeg" }));
     expect(res.status).toBe(400);
+    expect(assessPhotoWithGeminiMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for a non-jpeg mime", async () => {
+    createClientMock.mockResolvedValue(buildSupabaseStub({ plant: PLANT }));
+    const res = await app.request(req(body({ mime: "image/png" })));
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an image over 3MB decoded with a 400 and a generic message", async () => {
+    createClientMock.mockResolvedValue(buildSupabaseStub({ plant: PLANT }));
+    const res = await app.request(
+      req(body({ imageBase64: OVERSIZED_IMAGE_BASE64 })),
+    );
+    expect(res.status).toBe(400);
+    const resBody = (await res.json()) as { error?: string };
+    expect(resBody.error).toBe("Image too large. Please retry.");
+    expect(assessPhotoWithGeminiMock).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the plant is not found", async () => {
     createClientMock.mockResolvedValue(
       buildSupabaseStub({ user: { id: "u1" }, plant: null }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(404);
   });
 
-  it("calls Gemini with the prompt, persists, returns the new assessment id", async () => {
-    assessPhotoWithGeminiMock.mockResolvedValue(
-      geminiOk({
-        health_score: 80,
-        summary: "Looks healthy.",
-        symptoms: [],
-        causes: [],
-        recommendations: [
-          { priority: 1, action: "Water deeply weekly", detail: "Until drains." },
-        ],
+  it("sends the request image straight to Gemini, persists with photo_path null, returns the id", async () => {
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk(DIAGNOSIS_OK));
+    const insertSpy = vi.fn().mockReturnValue({
+      select: () => ({
+        single: () => Promise.resolve({ data: { id: "assess-1" }, error: null }),
       }),
-    );
+    });
     createClientMock.mockResolvedValue(
-      buildSupabaseStub({
-        user: { id: "u1" },
-        plant: { id: "t1", user_id: "u1", name: "Mr Lemon", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
-        prev: null,
-        download: new Blob(["fake"], { type: "image/jpeg" }),
-        insertedId: "assess-1",
-      }),
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, prev: null, insertSpy }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+
+    const res = await app.request(req(body()));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
-    expect(body.id).toBe("assess-1");
+    const resBody = (await res.json()) as { id?: string };
+    expect(resBody.id).toBe("assess-1");
+
+    // The image travels the network exactly once: request body → Gemini call.
     expect(assessPhotoWithGeminiMock).toHaveBeenCalledOnce();
+    const geminiArgs = assessPhotoWithGeminiMock.mock.calls[0][0] as {
+      imageBase64: string;
+      imageMediaType: string;
+    };
+    expect(geminiArgs.imageBase64).toBe(SMALL_IMAGE_BASE64);
+    expect(geminiArgs.imageMediaType).toBe("image/jpeg");
+
+    // Photos live only on the phone — nothing is stored server-side.
+    expect(insertSpy).toHaveBeenCalledOnce();
+    const row = insertSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.photo_path).toBeNull();
   });
 
   it("passes previous assessment into the prompt and links compared_to on insert", async () => {
     assessPhotoWithGeminiMock.mockResolvedValue(
       geminiOk({
+        ...DIAGNOSIS_OK,
         health_score: 78,
         summary: "Better — fewer chlorotic leaves.",
-        symptoms: [],
-        causes: [],
-        recommendations: [],
         comparison: { delta: "better", notes: "Less yellowing on lower leaves." },
       }),
     );
-
     const insertSpy = vi.fn().mockReturnValue({
       select: () => ({
         single: () => Promise.resolve({ data: { id: "assess-new" }, error: null }),
       }),
     });
-
-    createClientMock.mockResolvedValue({
-      rpc: vi.fn().mockResolvedValue({
-        data: [{ count: 1, allowed: true, retry_after_sec: 0 }],
-        error: null,
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({
+        user: { id: "u1" },
+        plant: { ...PLANT, cultivar: "Meyer Lemon" },
+        prev: {
+          id: "assess-prev",
+          health_score: 60,
+          diagnosis: {
+            summary: "Old leaves yellowing.",
+            health_score: 60,
+            symptoms: [],
+            causes: [],
+            recommendations: [],
+          },
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        insertSpy,
       }),
-      auth: {
-        getUser: vi.fn().mockResolvedValue({
-          data: { user: { id: "u1" } },
-          error: null,
-        }),
-      },
-      from: vi.fn().mockImplementation((table: string) => {
-        if (table === "plants") {
-          return {
-            select: () => ({
-              eq: () => ({
-                maybeSingle: () =>
-                  Promise.resolve({
-                    data: {
-                      id: "t1",
-                      user_id: "u1",
-                      name: "Mr Lemon",
-                      plant_type: "tree",
-                      species: null,
-                      cultivar: "Meyer Lemon",
-                      location: null,
-                      zip_code: null,
-                    },
-                    error: null,
-                  }),
-              }),
-            }),
-            update: () => ({
-              eq: () => Promise.resolve({ error: null }),
-            }),
-          };
-        }
-        if (table === "assessments") {
-          return {
-            select: () => ({
-              eq: () => ({
-                order: () => ({
-                  limit: () => ({
-                    maybeSingle: () =>
-                      Promise.resolve({
-                        data: {
-                          id: "assess-prev",
-                          health_score: 60,
-                          diagnosis: {
-                            summary: "Old leaves yellowing.",
-                            health_score: 60,
-                            symptoms: [],
-                            causes: [],
-                            recommendations: [],
-                          },
-                          created_at: "2026-01-01T00:00:00Z",
-                        },
-                        error: null,
-                      }),
-                  }),
-                }),
-              }),
-            }),
-            insert: insertSpy,
-          };
-        }
-        return {};
-      }),
-      storage: {
-        from: () => ({
-          download: vi
-            .fn()
-            .mockResolvedValue({
-              data: new Blob(["fake"], { type: "image/jpeg" }),
-              error: null,
-            }),
-        }),
-      },
-    });
+    );
 
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(200);
     expect(insertSpy).toHaveBeenCalledOnce();
-    const row = insertSpy.mock.calls[0][0];
+    const row = insertSpy.mock.calls[0][0] as Record<string, unknown>;
     expect(row.compared_to_assessment_id).toBe("assess-prev");
     const promptText = assessPhotoWithGeminiMock.mock.calls[0][0].userText as string;
     expect(promptText).toContain("Previous assessment");
     expect(promptText).toContain("60");
-  });
-
-  it("returns 403 when photoPath does not belong to the authenticated user", async () => {
-    createClientMock.mockResolvedValue(
-      buildSupabaseStub({
-        user: { id: "u1" },
-        plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
-      }),
-    );
-    const res = await app.request(req({ plantId: "t1", photoPath: "OTHER-USER/t1/x.jpg" }));
-    expect(res.status).toBe(403);
-    expect(assessPhotoWithGeminiMock).not.toHaveBeenCalled();
   });
 
   it("returns a generic 502 when Gemini call fails (no internal details leaked)", async () => {
@@ -300,70 +269,69 @@ describe("POST /assess", () => {
       new Error("Internal: API key abc123 invalid; quota exhausted at https://gen-lang/v1beta"),
     );
     createClientMock.mockResolvedValue(
-      buildSupabaseStub({
-        user: { id: "u1" },
-        plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
-      }),
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(502);
-    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
-    expect(body.error).not.toContain("API key");
-    expect(body.error).not.toContain("abc123");
-    expect(body.error).not.toContain("gen-lang");
+    const resBody = (await res.json()) as { error?: string };
+    expect(resBody.error).not.toContain("API key");
+    expect(resBody.error).not.toContain("abc123");
+    expect(resBody.error).not.toContain("gen-lang");
   });
 
   it("returns a generic 500 when insert fails (no Supabase error message leaked)", async () => {
-    assessPhotoWithGeminiMock.mockResolvedValue(
-      geminiOk({
-        health_score: 80,
-        summary: "ok.",
-        symptoms: [],
-        causes: [],
-        recommendations: [],
-      }),
-    );
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk(DIAGNOSIS_OK));
     createClientMock.mockResolvedValue(
       buildSupabaseStub({
         user: { id: "u1" },
-        plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
+        plant: PLANT,
         insertedId: undefined,
         insertError: { message: "duplicate key value violates unique constraint pk_assessments — table: public.assessments" },
       }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(500);
-    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
-    expect(body.error).not.toContain("duplicate key");
-    expect(body.error).not.toContain("public.assessments");
+    const resBody = (await res.json()) as { error?: string };
+    expect(resBody.error).not.toContain("duplicate key");
+    expect(resBody.error).not.toContain("public.assessments");
   });
 
   it("returns 429 with Retry-After when rate limit is exceeded (does NOT call Gemini)", async () => {
     createClientMock.mockResolvedValue(
       buildSupabaseStub({
         user: { id: "u1" },
-        plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
+        plant: PLANT,
         rateLimit: { count: 6, allowed: false, retry_after_sec: 1234 },
       }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("1234");
-    const body = (await res.json()) as { id?: string; error?: string; retryAfter?: number };
-    expect(body.retryAfter).toBe(1234);
+    const resBody = (await res.json()) as { retryAfter?: number };
+    expect(resBody.retryAfter).toBe(1234);
     expect(assessPhotoWithGeminiMock).not.toHaveBeenCalled();
   });
 
   it("returns 502 when Gemini returns invalid JSON", async () => {
     assessPhotoWithGeminiMock.mockRejectedValue(new Error("invalid JSON"));
     createClientMock.mockResolvedValue(
-      buildSupabaseStub({
-        user: { id: "u1" },
-        plant: { id: "t1", user_id: "u1", name: "x", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null },
-        insertedId: "a",
-      }),
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertedId: "a" }),
     );
-    const res = await app.request(req({ plantId: "t1", photoPath: "u1/t1/x.jpg" }));
+    const res = await app.request(req(body()));
     expect(res.status).toBe(502);
+  });
+});
+
+describe("removed photo-storage surface (D-16)", () => {
+  it("no longer serves /photos or /cleanup-orphans", async () => {
+    const photosRes = await app.request(
+      new Request("http://localhost/photos?path=u1/t1/x.jpg"),
+    );
+    expect(photosRes.status).toBe(404);
+
+    const cleanupRes = await app.request(
+      new Request("http://localhost/cleanup-orphans", { method: "POST" }),
+    );
+    expect(cleanupRes.status).toBe(404);
   });
 });

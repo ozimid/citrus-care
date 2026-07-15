@@ -2,13 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { ApiError } from "./api";
 import {
+  ANALYSIS_OFFLINE_ERROR,
+  PHOTO_SAVE_FAILED_ERROR,
   RESULT_LOAD_ERROR,
-  UPLOAD_FAILED_ERROR,
   friendlyAssessError,
   runAssess,
   type AssessDeps,
   type AssessPhase,
 } from "./assess";
+import type { PhotoIndexEntry } from "./photo-store";
+
+// D-16 flow: local save FIRST (the photo persists on the phone even if the
+// analysis fails) → POST /assess with the base64 image directly → link the
+// local uri to the persisted assessment id in the photo index.
 
 const DIAGNOSIS: AssessmentDiagnosis = {
   health_score: 72,
@@ -18,122 +24,138 @@ const DIAGNOSIS: AssessmentDiagnosis = {
   recommendations: [{ priority: 1, action: "Feed with citrus fertilizer", detail: "Apply a balanced citrus feed." }],
 };
 
-interface Call {
-  kind: "api" | "raw";
+interface ApiCall {
   url: string;
   init?: { method?: string; headers?: Record<string, string>; body?: unknown };
 }
 
 function makeDeps(overrides: Partial<AssessDeps> = {}) {
-  const calls: Call[] = [];
-  const blob = { size: 3 };
+  const apiCalls: ApiCall[] = [];
+  const saved: { plantId: string; sourceUri: string }[] = [];
+  const linked: { assessmentId: string; entry: PhotoIndexEntry }[] = [];
   const deps: AssessDeps = {
     api: async (path, init) => {
-      calls.push({ kind: "api", url: path, init });
-      if (path === "/photos/sign-upload") {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ photoPath: "user-1/plant-1/p.jpg", uploadUrl: "https://signed.example/put" }),
-        };
-      }
-      // /assess
+      apiCalls.push({ url: path, init });
       return { ok: true, status: 200, json: async () => ({ id: "assessment-9" }) };
     },
-    fetchRaw: async (url, init) => {
-      calls.push({ kind: "raw", url, init });
-      return { ok: true, status: 200, json: async () => ({}), blob: async () => blob };
+    savePhoto: async (plantId, sourceUri) => {
+      saved.push({ plantId, sourceUri });
+      return "file:///docs/photos/plant-1/saved.jpg";
+    },
+    readPhotoBase64: async () => "QkFTRTY0",
+    linkPhoto: async (assessmentId, entry) => {
+      linked.push({ assessmentId, entry });
     },
     loadDiagnosis: async () => DIAGNOSIS,
     ...overrides,
   };
-  return { deps, calls, blob };
+  return { deps, apiCalls, saved, linked };
 }
 
 const INPUT = { plantId: "plant-1", photoUri: "file:///tmp/photo.jpg", isCutCare: false };
 
-describe("runAssess", () => {
-  it("signs the upload, PUTs the jpeg bytes, posts /assess, and returns the parsed diagnosis", async () => {
-    const { deps, calls, blob } = makeDeps();
+describe("runAssess (local-first, direct-image escalation)", () => {
+  it("saves locally first, posts the base64 image to /assess, links the photo, returns the diagnosis", async () => {
+    const { deps, apiCalls, saved, linked } = makeDeps();
     const phases: AssessPhase[] = [];
-    const uploaded: string[] = [];
+    const savedUris: string[] = [];
 
     const result = await runAssess(deps, INPUT, {
       onPhase: (p) => phases.push(p),
-      onPhotoUploaded: (p) => uploaded.push(p),
+      onPhotoSaved: (uri) => savedUris.push(uri),
     });
 
-    expect(result).toEqual({ assessmentId: "assessment-9", diagnosis: DIAGNOSIS });
-    expect(phases).toEqual(["uploading", "analyzing"]);
-    expect(uploaded).toEqual(["user-1/plant-1/p.jpg"]);
+    expect(result).toEqual({
+      assessmentId: "assessment-9",
+      diagnosis: DIAGNOSIS,
+      localUri: "file:///docs/photos/plant-1/saved.jpg",
+    });
+    expect(phases).toEqual(["saving", "analyzing"]);
+    expect(saved).toEqual([{ plantId: "plant-1", sourceUri: "file:///tmp/photo.jpg" }]);
+    expect(savedUris).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
 
-    // sign-upload request body
-    const sign = calls.find((c) => c.url === "/photos/sign-upload");
-    expect(JSON.parse(sign?.init?.body as string)).toEqual({ plantId: "plant-1", mime: "image/jpeg" });
-
-    // bytes read from the local uri, then PUT to the signed url as image/jpeg
-    expect(calls.some((c) => c.kind === "raw" && c.url === INPUT.photoUri)).toBe(true);
-    const put = calls.find((c) => c.url === "https://signed.example/put");
-    expect(put?.init?.method).toBe("PUT");
-    expect(put?.init?.headers).toEqual({ "Content-Type": "image/jpeg" });
-    expect(put?.init?.body).toBe(blob);
-
-    // /assess request carries only the server-supported fields
-    const assess = calls.find((c) => c.url === "/assess");
-    expect(JSON.parse(assess?.init?.body as string)).toEqual({
+    // The escalation request carries the image itself — no upload, no photoPath.
+    expect(apiCalls).toHaveLength(1);
+    expect(apiCalls[0].url).toBe("/assess");
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toEqual({
       plantId: "plant-1",
-      photoPath: "user-1/plant-1/p.jpg",
+      imageBase64: "QkFTRTY0",
+      mime: "image/jpeg",
       isCutCare: false,
     });
+
+    // Local uri ↔ assessment id link, with the engine recorded (D-15 seam).
+    expect(linked).toHaveLength(1);
+    expect(linked[0].assessmentId).toBe("assessment-9");
+    expect(linked[0].entry).toMatchObject({
+      localUri: "file:///docs/photos/plant-1/saved.jpg",
+      plantId: "plant-1",
+      engine: "gemini",
+    });
+    expect(typeof linked[0].entry.createdAt).toBe("string");
   });
 
-  it("skips sign-upload and PUT when a photoPath from a previous attempt is supplied", async () => {
-    const { deps, calls } = makeDeps();
+  it("skips the local save when a savedUri from a previous attempt is supplied", async () => {
+    const { deps, saved, apiCalls } = makeDeps();
     const phases: AssessPhase[] = [];
 
-    await runAssess(deps, { ...INPUT, photoPath: "user-1/plant-1/kept.jpg" }, { onPhase: (p) => phases.push(p) });
+    const result = await runAssess(
+      deps,
+      { ...INPUT, savedUri: "file:///docs/photos/plant-1/kept.jpg" },
+      { onPhase: (p) => phases.push(p) },
+    );
 
     expect(phases).toEqual(["analyzing"]);
-    expect(calls.filter((c) => c.kind === "raw")).toHaveLength(0);
-    const assess = calls.find((c) => c.url === "/assess");
-    expect(JSON.parse(assess?.init?.body as string)).toMatchObject({ photoPath: "user-1/plant-1/kept.jpg" });
+    expect(saved).toEqual([]);
+    expect(apiCalls).toHaveLength(1);
+    expect(result.localUri).toBe("file:///docs/photos/plant-1/kept.jpg");
   });
 
   it("sends isCutCare: true for cut mode", async () => {
-    const { deps, calls } = makeDeps();
+    const { deps, apiCalls } = makeDeps();
     await runAssess(deps, { ...INPUT, isCutCare: true });
-    const assess = calls.find((c) => c.url === "/assess");
-    expect(JSON.parse(assess?.init?.body as string)).toMatchObject({ isCutCare: true });
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({ isCutCare: true });
   });
 
-  it("throws an ApiError carrying retryAfter when /assess is rate limited", async () => {
-    const { deps } = makeDeps({
-      api: async (path) => {
-        if (path === "/photos/sign-upload") {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({ photoPath: "user-1/p.jpg", uploadUrl: "https://signed.example/put" }),
-          };
-        }
-        return {
-          ok: false,
-          status: 429,
-          json: async () => ({ error: "Too many assessments. Please try again later.", retryAfter: 1800 }),
-        };
+  it("fails with the save error (and never calls the API) when the local save fails", async () => {
+    const { deps, apiCalls } = makeDeps({
+      savePhoto: async () => {
+        throw new Error("disk full: /data/user/0/...");
       },
+    });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(PHOTO_SAVE_FAILED_ERROR);
+    expect(apiCalls).toHaveLength(0);
+  });
+
+  it("maps a network failure AFTER the local save to the offline string (photo is safe)", async () => {
+    const { deps, saved } = makeDeps({
+      api: async () => {
+        throw new TypeError("Network request failed");
+      },
+    });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(ANALYSIS_OFFLINE_ERROR);
+    expect(saved).toHaveLength(1);
+  });
+
+  it("rethrows ApiError statuses untouched (server reached — not an offline case)", async () => {
+    const { deps } = makeDeps({
+      api: async () => ({
+        ok: false,
+        status: 429,
+        json: async () => ({ error: "Too many assessments. Please try again later.", retryAfter: 1800 }),
+      }),
     });
     await expect(runAssess(deps, INPUT)).rejects.toMatchObject({ status: 429, retryAfter: 1800 });
   });
 
-  it("fails with the generic upload string when the signed-URL PUT rejects", async () => {
+  it("still returns the result when linking the photo index fails (best-effort)", async () => {
     const { deps } = makeDeps({
-      fetchRaw: async (url, init) =>
-        init?.method === "PUT"
-          ? { ok: false, status: 403, json: async () => ({}) }
-          : { ok: true, status: 200, json: async () => ({}), blob: async () => ({}) },
+      linkPhoto: async () => {
+        throw new Error("AsyncStorage unavailable");
+      },
     });
-    await expect(runAssess(deps, INPUT)).rejects.toThrow(UPLOAD_FAILED_ERROR);
+    const result = await runAssess(deps, INPUT);
+    expect(result.assessmentId).toBe("assessment-9");
   });
 
   it("rejects a diagnosis row that fails the shared Zod schema", async () => {
@@ -142,7 +164,7 @@ describe("runAssess", () => {
   });
 });
 
-describe("friendlyAssessError (web-parity strings)", () => {
+describe("friendlyAssessError (generic-message rule)", () => {
   it("shows minutes remaining on 429 with retryAfter", () => {
     expect(friendlyAssessError(new ApiError(429, "raw server text", 1800))).toBe(
       "Too many assessments. Try again in 30 min.",
@@ -156,10 +178,10 @@ describe("friendlyAssessError (web-parity strings)", () => {
     expect(friendlyAssessError(new ApiError(429))).toBe("Too many assessments. Please wait and try again.");
   });
 
-  it("maps auth, ownership, missing-photo, AI, and server failures", () => {
+  it("maps auth, missing-plant, AI, and server failures", () => {
     expect(friendlyAssessError(new ApiError(401))).toBe("Session expired — please sign in again.");
     expect(friendlyAssessError(new ApiError(403))).toBe("Permission denied. Please sign in again.");
-    expect(friendlyAssessError(new ApiError(404))).toBe("Photo not found. Please re-upload and try again.");
+    expect(friendlyAssessError(new ApiError(404))).toBe("Plant not found. Please close and try again.");
     expect(friendlyAssessError(new ApiError(502))).toBe(
       "The AI service returned an error. Please try again in a moment.",
     );
@@ -174,7 +196,8 @@ describe("friendlyAssessError (web-parity strings)", () => {
   });
 
   it("passes through the flow's own friendly strings", () => {
-    expect(friendlyAssessError(new Error(UPLOAD_FAILED_ERROR))).toBe(UPLOAD_FAILED_ERROR);
+    expect(friendlyAssessError(new Error(PHOTO_SAVE_FAILED_ERROR))).toBe(PHOTO_SAVE_FAILED_ERROR);
+    expect(friendlyAssessError(new Error(ANALYSIS_OFFLINE_ERROR))).toBe(ANALYSIS_OFFLINE_ERROR);
     expect(friendlyAssessError(new Error(RESULT_LOAD_ERROR))).toBe(RESULT_LOAD_ERROR);
   });
 });

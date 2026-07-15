@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachLocalPhotos,
   comparisonDelta,
   formatTimelineDate,
   mapTimelineRows,
   parseTimelineDiagnosis,
-  photoUri,
   PLANT_DETAIL_SELECT,
   sliderPair,
   TIMELINE_SELECT,
   trendChipLabel,
   type TimelineRow,
 } from "./plant-detail";
+import { upsertPhoto, type PhotoIndex } from "./photo-store";
 
 // Reverse-chron fixture, the order the timeline query returns rows in:
 // newest first, the plant's very first assessment last.
@@ -20,7 +21,6 @@ function rows(): TimelineRow[] {
       id: "a3",
       created_at: "2026-07-10T09:00:00Z",
       health_score: 82,
-      photo_path: "u1/p1/3.jpg",
       is_cut_care: false,
       diagnosis: { summary: "Recovering well", comparison: { delta: "better", notes: "n" } },
     },
@@ -28,7 +28,6 @@ function rows(): TimelineRow[] {
       id: "a2",
       created_at: "2026-06-26T09:00:00Z",
       health_score: 61,
-      photo_path: "u1/p1/2.jpg",
       is_cut_care: false,
       diagnosis: { summary: "About the same", comparison: { delta: "same", notes: "n" } },
     },
@@ -36,11 +35,23 @@ function rows(): TimelineRow[] {
       id: "a1",
       created_at: "2026-06-12T09:00:00Z",
       health_score: 58,
-      photo_path: "u1/p1/1.jpg",
       is_cut_care: true,
       diagnosis: { summary: "Early chlorosis" },
     },
   ];
+}
+
+function indexFor(ids: Record<string, string>): PhotoIndex {
+  let index: PhotoIndex = {};
+  for (const [assessmentId, localUri] of Object.entries(ids)) {
+    index = upsertPhoto(index, assessmentId, {
+      localUri,
+      plantId: "p1",
+      engine: "gemini",
+      createdAt: "2026-07-15T10:00:00Z",
+    });
+  }
+  return index;
 }
 
 describe("select constants", () => {
@@ -48,10 +59,11 @@ describe("select constants", () => {
     expect(PLANT_DETAIL_SELECT).toContain("zip_code");
   });
 
-  it("pulls the timeline columns the web detail page uses, plus is_cut_care for row taps", () => {
-    for (const col of ["id", "created_at", "health_score", "photo_path", "diagnosis", "is_cut_care"]) {
+  it("pulls the timeline columns, WITHOUT photo_path (photos are local-only, D-16)", () => {
+    for (const col of ["id", "created_at", "health_score", "diagnosis", "is_cut_care"]) {
       expect(TIMELINE_SELECT).toContain(col);
     }
+    expect(TIMELINE_SELECT).not.toContain("photo_path");
   });
 });
 
@@ -82,13 +94,13 @@ describe("mapTimelineRows", () => {
     expect(entries.map((e) => e.delta)).toEqual(["better", "same", null]);
   });
 
-  it("maps score, photo path, cut flag, summary and date label", () => {
+  it("maps score, cut flag, summary and date label; localUri starts null", () => {
     const [latest, , first] = mapTimelineRows(rows());
     expect(latest.score).toBe(82);
-    expect(latest.photoPath).toBe("u1/p1/3.jpg");
     expect(latest.summary).toBe("Recovering well");
     expect(latest.dateLabel).toBe("Jul 10, 2026");
     expect(latest.isCutCare).toBe(false);
+    expect(latest.localUri).toBeNull();
     expect(first.isCutCare).toBe(true);
   });
 
@@ -111,6 +123,26 @@ describe("mapTimelineRows", () => {
   });
 });
 
+describe("attachLocalPhotos", () => {
+  it("joins entries to local uris by assessment id via the photo index", () => {
+    const entries = mapTimelineRows(rows());
+    const joined = attachLocalPhotos(
+      entries,
+      indexFor({ a3: "file:///photos/p1/3.jpg", a1: "file:///photos/p1/1.jpg" }),
+    );
+    expect(joined.map((e) => e.localUri)).toEqual([
+      "file:///photos/p1/3.jpg",
+      null, // no local photo (old row / other device) → placeholder, no error
+      "file:///photos/p1/1.jpg",
+    ]);
+  });
+
+  it("leaves every entry photo-less with an empty index", () => {
+    const joined = attachLocalPhotos(mapTimelineRows(rows()), {});
+    expect(joined.every((e) => e.localUri === null)).toBe(true);
+  });
+});
+
 describe("trendChipLabel", () => {
   it("is the latest assessment's delta label", () => {
     expect(trendChipLabel(mapTimelineRows(rows()))).toBe("Better");
@@ -128,24 +160,32 @@ describe("trendChipLabel", () => {
   });
 });
 
-describe("sliderPair", () => {
-  it("pairs the oldest photo (before) with the newest (after) when 2+ assessments exist", () => {
-    const pair = sliderPair(mapTimelineRows(rows()));
+describe("sliderPair (local photos only)", () => {
+  it("pairs the oldest and newest entries THAT HAVE local photos", () => {
+    const entries = attachLocalPhotos(
+      mapTimelineRows(rows()),
+      indexFor({ a3: "file:///3.jpg", a2: "file:///2.jpg", a1: "file:///1.jpg" }),
+    );
+    const pair = sliderPair(entries);
     expect(pair?.before.id).toBe("a1");
     expect(pair?.after.id).toBe("a3");
   });
 
-  it("is null with fewer than two assessments", () => {
-    expect(sliderPair(mapTimelineRows([rows()[0]]))).toBeNull();
-    expect(sliderPair([])).toBeNull();
-  });
-});
-
-describe("photoUri", () => {
-  it("builds the authorized read-proxy URL with an encoded path", () => {
-    expect(photoUri("http://192.168.1.205:3002/api", "u1/p1/a b.jpg")).toBe(
-      "http://192.168.1.205:3002/api/photos?path=u1%2Fp1%2Fa%20b.jpg",
+  it("skips photo-less entries when pairing (old rows from before local-first)", () => {
+    const entries = attachLocalPhotos(
+      mapTimelineRows(rows()),
+      indexFor({ a3: "file:///3.jpg", a2: "file:///2.jpg" }),
     );
+    const pair = sliderPair(entries);
+    expect(pair?.before.id).toBe("a2");
+    expect(pair?.after.id).toBe("a3");
+  });
+
+  it("is null with fewer than two locally-available photos", () => {
+    const entries = attachLocalPhotos(mapTimelineRows(rows()), indexFor({ a3: "file:///3.jpg" }));
+    expect(sliderPair(entries)).toBeNull();
+    expect(sliderPair(attachLocalPhotos(mapTimelineRows(rows()), {}))).toBeNull();
+    expect(sliderPair([])).toBeNull();
   });
 });
 

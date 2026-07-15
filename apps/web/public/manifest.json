@@ -2,7 +2,7 @@
   "name": "Citrus Care",
   "short_name": "Citrus Care",
   "description": "Photo-driven plant care with AI diagnosis and history.",
-  "start_url": "/plants",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

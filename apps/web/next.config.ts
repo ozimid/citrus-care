@@ -23,21 +23,13 @@ const nextConfig: NextConfig = {
     ...lanDevOrigins(),
     ...lanDevOrigins().map((ip) => `${ip}:3002`),
   ],
-  // The AI/photo pipeline lives in the standalone API service (apps/api).
-  // Same-origin fetches from the web client proxy through these rewrites so
-  // Supabase auth cookies flow along; the mobile app calls the API directly
-  // with Bearer auth. API_ORIGIN is read at build time (set it when deploying).
+  // The AI pipeline lives in the standalone API service (apps/api). The
+  // mobile app reaches it through this one rewrite in dev (the port the phone
+  // already trusts); direct Bearer-auth access to apps/api remains valid.
+  // API_ORIGIN is read at build time (set it when deploying).
   async rewrites() {
     const apiOrigin = process.env.API_ORIGIN ?? "http://localhost:3003";
-    return [
-      { source: "/api/assess", destination: `${apiOrigin}/assess` },
-      { source: "/api/cleanup-orphans", destination: `${apiOrigin}/cleanup-orphans` },
-      { source: "/api/photos/sign-upload", destination: `${apiOrigin}/photos/sign-upload` },
-      // Read proxy (GET ?path=) and storage cleanup (DELETE ?prefix=) share this
-      // one rewrite — Next preserves the method and query string on the way to
-      // apps/api, which auth + ownership-checks before touching storage.
-      { source: "/api/photos", destination: `${apiOrigin}/photos` },
-    ];
+    return [{ source: "/api/assess", destination: `${apiOrigin}/assess` }];
   },
 };
 

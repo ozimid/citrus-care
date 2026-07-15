@@ -1,16 +1,17 @@
 import Image from "next/image";
 import Link from "next/link";
 import {
-  ArrowRight,
   Camera,
   CheckCircle2,
   History,
   Leaf,
   Scissors,
   ShieldAlert,
+  Smartphone,
   Sparkles,
 } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import type { LandingContent } from "@/app/_content/landing";
 
@@ -38,6 +39,8 @@ export function LandingPage({
       <WorkflowSection content={content} />
       <CareModesSection content={content} />
       <FocusSection content={content} />
+      <GetAppSection content={content} />
+      <Footer />
     </main>
   );
 }
@@ -69,27 +72,15 @@ function HeroSection({
             </span>
             Citrus Care
           </Link>
-          <div className="flex items-center gap-2">
-            {/* Auth CTAs use document navigation so Supabase OAuth respects LAN origins. */}
-            <a
-              href={hero.secondaryCta.href}
-              className={cn(
-                buttonVariants({ variant: "outline", size: "sm" }),
-                "border-white/35 bg-white/10 text-white hover:bg-white/18 hover:text-white",
-              )}
-            >
-              {hero.secondaryCta.label}
-            </a>
-            <a
-              href={hero.primaryCta.href}
-              className={cn(
-                buttonVariants({ size: "sm" }),
-                "bg-white text-neutral-950 hover:bg-white/90",
-              )}
-            >
-              {hero.primaryCta.label}
-            </a>
-          </div>
+          <a
+            href={hero.primaryCta.href}
+            className={cn(
+              buttonVariants({ size: "sm" }),
+              "bg-white text-neutral-950 hover:bg-white/90",
+            )}
+          >
+            {hero.primaryCta.label}
+          </a>
         </nav>
 
         <div className="flex flex-1 flex-col justify-center py-16 sm:py-20 lg:max-w-3xl">
@@ -114,16 +105,6 @@ function HeroSection({
               <Camera className="size-4" aria-hidden="true" />
               {hero.primaryCta.label}
             </a>
-            <Link
-              href="/plants"
-              className={cn(
-                buttonVariants({ variant: "outline", size: "lg" }),
-                "border-white/35 bg-white/10 text-white hover:bg-white/18 hover:text-white",
-              )}
-            >
-              View care workspace
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
           </div>
 
           {showLanBookmark && lanOrigin ? (
@@ -199,8 +180,8 @@ function CareModesSection({ content }: { content: LandingContent }) {
               Built for the messy middle of plant care.
             </h2>
           </div>
-          <a href="/signup?next=/plants/new" className={buttonVariants({ variant: "outline" })}>
-            Start a plant record
+          <a href="#get-the-app" className={buttonVariants({ variant: "outline" })}>
+            Get the app
           </a>
         </div>
 
@@ -228,7 +209,7 @@ function CareModesSection({ content }: { content: LandingContent }) {
 
 function FocusSection({ content }: { content: LandingContent }) {
   return (
-    <section className="bg-background py-14 sm:py-18">
+    <section className="border-b bg-background py-14 sm:py-18">
       <div className="mx-auto grid max-w-6xl gap-8 px-5 sm:px-8 lg:grid-cols-[1fr_0.8fr] lg:px-10">
         <div>
           <p className="text-sm font-medium text-red-700 dark:text-red-300">
@@ -270,5 +251,51 @@ function FocusSection({ content }: { content: LandingContent }) {
         </div>
       </div>
     </section>
+  );
+}
+
+function GetAppSection({ content }: { content: LandingContent }) {
+  const { getApp } = content;
+
+  return (
+    <section id="get-the-app" className="bg-[#f6f8f1] py-14 dark:bg-[#151812] sm:py-18">
+      <div className="mx-auto max-w-6xl px-5 sm:px-8 lg:px-10">
+        <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+          On your phone
+        </p>
+        <h2 className="mt-3 max-w-2xl text-3xl font-semibold leading-tight sm:text-4xl">
+          {getApp.title}
+        </h2>
+        <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
+          {getApp.description}
+        </p>
+
+        <div className="mt-8 max-w-md rounded-md border bg-background p-5">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-md bg-emerald-100 text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
+              <Smartphone className="size-5" aria-hidden="true" />
+            </div>
+            <h3 className="font-semibold">{getApp.android.platform}</h3>
+          </div>
+          <p className="mt-4 text-sm leading-6 text-muted-foreground">
+            {getApp.android.note}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="border-t bg-background">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-6 sm:px-8 lg:px-10">
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Leaf className="size-4" aria-hidden="true" />
+          Citrus Care
+        </p>
+        <ThemeToggle />
+      </div>
+    </footer>
   );
 }

@@ -11,17 +11,22 @@ import {
 } from "../lib/assess";
 import { captureMode, type CaptureModeKey } from "../lib/capture-modes";
 import type { PreparedPhoto } from "../lib/photo-io";
+import {
+  linkPhotoToAssessment,
+  readPhotoBase64,
+  savePlantPhoto,
+} from "../lib/photo-store-io";
 import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme } from "../lib/theme";
 
 // Post-capture review (design doc §3: capture → analyzing → result). The
 // photo is already downscaled (1600px JPEG q0.85); "Analyze" runs the tested
-// flow in lib/assess.ts (sign-upload → PUT → /assess → parsed diagnosis) and
-// hands the result up to CaptureScreen, which shows DiagnosisScreen. A
-// successfully uploaded photoPath is kept so a retry skips the re-upload.
+// D-16 flow in lib/assess.ts (local save → direct-image /assess → parsed
+// diagnosis) and hands the result up to CaptureScreen, which shows
+// DiagnosisScreen. The saved local uri is kept so a retry skips the re-save.
 
 const PHASE_LABEL: Record<AssessPhase, string> = {
-  uploading: "Uploading…",
+  saving: "Saving photo…",
   analyzing: "Analyzing with Gemini…",
 };
 
@@ -39,8 +44,8 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
   const { t } = useTheme();
   const [phase, setPhase] = useState<AssessPhase | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** Uploaded path kept for retry without re-uploading the same photo (web parity). */
-  const [uploadedPath, setUploadedPath] = useState<string | null>(null);
+  /** Durable local uri kept for retry without re-saving the same photo. */
+  const [savedUri, setSavedUri] = useState<string | null>(null);
   const busy = phase !== null;
 
   const analyze = useCallback(async () => {
@@ -49,11 +54,13 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
       const result = await runAssess(
         {
           api: apiFetch,
-          fetchRaw: (url, init) => fetch(url, init as RequestInit),
+          savePhoto: savePlantPhoto,
+          readPhotoBase64,
+          linkPhoto: linkPhotoToAssessment,
           loadDiagnosis: (id) => fetchDiagnosisRow(supabase, id),
         },
-        { plantId, photoUri: photo.uri, isCutCare: mode === "cut", photoPath: uploadedPath },
-        { onPhase: setPhase, onPhotoUploaded: setUploadedPath },
+        { plantId, photoUri: photo.uri, isCutCare: mode === "cut", savedUri },
+        { onPhase: setPhase, onPhotoSaved: setSavedUri },
       );
       onAssessed(result);
     } catch (e) {
@@ -62,7 +69,7 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
     } finally {
       setPhase(null);
     }
-  }, [mode, onAssessed, photo.uri, plantId, uploadedPath]);
+  }, [mode, onAssessed, photo.uri, plantId, savedUri]);
 
   return (
     <View style={styles.root}>
@@ -101,8 +108,8 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
             </Text>
           )}
         </Pressable>
-        {uploadedPath && !busy ? (
-          <Text style={styles.note}>Photo already uploaded — retrying skips the upload.</Text>
+        {savedUri && !busy ? (
+          <Text style={styles.note}>Photo saved on this phone — retrying skips the save.</Text>
         ) : null}
       </View>
     </View>

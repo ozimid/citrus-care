@@ -14,12 +14,11 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
-import { apiFetch, apiOrigin } from "../lib/api-io";
 import { bandColor, healthBand } from "../lib/health";
 import {
+  attachLocalPhotos,
   fetchPlantDetail,
   parseTimelineDiagnosis,
-  photoUri,
   PLANT_DETAIL_LOAD_ERROR,
   sliderPair,
   trendChipLabel,
@@ -28,6 +27,7 @@ import {
   type TimelineEntry,
 } from "../lib/plant-detail";
 import { deletePlantWithPhotos, GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
+import { deleteLocalPlantPhotos, loadPhotoIndex } from "../lib/photo-store-io";
 import { plantSubLabel } from "../lib/plants";
 import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
@@ -36,9 +36,11 @@ import { DiagnosisScreen } from "./DiagnosisScreen";
 
 // Plant detail (design doc §4 row 6), presented as a Modal over the Plants
 // tab: header with health ring + trend chip, quarantine alert, before/after
-// slider (2+ assessments), reverse-chron timeline with delta chips, and the
+// slider (2+ local photos), reverse-chron timeline with delta chips, and the
 // edit / delete / assess actions. All query + mapping logic is the tested
-// src/lib/plant-detail.ts; mutations are src/lib/plant-mutations.ts.
+// src/lib/plant-detail.ts; mutations are src/lib/plant-mutations.ts. Photos
+// come from the on-phone store (D-16) — plain file uris, no auth headers;
+// assessments without a local photo render a neutral placeholder.
 
 const ROW_OPEN_ERROR = "Couldn't open this assessment. Please try again.";
 
@@ -54,7 +56,6 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
   const { t, scheme } = useTheme();
   const [data, setData] = useState<PlantDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -62,7 +63,10 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 
   const load = useCallback(async () => {
     try {
-      setData(await fetchPlantDetail(supabase, plantId));
+      const detail = await fetchPlantDetail(supabase, plantId);
+      // Join the synced assessments to their on-phone photos (D-16).
+      const index = await loadPhotoIndex();
+      setData({ ...detail, timeline: attachLocalPhotos(detail.timeline, index) });
       setError(null);
     } catch {
       // fetchPlantDetail already logged the details.
@@ -72,22 +76,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 
   useEffect(() => {
     load();
-    // Timeline thumbnails hit the API read proxy with the Bearer token.
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setToken(session?.access_token ?? null);
-    });
   }, [load]);
-
-  const thumbSource = useCallback(
-    (entry: TimelineEntry) =>
-      token
-        ? {
-            uri: photoUri(apiOrigin, entry.photoPath),
-            headers: { Authorization: `Bearer ${token}` },
-          }
-        : null,
-    [token],
-  );
 
   const openRow = useCallback((entry: TimelineEntry) => {
     const diagnosis = parseTimelineDiagnosis(entry.diagnosis);
@@ -103,7 +92,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
     if (!data) return;
     Alert.alert(
       `Delete ${data.plant.name}?`,
-      "This removes the plant and all of its assessments and photos. This can't be undone.",
+      "This removes the plant, all of its assessments, and the photos stored on this phone. This can't be undone.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -112,7 +101,10 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           onPress: async () => {
             setDeleting(true);
             try {
-              await deletePlantWithPhotos({ client: supabase, api: apiFetch }, plantId);
+              await deletePlantWithPhotos(
+                { client: supabase, deleteLocalPhotos: deleteLocalPlantPhotos },
+                plantId,
+              );
               onChanged();
               onClose();
             } catch {
@@ -210,10 +202,10 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
             </Pressable>
           </View>
 
-          {pair && token ? (
+          {pair ? (
             <BeforeAfterSlider
-              before={{ source: thumbSource(pair.before)!, dateLabel: pair.before.dateLabel }}
-              after={{ source: thumbSource(pair.after)!, dateLabel: pair.after.dateLabel }}
+              before={{ source: { uri: pair.before.localUri! }, dateLabel: pair.before.dateLabel }}
+              after={{ source: { uri: pair.after.localUri! }, dateLabel: pair.after.dateLabel }}
               t={t}
             />
           ) : null}
@@ -231,7 +223,6 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
               <TimelineRowCard
                 key={entry.id}
                 entry={entry}
-                source={thumbSource(entry)}
                 onPress={() => openRow(entry)}
                 t={t}
                 scheme={scheme}
@@ -286,13 +277,11 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 
 function TimelineRowCard({
   entry,
-  source,
   onPress,
   t,
   scheme,
 }: {
   entry: TimelineEntry;
-  source: { uri: string; headers: Record<string, string> } | null;
   onPress: () => void;
   t: Tokens;
   scheme: "light" | "dark";
@@ -307,8 +296,13 @@ function TimelineRowCard({
       onPress={onPress}
       style={[styles.card, styles.row, { backgroundColor: t.card, borderColor: t.border }]}
     >
-      {source ? (
-        <Image source={source} style={styles.thumb} accessibilityLabel="Assessment photo" />
+      {/* Local photo when this phone has one; neutral placeholder otherwise. */}
+      {entry.localUri ? (
+        <Image
+          source={{ uri: entry.localUri }}
+          style={styles.thumb}
+          accessibilityLabel="Assessment photo"
+        />
       ) : (
         <View style={[styles.thumb, { backgroundColor: t.border }]} />
       )}

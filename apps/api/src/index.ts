@@ -1,10 +1,9 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { loadLocalEnv } from "./env";
 import assess from "./routes/assess";
-import cleanupOrphans from "./routes/cleanup-orphans";
-import photos from "./routes/photos";
 
 loadLocalEnv();
 
@@ -14,6 +13,12 @@ const app = new Hono();
 // credentials: false — cookie auth only flows same-origin via Next rewrites.
 app.use("*", cors({ origin: "*", credentials: false }));
 
+// Reject oversized bodies before they are buffered (the in-schema 3MB image
+// cap runs post-parse; without this an unauthenticated request could
+// materialize an arbitrarily large JSON string in memory first).
+// 3MB image * 4/3 base64 + JSON envelope headroom.
+app.use("*", bodyLimit({ maxSize: 4_400_000 }));
+
 app.onError((err, c) => {
   console.error("[api] Unhandled error:", err.message);
   return c.json({ error: "Internal server error" }, 500);
@@ -21,8 +26,6 @@ app.onError((err, c) => {
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/assess", assess);
-app.route("/cleanup-orphans", cleanupOrphans);
-app.route("/photos", photos);
 
 export default app;
 
