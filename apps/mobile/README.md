@@ -1,6 +1,6 @@
 # Citrus Care — Mobile (Expo)
 
-Native mobile app per locked decision **D-11** (Obsidian: Architecture § Locked decisions) and the design doc **Design - Citrus Care Native App**. Implemented so far: **Google sign-in + authenticated Plants list** (Welcome screen → Plants tab with health rings, pull-to-refresh, Profile tab with sign-out). Backend is the same Supabase project + `/api/assess` pipeline as `apps/web` — same account, same plants.
+Native mobile app per locked decision **D-11** (Obsidian: Architecture § Locked decisions) and the design doc **Design - Citrus Care Native App**. Implemented so far: **Google sign-in + authenticated Plants list** (Welcome screen → Plants tab with health rings, pull-to-refresh, Profile tab with sign-out), the **new-plant sheet** (same fields/validation as web, shared `newPlantSchema`), and **camera capture** (FAB → full-screen `expo-camera` viewfinder with the three-mode guide Leaf/Whole plant/Cut, gallery import, plant selector, downscale to 1600px JPEG q0.85, review screen — the `/assess` call itself is the next wave). Backend is the same Supabase project + `/api/assess` pipeline as `apps/web` — same account, same plants.
 
 ## Deliberately NOT an npm workspace
 
@@ -65,19 +65,22 @@ npx expo export        # metro production bundle (proves the app builds)
 
 ## Testing (vitest, not jest-expo — why)
 
-Tests target **pure logic modules only** (`src/lib/*.test.ts`): auth session reducer + id_token extraction, plants row mapping/sub-labels/latest-score, health-band thresholds, config resolution. vitest was chosen over jest-expo because these modules import no react-native/expo code, the rest of the monorepo already uses vitest, and it needs zero Babel/transform config. Anything importing react-native stays thin and is exercised by `expo export` bundling instead. Health-band thresholds intentionally mirror `apps/web/app/_lib/health-style.ts` (<40 Poor, <70 Fair, ≥70 Good) — web/mobile parity.
+Tests target **pure logic modules only** (`src/lib/*.test.ts`): auth session reducer + id_token extraction, plants row mapping/sub-labels/latest-score, health-band thresholds, config resolution, new-plant validation/insert-row building, photo downscale math (1600px/q0.85 web parity), capture-mode definitions + plant preselection. vitest was chosen over jest-expo because these modules import no react-native/expo code, the rest of the monorepo already uses vitest, and it needs zero Babel/transform config. Anything importing react-native stays thin and is exercised by `expo export` bundling instead. Health-band thresholds intentionally mirror `apps/web/app/_lib/health-style.ts` (<40 Poor, <70 Fair, ≥70 Good) — web/mobile parity.
 
 ## Structure
 
-- `App.tsx` — session restore + conditional render (Welcome ⇄ tabs); no nav library yet on purpose
-- `src/lib/` — `supabase.ts` (AsyncStorage-persisted client), `auth.ts` (Google → `signInWithIdToken`), `auth-state.ts` (reducer), `plants.ts` (query + mapping), `health.ts` (bands), `config.ts`/`app-config.ts` (env/extra resolution), `theme.ts` (design-doc §5 tokens)
-- `src/screens/` — `WelcomeScreen`, `PlantsScreen`, `ProfileScreen`
-- `src/components/TabBar.tsx` — Plants · camera FAB (disabled, "Soon") · Profile per design §3
+- `App.tsx` — session restore + conditional render (Welcome ⇄ tabs, capture as a full-screen Modal); no nav library yet on purpose
+- `src/lib/` — `supabase.ts` (AsyncStorage-persisted client), `auth.ts` (Google → `signInWithIdToken`), `auth-state.ts` (reducer), `plants.ts` (query + mapping), `new-plant.ts` (form validation → insert payload, shared `newPlantSchema` + 5-digit ZIP rule), `photo.ts` (downscale math mirroring web image-utils) / `photo-io.ts` (thin `expo-image-manipulator` wrapper), `capture-modes.ts` (Leaf/Whole plant/Cut definitions + plant preselection), `health.ts` (bands), `config.ts`/`app-config.ts` (env/extra resolution), `theme.ts` (design-doc §5 tokens)
+- `src/screens/` — `WelcomeScreen`, `PlantsScreen`, `ProfileScreen`, `CaptureScreen` (camera + permission flow), `ReviewScreen` (post-capture, pre-analyze)
+- `src/components/` — `TabBar.tsx` (Plants · Assess FAB · Profile per design §3), `NewPlantSheet.tsx`, `CaptureOverlay.tsx` (mode pill + guide shapes + hint), `PlantPickerSheet.tsx`
+
+## Testing on a phone (never done mobile testing?)
+
+Full from-zero walkthrough (Expo Go preview → credentials → installable EAS dev build → feature checklist) lives in Obsidian: `Project RESOURCES/Citrus Care v1/Testing - Android for Web Developers.md`.
 
 ## Next implementation steps (from the design doc)
 
-1. ~~Google sign-in~~ ✅  2. ~~Plants tab~~ ✅
-3. New-plant sheet (mobile currently points users to the web app to add plants)
-4. Camera capture (`expo-camera`) with the three-mode guide: Leaf close-up (default) / Whole plant / Pruning cut
+1. ~~Google sign-in~~ ✅  2. ~~Plants tab~~ ✅  3. ~~New-plant sheet~~ ✅
+4. ~~Camera capture (`expo-camera`) with the three-mode guide: Leaf close-up (default) / Whole plant / Pruning cut~~ ✅ (ends at the review screen; "Analyze" is disabled until the next step)
 5. `/api/assess` call + diagnosis result screen
 6. Push re-assessment reminders (`expo-notifications`)

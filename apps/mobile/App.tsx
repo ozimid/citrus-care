@@ -1,10 +1,11 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useReducer, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Modal, StyleSheet, View } from "react-native";
 import { TabBar, type Tab } from "./src/components/TabBar";
 import { authReducer, initialAuthState } from "./src/lib/auth-state";
 import { supabase } from "./src/lib/supabase";
 import { useTheme } from "./src/lib/theme";
+import { CaptureScreen } from "./src/screens/CaptureScreen";
 import { PlantsScreen } from "./src/screens/PlantsScreen";
 import { ProfileScreen } from "./src/screens/ProfileScreen";
 import { WelcomeScreen } from "./src/screens/WelcomeScreen";
@@ -39,13 +40,23 @@ export default function App() {
 function Main({ userEmail }: { userEmail: string | null }) {
   const { t } = useTheme();
   const [tab, setTab] = useState<Tab>("plants");
+  const [capturing, setCapturing] = useState(false);
 
   return (
     <View style={[styles.fill, { backgroundColor: t.canvas }]}>
       <View style={styles.fill}>
         {tab === "plants" ? <PlantsScreen /> : <ProfileScreen email={userEmail} />}
       </View>
-      <TabBar active={tab} onSelect={setTab} />
+      <TabBar active={tab} onSelect={setTab} onAssess={() => setCapturing(true)} />
+      {/* Full-screen capture flow over the tabs (design doc §3) — a Modal so
+          no nav library is needed yet. */}
+      <Modal
+        visible={capturing}
+        animationType="slide"
+        onRequestClose={() => setCapturing(false)}
+      >
+        <CaptureScreen onClose={() => setCapturing(false)} />
+      </Modal>
       <StatusBar style="auto" />
     </View>
   );

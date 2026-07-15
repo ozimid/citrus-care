@@ -19,7 +19,19 @@
       "package": "com.citruscare.app"
     },
     "plugins": [
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Citrus Care uses the camera to photograph your plants for health checks."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Citrus Care uses your photo library so you can import plant photos for health checks."
+        }
+      ]
     ],
     "experiments": {
       "onDemandFilesystem": false

@@ -2,16 +2,17 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "../lib/theme";
 
 // Bottom tab bar with a center camera FAB per the native design doc §3:
-// Plants · Assess (FAB, disabled until the capture flow ships) · Profile.
+// Plants · Assess (FAB → full-screen capture) · Profile.
 
 export type Tab = "plants" | "profile";
 
 interface Props {
   active: Tab;
   onSelect: (tab: Tab) => void;
+  onAssess: () => void;
 }
 
-export function TabBar({ active, onSelect }: Props) {
+export function TabBar({ active, onSelect, onAssess }: Props) {
   const { t } = useTheme();
 
   return (
@@ -23,13 +24,15 @@ export function TabBar({ active, onSelect }: Props) {
         onPress={() => onSelect("plants")}
       />
       <View style={styles.fabSlot}>
-        <View
-          accessibilityLabel="Assess — coming soon"
-          style={[styles.fab, { backgroundColor: t.green, opacity: 0.4 }]}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Assess a plant"
+          onPress={onAssess}
+          style={[styles.fab, { backgroundColor: t.green }]}
         >
           <Text style={styles.fabGlyph}>📷</Text>
-        </View>
-        <Text style={[styles.fabHint, { color: t.sub }]}>Soon</Text>
+        </Pressable>
+        <Text style={[styles.fabHint, { color: t.sub }]}>Assess</Text>
       </View>
       <TabButton
         label="Profile"

@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { NewPlantSheet } from "../components/NewPlantSheet";
 import { bandColor, healthBand } from "../lib/health";
 import { fetchPlants, type PlantListItem } from "../lib/plants";
 import { supabase } from "../lib/supabase";
@@ -16,7 +17,8 @@ import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 
 // Plants tab per the native design doc §3/§4: card rows with name, species
 // line and a health ring colored by the shared score bands. RLS scopes the
-// query to the signed-in user; pull-to-refresh re-runs it.
+// query to the signed-in user; pull-to-refresh re-runs it. The "Add plant"
+// button (header + empty state) opens the new-plant sheet.
 
 const GENERIC_LOAD_ERROR = "Could not load your plants. Pull to retry.";
 
@@ -25,6 +27,7 @@ export function PlantsScreen() {
   const [items, setItems] = useState<PlantListItem[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -50,7 +53,17 @@ export function PlantsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: t.canvas }]}>
-      <Text style={[styles.heading, { color: t.text }]}>Your plants</Text>
+      <View style={styles.headerRow}>
+        <Text style={[styles.heading, { color: t.text }]}>Your plants</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add plant"
+          onPress={() => setAdding(true)}
+          style={[styles.addButton, { backgroundColor: t.green }]}
+        >
+          <Text style={[styles.addButtonText, { color: t.onGreen }]}>＋ Add plant</Text>
+        </Pressable>
+      </View>
       {error ? <Text style={[styles.errorBanner, { color: t.danger }]}>{error}</Text> : null}
       {items === null ? (
         <View style={styles.center}>
@@ -64,10 +77,20 @@ export function PlantsScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.green} />
           }
-          ListEmptyComponent={error ? null : <EmptyState t={t} onRetry={onRefresh} />}
+          ListEmptyComponent={
+            error ? null : <EmptyState t={t} onAdd={() => setAdding(true)} />
+          }
           renderItem={({ item }) => <PlantCard item={item} t={t} scheme={scheme} />}
         />
       )}
+      <NewPlantSheet
+        visible={adding}
+        onClose={() => setAdding(false)}
+        onCreated={() => {
+          setAdding(false);
+          load();
+        }}
+      />
     </View>
   );
 }
@@ -129,20 +152,20 @@ function HealthRing({
   );
 }
 
-function EmptyState({ t, onRetry }: { t: Tokens; onRetry: () => void }) {
+function EmptyState({ t, onAdd }: { t: Tokens; onAdd: () => void }) {
   return (
     <View style={styles.center}>
       <Text style={[styles.emptyTitle, { color: t.text }]}>No plants yet</Text>
       <Text style={[styles.emptyBody, { color: t.sub }]}>
-        Add your first plant to start tracking its health. Adding plants happens on the web app for
-        now — it will land here soon.
+        Add your first plant to start tracking its health.
       </Text>
       <Pressable
         accessibilityRole="button"
-        onPress={onRetry}
-        style={[styles.refreshButton, { borderColor: t.border }]}
+        accessibilityLabel="Add plant"
+        onPress={onAdd}
+        style={[styles.emptyCta, { backgroundColor: t.green }]}
       >
-        <Text style={[styles.refreshText, { color: t.green }]}>Refresh</Text>
+        <Text style={[styles.emptyCtaText, { color: t.onGreen }]}>Add plant</Text>
       </Pressable>
     </View>
   );
@@ -152,13 +175,25 @@ const MONO = Platform.select({ ios: "Menlo", android: "monospace", default: "mon
 
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 68 },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginBottom: 12,
+    gap: 12,
+  },
   heading: {
     fontSize: 24,
     fontWeight: "600",
     letterSpacing: -0.4,
-    paddingHorizontal: 20,
-    marginBottom: 12,
   },
+  addButton: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  addButtonText: { fontSize: 13, fontWeight: "600" },
   errorBanner: { fontSize: 13, paddingHorizontal: 20, marginBottom: 8 },
   listContent: { paddingHorizontal: 20, paddingBottom: 24, gap: 10 },
   emptyGrow: { flexGrow: 1 },
@@ -185,12 +220,13 @@ const styles = StyleSheet.create({
   ringText: { fontSize: 13, fontWeight: "700", fontFamily: MONO },
   emptyTitle: { fontSize: 15, fontWeight: "600" },
   emptyBody: { fontSize: 14, lineHeight: 20, textAlign: "center", maxWidth: 280 },
-  refreshButton: {
+  emptyCta: {
     marginTop: 8,
-    borderWidth: 1,
     borderRadius: RADIUS,
-    paddingVertical: 8,
-    paddingHorizontal: 18,
+    paddingVertical: 11,
+    paddingHorizontal: 22,
+    minHeight: 44,
+    justifyContent: "center",
   },
-  refreshText: { fontSize: 14, fontWeight: "600" },
+  emptyCtaText: { fontSize: 14, fontWeight: "600" },
 });
