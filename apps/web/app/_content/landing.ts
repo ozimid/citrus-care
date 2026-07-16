@@ -65,7 +65,7 @@ export const landingContent = {
   proof: [
     "Native Android app built with Expo",
     "Everything stays on your phone — no account, nothing synced",
-    "On-device AI (Gemma) — your photos are never uploaded",
+    "On-device AI — your photos are never uploaded",
   ],
   getApp: {
     title: "Get the app",
