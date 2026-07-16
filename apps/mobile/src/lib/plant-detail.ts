@@ -13,10 +13,13 @@ export const PLANT_DETAIL_LOAD_ERROR = "Could not load this plant.";
 export type PlantDetailRow = Pick<
   Plant,
   "id" | "name" | "plant_type" | "species" | "cultivar" | "location" | "zip_code" | "created_at"
->;
+> & {
+  /** F20 jsonb — untrusted until parseStoredCareProfile validates it. */
+  care_profile?: unknown;
+};
 
 export const PLANT_DETAIL_SELECT =
-  "id,name,plant_type,species,cultivar,location,zip_code,created_at";
+  "id,name,plant_type,species,cultivar,location,zip_code,care_profile,created_at";
 
 /** Timeline columns; photo_path is gone (D-16 — photos never reach the
  * server), is_cut_care lets a row tap restore the assessment's capture mode. */

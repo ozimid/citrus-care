@@ -22,9 +22,11 @@ import {
   type NewPlantFieldErrors,
   type NewPlantForm,
 } from "../lib/new-plant";
+import { apiFetch } from "../lib/api-io";
 import { GENERIC_UPDATE_PLANT_ERROR, updatePlant } from "../lib/plant-mutations";
 import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { requestCareProfile } from "../lib/watering";
 
 // New/edit plant bottom sheet per the native design doc §4 (#5/#7): same
 // fields and validation as the web form (apps/web/app/plants/new/
@@ -96,7 +98,12 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
       if (plant) {
         await updatePlant(supabase, plant.id, result.data);
       } else {
-        await insertPlant(supabase, result.data);
+        const newPlantId = await insertPlant(supabase, result.data);
+        // F20: kick off the plant's care profile and DON'T wait for it. Adding
+        // a plant must never hang on (or fail because of) a Gemini call — a
+        // plant without a profile simply shows no watering guidance, and the
+        // detail screen retries. requestCareProfile swallows its own errors.
+        void requestCareProfile(apiFetch, newPlantId);
         setForm(emptyNewPlantForm);
       }
       setCultivarOpen(false);

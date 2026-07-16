@@ -148,6 +148,88 @@ function buildReason(args: {
   return `${drivers.join(" · ")} — ${tail}`;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * The line the watering card leads with: "Due today" / "Overdue by 3 days" /
+ * "Due tomorrow" / "Due Jul 22". Rendered in LOCAL time — this is the user's
+ * day, and it lines up with the 09:00-18:00 notification window.
+ */
+export function dueLabel(plan: WateringPlan): string {
+  if (plan.daysUntilDue <= -1) {
+    const n = -plan.daysUntilDue;
+    return `Overdue by ${n} ${dayWord(n)}`;
+  }
+  if (plan.isDue) return "Due today";
+  if (plan.daysUntilDue === 1) return "Due tomorrow";
+  const d = new Date(plan.nextWaterDueAt);
+  return `Due ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+/**
+ * One plant's watering inputs as the Plants list carries them (PlantListItem).
+ * Kept structural rather than importing the list type: this module stays pure
+ * and knows nothing about queries.
+ */
+export interface PlanCandidate {
+  id: string;
+  zipCode: string | null;
+  location: string | null;
+  /** Null until /care-profile has generated one — no baseline, no plan. */
+  careProfile: CareProfile | null;
+  lastAssessedAt: string | null;
+}
+
+/**
+ * The ZIPs a list actually needs a forecast for: deduplicated, and only for
+ * plants that could use one. This is what keeps the Plants list at one weather
+ * request per address instead of one per card.
+ */
+export function distinctZips(candidates: PlanCandidate[]): string[] {
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    if (!c.careProfile) continue; // No baseline → the forecast buys nothing.
+    const zip = normalizeZipCode(c.zipCode);
+    if (zip) seen.add(zip);
+  }
+  return [...seen];
+}
+
+/** Local mirror of weather.ts's normalizeZip, kept here so the pure watering
+ * module doesn't depend on the weather module for a trim. */
+function normalizeZipCode(zip: string | null | undefined): string | null {
+  if (typeof zip !== "string") return null;
+  const trimmed = zip.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Plans for a whole list in one pass, from weather already resolved per ZIP
+ * (see distinctZips). Plants without a care profile are simply absent from the
+ * result — no baseline means no guidance, which the UI renders as no chip.
+ */
+export function wateringPlansFor(
+  candidates: PlanCandidate[],
+  weatherByZip: Record<string, WeatherSummary | null>,
+  log: WateringLog,
+  now: Date,
+): Record<string, WateringPlan> {
+  const plans: Record<string, WateringPlan> = {};
+  for (const c of candidates) {
+    if (!c.careProfile) continue;
+    const zip = normalizeZipCode(c.zipCode);
+    plans[c.id] = wateringPlan({
+      careProfile: c.careProfile,
+      location: c.location,
+      weather: zip ? (weatherByZip[zip] ?? null) : null,
+      lastWateredAt: lastWateredAt(log, c.id),
+      lastAssessedAt: c.lastAssessedAt,
+      now,
+    });
+  }
+  return plans;
+}
+
 /** The care_profile jsonb read back from Postgres is untrusted (same rule as
  * the stored diagnosis): junk means "no profile", never bad math. */
 export function parseStoredCareProfile(raw: unknown): CareProfile | null {

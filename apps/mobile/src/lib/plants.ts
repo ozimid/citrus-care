@@ -3,8 +3,9 @@
 // page (apps/web/app/plants/page.tsx). RLS scopes rows to the signed-in user.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Assessment, Plant } from "@citrus/shared";
+import type { Assessment, CareProfile, Plant } from "@citrus/shared";
 import { comparisonDelta } from "./plant-detail";
+import { parseStoredCareProfile } from "./watering";
 
 export type AssessmentScoreRow = Pick<Assessment, "health_score" | "created_at"> & {
   /** jsonb from the embed — untrusted; only comparison.delta is read, safely. */
@@ -17,6 +18,9 @@ export type PlantRow = Pick<
   Plant,
   "id" | "name" | "plant_type" | "species" | "cultivar" | "location" | "created_at"
 > & {
+  zip_code?: string | null;
+  /** jsonb from Postgres — untrusted until parseStoredCareProfile validates it. */
+  care_profile?: unknown;
   assessments?: AssessmentScoreRow[] | null;
 };
 
@@ -29,10 +33,16 @@ export interface PlantListItem {
    * assessment's comparison, "First assessment" when nothing prior existed. */
   trend: string | null;
   createdAt: string;
+  /** F20 watering inputs, carried on the list item so the needs-water chip is
+   * computed locally — no per-card query, no per-card network. */
+  location: string | null;
+  zipCode: string | null;
+  careProfile: CareProfile | null;
+  lastAssessedAt: string | null;
 }
 
 export const PLANTS_SELECT =
-  "id,name,plant_type,species,cultivar,location,created_at,assessments!plant_id(health_score,created_at,diagnosis)";
+  "id,name,plant_type,species,cultivar,location,zip_code,care_profile,created_at,assessments!plant_id(health_score,created_at,diagnosis)";
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
 export function plantSubLabel(row: PlantRow): string {
@@ -59,6 +69,14 @@ export function latestScore(assessments: AssessmentScoreRow[] | null | undefined
   return latestAssessment(assessments)?.health_score ?? null;
 }
 
+/** When the plant was last assessed — the watering math's anchor of last
+ * resort for a plant that has never been logged as watered (watering.ts). */
+export function latestAssessedAt(
+  assessments: AssessmentScoreRow[] | null | undefined,
+): string | null {
+  return latestAssessment(assessments)?.created_at ?? null;
+}
+
 /** Trend chip for the plant card, from the latest assessment's comparison
  * delta (web AssessmentTimeline badge wording). A latest assessment with no
  * comparison had nothing prior to compare — "First assessment". */
@@ -78,6 +96,12 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
     latestScore: latestScore(row.assessments),
     trend: latestTrend(row.assessments),
     createdAt: row.created_at,
+    location: row.location,
+    zipCode: row.zip_code ?? null,
+    // Stored jsonb is untrusted: a profile that no longer parses means "no
+    // watering guidance for this plant", never bad math on a bad baseline.
+    careProfile: parseStoredCareProfile(row.care_profile),
+    lastAssessedAt: latestAssessedAt(row.assessments),
   }));
 }
 

@@ -14,6 +14,7 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
+import { WateringCard } from "../components/WateringCard";
 import { bandColor, healthBand } from "../lib/health";
 import {
   attachLocalPhotos,
@@ -167,6 +168,16 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           ) : null}
 
           <QuarantineCard plant={plant} t={t} scheme={scheme} />
+
+          {/* F20 — weather-aware watering. Renders from the plant row's care
+              profile + the ZIP's cached forecast; degrades to a hint (no ZIP)
+              or a retry (no profile) rather than an error. */}
+          <WateringCard
+            plant={plant}
+            lastAssessedAt={latest?.createdAt ?? null}
+            t={t}
+            onProfileGenerated={load}
+          />
 
           <Pressable
             accessibilityRole="button"

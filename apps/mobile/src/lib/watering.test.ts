@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { CareProfile } from "@citrus/shared";
 import type { WeatherSummary } from "./weather";
 import {
+  distinctZips,
+  dueLabel,
   isIndoor,
   lastWateredAt,
   markWatered,
@@ -10,6 +12,8 @@ import {
   requestCareProfile,
   serializeWateringLog,
   wateringPlan,
+  wateringPlansFor,
+  type PlanCandidate,
   type WateringInput,
 } from "./watering";
 
@@ -33,6 +37,9 @@ const MILD: WeatherSummary = {
   recentPrecipMm: 0,
   meanHumidity: 55,
 };
+
+/** Past PROFILE.temp_max_c (30) — the heat rule fires. */
+const HOT: WeatherSummary = { ...MILD, maxTempC: 34 };
 
 const NOW = new Date("2026-07-15T09:00:00.000Z");
 
@@ -250,6 +257,164 @@ describe("watering log", () => {
     expect(parseWateringLog("{not json")).toEqual({});
     expect(parseWateringLog('["array"]')).toEqual({});
     expect(parseWateringLog('{"plant-1":42}')).toEqual({});
+  });
+});
+
+// The one line the watering card actually leads with. Dates are rendered in
+// LOCAL time (the plant's day, and the notification window's day), so the
+// assertions below build their expectations from local Date parts too.
+
+describe("dueLabel", () => {
+  function labelFor(overrides: Partial<WateringInput> = {}): string {
+    return dueLabel(
+      wateringPlan({
+        careProfile: PROFILE,
+        location: null,
+        weather: MILD,
+        lastWateredAt: null,
+        lastAssessedAt: null,
+        now: NOW,
+        ...overrides,
+      }),
+    );
+  }
+
+  it("says 'Due today' the moment the interval elapses", () => {
+    // Watered exactly one interval (10 days) ago → due right now.
+    expect(labelFor({ lastWateredAt: new Date(NOW.getTime() - 10 * 86400000).toISOString() })).toBe(
+      "Due today",
+    );
+  });
+
+  it("counts the days when the plant is overdue", () => {
+    expect(labelFor({ lastWateredAt: new Date(NOW.getTime() - 13 * 86400000).toISOString() })).toBe(
+      "Overdue by 3 days",
+    );
+  });
+
+  it("uses the singular for a single overdue day", () => {
+    expect(labelFor({ lastWateredAt: new Date(NOW.getTime() - 11 * 86400000).toISOString() })).toBe(
+      "Overdue by 1 day",
+    );
+  });
+
+  it("says 'Due tomorrow' rather than a bare date for the nearest future day", () => {
+    expect(labelFor({ lastWateredAt: new Date(NOW.getTime() - 9 * 86400000).toISOString() })).toBe(
+      "Due tomorrow",
+    );
+  });
+
+  it("names the date for anything further out", () => {
+    const plan = wateringPlan({
+      careProfile: PROFILE,
+      location: null,
+      weather: MILD,
+      lastWateredAt: NOW.toISOString(),
+      lastAssessedAt: null,
+      now: NOW,
+    });
+    const due = new Date(plan.nextWaterDueAt);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    expect(dueLabel(plan)).toBe(`Due ${months[due.getMonth()]} ${due.getDate()}`);
+  });
+});
+
+// The Plants list computes every card's chip in ONE pass. The rule that makes
+// it cheap: weather is looked up per distinct ZIP, never per card — a garden of
+// twenty plants at one address costs one forecast, not twenty.
+
+describe("distinctZips", () => {
+  function candidate(overrides: Partial<PlanCandidate> = {}): PlanCandidate {
+    return {
+      id: "plant-1",
+      zipCode: "90210",
+      location: null,
+      careProfile: PROFILE,
+      lastAssessedAt: null,
+      ...overrides,
+    };
+  }
+
+  it("collapses repeats so several plants at one address cost one lookup", () => {
+    expect(
+      distinctZips([
+        candidate({ id: "a", zipCode: "90210" }),
+        candidate({ id: "b", zipCode: "90210" }),
+        candidate({ id: "c", zipCode: "10001" }),
+      ]),
+    ).toEqual(["90210", "10001"]);
+  });
+
+  it("skips plants with no (or blank) ZIP — nothing to look up", () => {
+    expect(
+      distinctZips([
+        candidate({ id: "a", zipCode: null }),
+        candidate({ id: "b", zipCode: "   " }),
+        candidate({ id: "c", zipCode: "90210" }),
+      ]),
+    ).toEqual(["90210"]);
+  });
+
+  it("ignores plants that have no care profile — their ZIP buys nothing", () => {
+    expect(distinctZips([candidate({ zipCode: "90210", careProfile: null })])).toEqual([]);
+  });
+});
+
+describe("wateringPlansFor", () => {
+  function candidate(overrides: Partial<PlanCandidate> = {}): PlanCandidate {
+    return {
+      id: "plant-1",
+      zipCode: "90210",
+      location: null,
+      careProfile: PROFILE,
+      lastAssessedAt: null,
+      ...overrides,
+    };
+  }
+
+  it("plans every plant that has a profile, reusing one summary per ZIP", () => {
+    const plans = wateringPlansFor(
+      [candidate({ id: "a" }), candidate({ id: "b" })],
+      { "90210": HOT },
+      { a: "2026-07-14T09:00:00.000Z", b: "2026-07-14T09:00:00.000Z" },
+      NOW,
+    );
+    expect(Object.keys(plans).sort()).toEqual(["a", "b"]);
+    // Both saw the same hot forecast → the same shortened interval.
+    expect(plans.a.intervalDays).toBe(7);
+    expect(plans.b.intervalDays).toBe(7);
+    expect(plans.a.weatherAdjusted).toBe(true);
+  });
+
+  it("omits plants with no care profile — no baseline, no plan, no chip", () => {
+    const plans = wateringPlansFor([candidate({ careProfile: null })], { "90210": MILD }, {}, NOW);
+    expect(plans).toEqual({});
+  });
+
+  it("still plans a plant whose weather is unavailable, on its base schedule", () => {
+    const plans = wateringPlansFor([candidate({ zipCode: null })], {}, {}, NOW);
+    expect(plans["plant-1"].intervalDays).toBe(10);
+    expect(plans["plant-1"].weatherAdjusted).toBe(false);
+  });
+
+  it("marks an overdue plant due, anchoring on the last assessment when nothing was logged", () => {
+    const plans = wateringPlansFor(
+      [candidate({ lastAssessedAt: "2026-06-01T09:00:00.000Z" })],
+      { "90210": MILD },
+      {},
+      NOW,
+    );
+    expect(plans["plant-1"].isDue).toBe(true);
+  });
+
+  it("prefers a logged watering over the last assessment as the anchor", () => {
+    const plans = wateringPlansFor(
+      [candidate({ lastAssessedAt: "2026-06-01T09:00:00.000Z" })],
+      { "90210": MILD },
+      { "plant-1": "2026-07-15T09:00:00.000Z" },
+      NOW,
+    );
+    expect(plans["plant-1"].isDue).toBe(false);
   });
 });
 

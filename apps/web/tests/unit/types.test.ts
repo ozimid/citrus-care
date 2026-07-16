@@ -13,6 +13,9 @@ describe("type shapes (sanity)", () => {
       location: "patio",
       zip_code: "94043",
       cover_assessment_id: null,
+      // F20: nullable, but part of the row's shape — null until /care-profile
+      // has generated one.
+      care_profile: null,
       created_at: new Date().toISOString(),
     };
     expect(t.name).toBe("Meyer Lemon");

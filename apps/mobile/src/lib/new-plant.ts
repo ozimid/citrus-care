@@ -109,8 +109,9 @@ export function buildPlantInsertRow(data: NewPlantInput, userId: string) {
 }
 
 /** Thin insert wrapper (same pattern as fetchPlants in plants.ts): generic
- * client-facing message, details only in the console. */
-export async function insertPlant(client: SupabaseClient, data: NewPlantInput): Promise<void> {
+ * client-facing message, details only in the console. Returns the new row's id
+ * — the sheet uses it to kick off the plant's F20 care profile. */
+export async function insertPlant(client: SupabaseClient, data: NewPlantInput): Promise<string> {
   const {
     data: { user },
   } = await client.auth.getUser();
@@ -118,9 +119,19 @@ export async function insertPlant(client: SupabaseClient, data: NewPlantInput): 
     console.error("[insertPlant] no authenticated user");
     throw new Error(GENERIC_CREATE_PLANT_ERROR);
   }
-  const { error } = await client.from("plants").insert(buildPlantInsertRow(data, user.id));
+  const { data: row, error } = await client
+    .from("plants")
+    .insert(buildPlantInsertRow(data, user.id))
+    .select("id")
+    .single();
   if (error) {
     console.error("[insertPlant] insert failed:", error.message);
     throw new Error(GENERIC_CREATE_PLANT_ERROR);
   }
+  const id = (row as { id?: unknown } | null)?.id;
+  if (typeof id !== "string") {
+    console.error("[insertPlant] insert returned no id");
+    throw new Error(GENERIC_CREATE_PLANT_ERROR);
+  }
+  return id;
 }

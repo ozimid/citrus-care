@@ -59,6 +59,12 @@ describe("select constants", () => {
     expect(PLANT_DETAIL_SELECT).toContain("zip_code");
   });
 
+  // F20: the watering card needs the plant's own baseline, and it renders from
+  // the same single plant query — no extra round trip for the profile.
+  it("pulls care_profile for the watering card", () => {
+    expect(PLANT_DETAIL_SELECT).toContain("care_profile");
+  });
+
   it("pulls the timeline columns, WITHOUT photo_path (photos are local-only, D-16)", () => {
     for (const col of ["id", "created_at", "health_score", "diagnosis", "is_cut_care"]) {
       expect(TIMELINE_SELECT).toContain(col);

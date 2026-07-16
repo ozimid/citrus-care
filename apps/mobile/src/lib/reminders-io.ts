@@ -16,11 +16,13 @@ Notifications.setNotificationHandler({
   }),
 });
 
-/** Android needs a channel before anything can be delivered; iOS ignores this. */
+/** Android needs a channel before anything can be delivered; iOS ignores this.
+ * Re-assessment and F20 watering reminders share the one channel (id kept as
+ * "reminders" — changing it would orphan existing installs' settings). */
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
   await Notifications.setNotificationChannelAsync("reminders", {
-    name: "Re-assessment reminders",
+    name: "Plant reminders",
     importance: Notifications.AndroidImportance.DEFAULT,
   });
 }

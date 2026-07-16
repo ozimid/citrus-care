@@ -168,10 +168,9 @@ export async function scheduleWateringReminder(
   }
 
   const now = input.now ?? new Date();
-  // An overdue plant must still fire in the future: start from now, never the
-  // past due date, then clamp into the window.
-  const from = input.dueAt.getTime() > now.getTime() ? input.dueAt : new Date(now.getTime() + 60_000);
-  const date = clampToWateringWindow(from);
+  // An overdue plant must still fire in the future: never the past due date,
+  // and always inside the window.
+  const date = wateringReminderFireDate(input.dueAt, now);
 
   // Best-effort de-dupe: a failed lookup must not block the reminder.
   try {
@@ -196,6 +195,125 @@ export async function scheduleWateringReminder(
     trigger: { type: "date", date },
   });
   return { ok: true, id, date };
+}
+
+export interface WateringDecisionInput {
+  /** Due date from wateringPlan().nextWaterDueAt. */
+  dueAt: Date;
+  now: Date;
+  /** Whether notification permission is ALREADY granted. Never "can we ask". */
+  permissionGranted: boolean;
+  /** ISO fireDate of this plant's existing watering reminder, if any. */
+  scheduledFor: string | null;
+}
+
+export type WateringReminderDecision =
+  | { action: "schedule"; date: Date }
+  | { action: "skip"; reason: "no-permission" | "already-scheduled" };
+
+/** The fire time a plan implies: never in the past, always inside the window. */
+export function wateringReminderFireDate(dueAt: Date, now: Date): Date {
+  const from = dueAt.getTime() > now.getTime() ? dueAt : new Date(now.getTime() + 60_000);
+  return clampToWateringWindow(from);
+}
+
+/**
+ * Should the background sync touch this plant's watering notification? Pure, so
+ * the two rules that matter are testable without an OS:
+ *
+ * 1. No permission → do nothing. The sync path runs on every card render, and
+ *    prompting there would break the contextual-opt-in rule (permission is only
+ *    ever requested on the user's own "Remind me" tap).
+ * 2. Already scheduled for the same moment → do nothing, rather than cancel and
+ *    re-create an identical notification on every render.
+ */
+export function wateringReminderDecision(input: WateringDecisionInput): WateringReminderDecision {
+  if (!input.permissionGranted) return { action: "skip", reason: "no-permission" };
+  const date = wateringReminderFireDate(input.dueAt, input.now);
+  if (input.scheduledFor !== null && new Date(input.scheduledFor).getTime() === date.getTime()) {
+    return { action: "skip", reason: "already-scheduled" };
+  }
+  return { action: "schedule", date };
+}
+
+/** This plant's currently scheduled watering reminders (identifier + fireDate). */
+async function existingWateringReminders(
+  scheduler: ReminderScheduler,
+  plantId: string,
+): Promise<Array<{ identifier: string; fireDate: string | null }>> {
+  // Best-effort everywhere: a lookup failure must never surface to the user.
+  try {
+    const all = await scheduler.getScheduled();
+    return all.filter((req) => isWateringReminderFor(req, plantId)).map((req) => ({
+      identifier: req.identifier,
+      fireDate: typeof req.content.data?.fireDate === "string" ? req.content.data.fireDate : null,
+    }));
+  } catch (e) {
+    console.error("[existingWateringReminders] lookup failed:", (e as Error).message);
+    return [];
+  }
+}
+
+/**
+ * Keep a plant's watering notification in step with its current plan WITHOUT
+ * ever prompting — the counterpart to scheduleWateringReminder (which is the
+ * user's explicit tap and may prompt). Safe to call on every card render.
+ */
+export async function syncWateringReminder(
+  scheduler: ReminderScheduler,
+  input: ScheduleWateringInput,
+): Promise<ScheduleOutcome> {
+  const permission = await scheduler.getPermissions();
+  if (!permission.granted) return { ok: false, reason: "permission-denied" };
+
+  const now = input.now ?? new Date();
+  const existing = await existingWateringReminders(scheduler, input.plantId);
+  const decision = wateringReminderDecision({
+    dueAt: input.dueAt,
+    now,
+    permissionGranted: true,
+    scheduledFor: existing[0]?.fireDate ?? null,
+  });
+  if (decision.action === "skip") {
+    // Permission is granted by the check above, so the only skip left is
+    // "already-scheduled" — a success: the reminder the plan wants is in place.
+    return { ok: true, id: existing[0].identifier, date: wateringReminderFireDate(input.dueAt, now) };
+  }
+
+  for (const req of existing) await scheduler.cancel(req.identifier);
+  const id = await scheduler.schedule({
+    content: {
+      ...wateringReminderContent(input.plantName, input.reason),
+      data: {
+        plantId: input.plantId,
+        plantName: input.plantName,
+        fireDate: decision.date.toISOString(),
+        kind: WATERING_REMINDER_KIND,
+      },
+    },
+    trigger: { type: "date", date: decision.date },
+  });
+  return { ok: true, id, date: decision.date };
+}
+
+/** Drop this plant's watering reminders — the "Watered today" tap, which makes
+ * any pending nudge stale. Best-effort and silent: cancelling a notification is
+ * never worth an error in front of the user. Returns the ids it cancelled. */
+export async function cancelWateringReminders(
+  scheduler: ReminderScheduler,
+  plantId: string,
+): Promise<string[]> {
+  const existing = await existingWateringReminders(scheduler, plantId);
+  const cancelled: string[] = [];
+  for (const req of existing) {
+    try {
+      await scheduler.cancel(req.identifier);
+      cancelled.push(req.identifier);
+    } catch (e) {
+      console.error("[cancelWateringReminders] cancel failed:", (e as Error).message);
+    }
+  }
+  return cancelled;
 }
 
 export interface ReminderListItem {

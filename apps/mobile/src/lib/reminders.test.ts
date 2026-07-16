@@ -4,6 +4,7 @@ import {
   WATERING_WINDOW_END_HOUR,
   WATERING_WINDOW_START_HOUR,
   cancelReminder,
+  cancelWateringReminders,
   clampToWateringWindow,
   formatReminderDate,
   mapScheduledReminders,
@@ -11,7 +12,9 @@ import {
   reminderDate,
   scheduleReminder,
   scheduleWateringReminder,
+  syncWateringReminder,
   wateringReminderContent,
+  wateringReminderDecision,
   type ReminderScheduler,
   type ScheduledReminderRequest,
 } from "./reminders";
@@ -282,5 +285,160 @@ describe("scheduleWateringReminder", () => {
       reason: "permission-denied",
     });
     expect(scheduled).toHaveLength(0);
+  });
+});
+
+// The card re-computes a plant's plan on every open, and the due date moves
+// whenever the weather does. Keeping the scheduled notification in step must
+// NEVER be the thing that pops a permission dialog — that only ever happens on
+// the user's own "Remind me" tap (design doc open question 2). Hence a separate
+// decision this sync path can make without touching the OS.
+
+describe("wateringReminderDecision", () => {
+  const NOW_LOCAL = new Date(2026, 6, 20, 10, 0);
+  const DUE = new Date(2026, 6, 27, 11, 0);
+
+  it("schedules at the clamped due date when permission is already granted", () => {
+    expect(
+      wateringReminderDecision({
+        dueAt: DUE,
+        now: NOW_LOCAL,
+        permissionGranted: true,
+        scheduledFor: null,
+      }),
+    ).toEqual({ action: "schedule", date: DUE });
+  });
+
+  it("stays silent when permission was never granted — the sync path must not prompt", () => {
+    expect(
+      wateringReminderDecision({
+        dueAt: DUE,
+        now: NOW_LOCAL,
+        permissionGranted: false,
+        scheduledFor: null,
+      }),
+    ).toEqual({ action: "skip", reason: "no-permission" });
+  });
+
+  it("leaves an identical existing reminder alone instead of re-scheduling it", () => {
+    expect(
+      wateringReminderDecision({
+        dueAt: DUE,
+        now: NOW_LOCAL,
+        permissionGranted: true,
+        scheduledFor: DUE.toISOString(),
+      }),
+    ).toEqual({ action: "skip", reason: "already-scheduled" });
+  });
+
+  it("re-schedules when the due date moved (weather changed, or the plant was watered)", () => {
+    const decision = wateringReminderDecision({
+      dueAt: new Date(2026, 6, 25, 11, 0),
+      now: NOW_LOCAL,
+      permissionGranted: true,
+      scheduledFor: DUE.toISOString(),
+    });
+    expect(decision).toEqual({ action: "schedule", date: new Date(2026, 6, 25, 11, 0) });
+  });
+
+  it("clamps an out-of-hours due date into the window before comparing", () => {
+    const decision = wateringReminderDecision({
+      dueAt: new Date(2026, 6, 27, 23, 0),
+      now: NOW_LOCAL,
+      permissionGranted: true,
+      scheduledFor: null,
+    });
+    expect(decision).toEqual({ action: "schedule", date: new Date(2026, 6, 28, 9, 0) });
+  });
+
+  it("pulls an overdue plant into the next window rather than firing in the past", () => {
+    const decision = wateringReminderDecision({
+      dueAt: new Date(2026, 6, 1, 9, 0),
+      now: NOW_LOCAL,
+      permissionGranted: true,
+      scheduledFor: null,
+    });
+    expect(decision).toEqual({ action: "schedule", date: new Date(2026, 6, 20, 10, 1) });
+  });
+});
+
+describe("syncWateringReminder", () => {
+  const NOW_LOCAL = new Date(2026, 6, 20, 10, 0);
+  const INPUT = {
+    plantId: "plant-1",
+    plantName: "Mr Lemon",
+    dueAt: new Date(2026, 6, 27, 11, 0),
+    reason: "Every 7 days",
+    now: NOW_LOCAL,
+  };
+
+  it("never asks for permission — it only acts on one already granted", async () => {
+    let asked = 0;
+    const { scheduler, scheduled } = makeScheduler({
+      getPermissions: async () => ({ granted: false, canAskAgain: true }),
+      requestPermissions: async () => {
+        asked += 1;
+        return { granted: true, canAskAgain: false };
+      },
+    });
+    expect(await syncWateringReminder(scheduler, INPUT)).toEqual({
+      ok: false,
+      reason: "permission-denied",
+    });
+    expect(asked).toBe(0);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it("replaces the plant's stale watering reminder when the due date moved", async () => {
+    const existing: ScheduledReminderRequest[] = [
+      {
+        identifier: "stale",
+        content: {
+          data: { plantId: "plant-1", plantName: "Mr Lemon", fireDate: new Date(2026, 6, 22, 9, 0).toISOString(), kind: "watering" },
+        },
+      },
+    ];
+    const { scheduler, scheduled, cancelled } = makeScheduler({ getScheduled: async () => existing });
+    const outcome = await syncWateringReminder(scheduler, INPUT);
+    expect(outcome.ok).toBe(true);
+    expect(cancelled).toEqual(["stale"]);
+    expect(scheduled).toHaveLength(1);
+  });
+
+  it("does nothing when the plant's reminder already matches the plan", async () => {
+    const existing: ScheduledReminderRequest[] = [
+      {
+        identifier: "current",
+        content: {
+          data: { plantId: "plant-1", plantName: "Mr Lemon", fireDate: new Date(2026, 6, 27, 11, 0).toISOString(), kind: "watering" },
+        },
+      },
+    ];
+    const { scheduler, scheduled, cancelled } = makeScheduler({ getScheduled: async () => existing });
+    await syncWateringReminder(scheduler, INPUT);
+    expect(scheduled).toHaveLength(0);
+    expect(cancelled).toEqual([]);
+  });
+});
+
+describe("cancelWateringReminders", () => {
+  it("drops only this plant's watering reminders — tapping 'Watered today' must not silence the rest", async () => {
+    const existing: ScheduledReminderRequest[] = [
+      { identifier: "w1", content: { data: { plantId: "plant-1", kind: "watering" } } },
+      { identifier: "w2", content: { data: { plantId: "plant-2", kind: "watering" } } },
+      { identifier: "reassess", content: { data: { plantId: "plant-1", plantName: "Mr Lemon", fireDate: "x" } } },
+    ];
+    const { scheduler, cancelled } = makeScheduler({ getScheduled: async () => existing });
+    expect(await cancelWateringReminders(scheduler, "plant-1")).toEqual(["w1"]);
+    expect(cancelled).toEqual(["w1"]);
+  });
+
+  it("swallows a lookup failure — cancelling is best-effort, never a user-visible error", async () => {
+    const { scheduler } = makeScheduler({
+      getScheduled: async () => {
+        throw new Error("OS said no");
+      },
+    });
+    expect(await cancelWateringReminders(scheduler, "plant-1")).toEqual([]);
   });
 });
