@@ -35,12 +35,7 @@ export async function savePlantPhoto(plantId: string, sourceUri: string): Promis
   return dest.uri;
 }
 
-/** Read a saved photo back as base64 for the Gemini escalation request. */
-export async function readPhotoBase64(uri: string): Promise<string> {
-  return new File(uri).base64();
-}
-
-/** Record the local uri ↔ assessment id link after /assess persists. */
+/** Record the local uri ↔ assessment id link after an assessment persists. */
 export async function linkPhotoToAssessment(
   assessmentId: string,
   entry: PhotoIndexEntry,

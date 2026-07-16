@@ -2,9 +2,7 @@ import { useCallback, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { RoundButton } from "../components/CaptureOverlay";
 import { useLocalEngine } from "../components/LocalEngineProvider";
-import { apiFetch } from "../lib/api-io";
 import {
-  fetchDiagnosisRow,
   friendlyAssessError,
   runAssess,
   type AssessPhase,
@@ -14,27 +12,25 @@ import {
 import { persistLocalAssessment } from "../lib/local-engine-io";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
-import {
-  linkPhotoToAssessment,
-  readPhotoBase64,
-  savePlantPhoto,
-} from "../lib/photo-store-io";
+import { linkPhotoToAssessment, savePlantPhoto } from "../lib/photo-store-io";
 import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme } from "../lib/theme";
 
-// Post-capture review (design doc §3: capture → analyzing → result). The
-// photo is already downscaled (1600px JPEG q0.85); "Analyze" runs the tested
-// flow in lib/assess.ts (local save → on-device model if the user enabled it,
-// else/on any failure a direct-image /assess → parsed diagnosis) and hands the
+// Post-capture review (design doc §3: capture → analyzing → result). The photo
+// is already downscaled (1600px JPEG q0.85); "Analyze" runs the tested flow in
+// lib/assess.ts (local save → on-device Gemma → parsed diagnosis) and hands the
 // result up to CaptureScreen, which shows DiagnosisScreen. The saved local uri
-// is kept so a retry skips the re-save.
+// is kept so a retry skips the re-save. D-17: Gemma is the only engine, so a
+// phone that can't run it gets an honest, retryable error.
 
-// Deliberately engine-neutral: escalation from the local model to Gemini is
-// silent (D-15 Stage 2), so the label must not promise either one.
 const PHASE_LABEL: Record<AssessPhase, string> = {
   saving: "Saving photo…",
-  analyzing: "Analyzing…",
+  analyzing: "Analyzing on this phone…",
 };
+
+// First inference on a cold model is legitimately slow — say so rather than
+// leaving the user staring at a spinner (there is no cloud to fall back to).
+const SLOW_LABEL = "Still analyzing — the first one takes longer…";
 
 interface Props {
   photo: PreparedPhoto;
@@ -49,6 +45,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
   const { t } = useTheme();
   const localEngine = useLocalEngine();
   const [phase, setPhase] = useState<AssessPhase | null>(null);
+  const [slow, setSlow] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Durable local uri kept for retry without re-saving the same photo. */
   const [savedUri, setSavedUri] = useState<string | null>(null);
@@ -56,22 +53,21 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
    * still on the phone; the user decides whether to keep the assessment. */
   const [rejection, setRejection] = useState<RejectedResult | null>(null);
   const busy = phase !== null;
+  const busyLabel = slow ? SLOW_LABEL : phase ? PHASE_LABEL[phase] : "";
 
   const analyze = useCallback(async (force = false) => {
     setError(null);
     setRejection(null);
+    setSlow(false);
     try {
       const result = await runAssess(
         {
-          api: apiFetch,
           savePhoto: savePlantPhoto,
-          readPhotoBase64,
           linkPhoto: linkPhotoToAssessment,
-          loadDiagnosis: (id) => fetchDiagnosisRow(supabase, id),
           local: {
             isReady: localEngine.isReady,
             // 512px long edge for the local model (the saved copy has this
-            // photo's already-known dimensions); /assess still gets the 1600px.
+            // photo's already-known dimensions).
             prepare: async (uri) =>
               (
                 await downscalePhoto(
@@ -81,13 +77,12 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
                 )
               ).uri,
             generate: localEngine.generate,
-            // An on-device result isn't persisted by /assess (that runs
-            // Gemini) — the phone inserts the row itself, RLS-scoped.
+            // The phone inserts the row itself into the local store.
             persist: (args) => persistLocalAssessment(supabase, args),
           },
         },
         { plantId, photoUri: photo.uri, savedUri, force },
-        { onPhase: setPhase, onPhotoSaved: setSavedUri },
+        { onPhase: setPhase, onPhotoSaved: setSavedUri, onSlow: () => setSlow(true) },
       );
       if (result.status === "rejected") {
         setRejection(result);
@@ -99,6 +94,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       setError(friendlyAssessError(e));
     } finally {
       setPhase(null);
+      setSlow(false);
     }
   }, [localEngine, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
 
@@ -136,7 +132,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={
-            busy ? PHASE_LABEL[phase] : rejection ? "Retake photo" : error ? "Try again" : "Analyze"
+            busy ? busyLabel : rejection ? "Retake photo" : error ? "Try again" : "Analyze"
           }
           disabled={busy}
           onPress={rejection ? onRetake : () => analyze()}
@@ -145,7 +141,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
           {busy ? (
             <View style={styles.analyzeBusy}>
               <ActivityIndicator color={t.onGreen} />
-              <Text style={[styles.analyzeText, { color: t.onGreen }]}>{PHASE_LABEL[phase]}</Text>
+              <Text style={[styles.analyzeText, { color: t.onGreen }]}>{busyLabel}</Text>
             </View>
           ) : (
             <Text style={[styles.analyzeText, { color: t.onGreen }]}>
