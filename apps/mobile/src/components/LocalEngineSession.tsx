@@ -17,8 +17,14 @@ initExecutorch({ resourceFetcher: ExpoResourceFetcher });
 
 /** Gemma 4 E2B multimodal (~1.3 GB quantized, Apache 2.0) — the research
  * doc's pick; vulkan on Android, mlx on iOS, resolved by the model registry.
- * Same model the Stage 1 spike measured against the go/no-go bar. */
-const LOCAL_MODEL = models.llm.gemma4_e2b_multimodal();
+ * Same model the Stage 1 spike measured against the go/no-go bar.
+ *
+ * THE single model swap point: the spike screen imports this constant, so a
+ * future substitution (a newer multimodal registry entry, or a self-hosted
+ * .pte via a custom source) changes app + measurement lab together. Prompts
+ * and the go/no-go bar are tuned per model — re-run the spike before shipping
+ * a swap. */
+export const LOCAL_MODEL = models.llm.gemma4_e2b_multimodal();
 
 /** One generation request. `imageUri` set = a multimodal (diagnosis) call;
  * absent = a text-only (care-profile) call — Gemma 4 is an LLM with vision, so

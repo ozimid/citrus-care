@@ -17,8 +17,9 @@ import {
   Text,
   View,
 } from "react-native";
-import { initExecutorch, models, useLLM } from "react-native-executorch";
+import { initExecutorch, useLLM } from "react-native-executorch";
 import { ExpoResourceFetcher } from "react-native-executorch-expo-resource-fetcher";
+import { LOCAL_MODEL } from "../components/LocalEngineSession";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import {
@@ -40,10 +41,6 @@ import {
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 
 initExecutorch({ resourceFetcher: ExpoResourceFetcher });
-
-/** Gemma 4 E2B multimodal (~1.3 GB quantized, Apache 2.0) — vulkan backend on
- * Android, mlx on iOS, resolved by the library's model registry. */
-const SPIKE_MODEL = models.llm.gemma4_e2b_multimodal();
 
 const MODEL_LOAD_ERROR =
   "The model couldn't be downloaded or initialized. Check your connection and free storage, then try again.";
@@ -155,7 +152,7 @@ function SpikeSession({
   onRecord: (run: SpikeRun) => void;
   onReinit: () => void;
 }) {
-  const llm = useLLM({ model: SPIKE_MODEL });
+  const llm = useLLM({ model: LOCAL_MODEL });
   const loadStartRef = useRef(Date.now());
   const sawDownloadRef = useRef(false);
   const downloadDoneAtRef = useRef<number | null>(null);
