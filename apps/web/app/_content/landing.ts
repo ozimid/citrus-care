@@ -96,8 +96,7 @@ export const landingContent = {
   support: {
     title: "Support the app",
     body: "Citrus Care is free and always on-device. If it helps your garden, you can buy me a coffee.",
-    // Replaced with the real Buy Me a Coffee page.
-    cta: { label: "Buy me a coffee ☕", href: "https://www.buymeacoffee.com/" },
+    cta: { label: "Buy me a coffee ☕", href: "https://buymeacoffee.com/citruscare" },
   },
 } as const;
 
