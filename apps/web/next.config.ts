@@ -23,18 +23,8 @@ const nextConfig: NextConfig = {
     ...lanDevOrigins(),
     ...lanDevOrigins().map((ip) => `${ip}:3002`),
   ],
-  // The AI pipeline lives in the standalone API service (apps/api). The
-  // mobile app reaches it through these rewrites in dev (the port the phone
-  // already trusts); direct Bearer-auth access to apps/api remains valid.
-  // API_ORIGIN is read at build time (set it when deploying).
-  async rewrites() {
-    const apiOrigin = process.env.API_ORIGIN ?? "http://localhost:3003";
-    return [
-      { source: "/api/assess", destination: `${apiOrigin}/assess` },
-      // F20: the phone's one care-profile call per plant.
-      { source: "/api/care-profile", destination: `${apiOrigin}/care-profile` },
-    ];
-  },
+  // D-17: the web app is a fully static marketing landing. There is no API to
+  // proxy — the AI runs on-device in the app, and there is no backend at all.
 };
 
 export default nextConfig;

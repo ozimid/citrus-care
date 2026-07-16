@@ -3,8 +3,11 @@ import Link from "next/link";
 import {
   Camera,
   CheckCircle2,
+  Coffee,
+  Download,
   History,
   Leaf,
+  Lock,
   Scissors,
   ShieldAlert,
   Smartphone,
@@ -40,6 +43,8 @@ export function LandingPage({
       <CareModesSection content={content} />
       <FocusSection content={content} />
       <GetAppSection content={content} />
+      <PrivacySection content={content} />
+      <SupportSection content={content} />
       <Footer />
     </main>
   );
@@ -270,16 +275,103 @@ function GetAppSection({ content }: { content: LandingContent }) {
           {getApp.description}
         </p>
 
-        <div className="mt-8 max-w-md rounded-md border bg-background p-5">
+        <div className="mt-8 grid gap-4 lg:grid-cols-[minmax(0,20rem)_1fr]">
+          <div className="rounded-md border bg-background p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-md bg-emerald-100 text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
+                <Smartphone className="size-5" aria-hidden="true" />
+              </div>
+              <h3 className="font-semibold">Android</h3>
+            </div>
+            <a
+              href={getApp.download.href}
+              className={cn(
+                buttonVariants({ size: "lg" }),
+                "mt-5 w-full bg-emerald-600 text-white hover:bg-emerald-500",
+              )}
+            >
+              <Download className="size-4" aria-hidden="true" />
+              {getApp.download.label}
+            </a>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              {getApp.download.note}
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-md border bg-background p-5">
+              <h3 className="font-semibold">Before you install</h3>
+              <ul className="mt-4 space-y-3">
+                {getApp.requirements.map((item) => (
+                  <li key={item} className="flex gap-3 text-sm leading-6 text-muted-foreground">
+                    <CheckCircle2
+                      className="mt-0.5 size-4 shrink-0 text-emerald-700 dark:text-emerald-300"
+                      aria-hidden="true"
+                    />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="rounded-md border bg-background p-5">
+              <h3 className="font-semibold">Installing</h3>
+              <ol className="mt-4 space-y-3">
+                {getApp.installSteps.map((step, index) => (
+                  <li key={step} className="flex gap-3 text-sm leading-6 text-muted-foreground">
+                    <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
+                      {index + 1}
+                    </span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PrivacySection({ content }: { content: LandingContent }) {
+  const { privacy } = content;
+  return (
+    <section id="privacy" className="border-b bg-background py-14 sm:py-18">
+      <div className="mx-auto max-w-6xl px-5 sm:px-8 lg:px-10">
+        <div className="max-w-2xl rounded-md border bg-muted/25 p-6">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-md bg-emerald-100 text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
-              <Smartphone className="size-5" aria-hidden="true" />
+              <Lock className="size-5" aria-hidden="true" />
             </div>
-            <h3 className="font-semibold">{getApp.android.platform}</h3>
+            <h2 className="text-2xl font-semibold">{privacy.title}</h2>
           </div>
-          <p className="mt-4 text-sm leading-6 text-muted-foreground">
-            {getApp.android.note}
-          </p>
+          <p className="mt-4 text-base leading-7 text-muted-foreground">{privacy.body}</p>
+          <Link href="/privacy" className="mt-4 inline-block text-sm font-medium text-emerald-700 underline dark:text-emerald-300">
+            Read the full privacy note
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SupportSection({ content }: { content: LandingContent }) {
+  const { support } = content;
+  return (
+    <section className="bg-[#f6f8f1] py-14 dark:bg-[#151812] sm:py-18">
+      <div className="mx-auto max-w-6xl px-5 sm:px-8 lg:px-10">
+        <div className="flex max-w-2xl flex-col gap-4">
+          <h2 className="text-2xl font-semibold">{support.title}</h2>
+          <p className="text-base leading-7 text-muted-foreground">{support.body}</p>
+          <a
+            href={support.cta.href}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(buttonVariants({ size: "lg" }), "w-fit bg-amber-400 text-neutral-950 hover:bg-amber-300")}
+          >
+            <Coffee className="size-4" aria-hidden="true" />
+            {support.cta.label}
+          </a>
         </div>
       </div>
     </section>
@@ -294,7 +386,12 @@ function Footer() {
           <Leaf className="size-4" aria-hidden="true" />
           Citrus Care
         </p>
-        <ThemeToggle />
+        <div className="flex items-center gap-4">
+          <Link href="/privacy" className="text-sm text-muted-foreground underline">
+            Privacy
+          </Link>
+          <ThemeToggle />
+        </div>
       </div>
     </footer>
   );
