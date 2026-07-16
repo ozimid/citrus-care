@@ -88,6 +88,7 @@ If your change conflicts with Architecture or the PRD, stop and surface it befor
 - **Trunk-based.** Commit directly to `main`. CI gates push.
 - **No new files just because.** Edit existing files first. Files >250 lines → consider splitting.
 - **No `tags:` field in any new Obsidian doc.** Frontmatter is `date / last_updated / purpose / parent / related / status / sources`.
+- **A new migration is not "done" until it is applied to the live DB.** There is no CLI/link here — the user runs the SQL by hand in the Supabase dashboard. Shipping a `select` that names a new column before that lands makes PostgREST reject the WHOLE query (error `42703`), which looks exactly like "all my data is gone". Whenever a commit adds `supabase/migrations/*`, hand the user the SQL in the same breath.
 
 ## Session-end maintenance
 
