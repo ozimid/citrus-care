@@ -78,7 +78,13 @@ export const landingContent = {
       // Evergreen: releases/latest always points at the newest GitHub Release,
       // so publishing a new release updates this link with no code change.
       href: "https://github.com/ozimid/citrus-care/releases/latest/download/citrus-care.apk",
-      note: "Installs directly — no Play Store. Your browser will ask you to allow installing apps the first time.",
+      // Friend feedback 2026-07-16: "no Play Store? scary to install" — name
+      // the warning honestly and let skeptics verify the code themselves.
+      note: "Installs directly — no Play Store yet. Your browser will warn about apps from outside the store; that's normal for a direct download.",
+      source: {
+        label: "Don't trust it? The full source code is public — check it on GitHub",
+        href: "https://github.com/ozimid/citrus-care",
+      },
     },
     requirements: [
       "A recent Android phone with about 2 GB of free storage",

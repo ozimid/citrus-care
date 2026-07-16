@@ -296,6 +296,14 @@ function GetAppSection({ content }: { content: LandingContent }) {
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
               {getApp.download.note}
             </p>
+            <a
+              href={getApp.download.source.href}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block text-sm font-medium text-emerald-700 underline dark:text-emerald-300"
+            >
+              {getApp.download.source.label}
+            </a>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
