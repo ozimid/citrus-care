@@ -15,8 +15,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://citruscare.net"),
   title: "Citrus Care",
-  description: "Photo-driven citrus tree care with AI diagnosis and history.",
+  description:
+    "Snap a plant photo, get a scored diagnosis — AI running on your phone. No account, no cloud, free Android app.",
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: "Citrus Care — private, on-device plant care",
+    description:
+      "Photo-driven plant health diagnosis with AI that runs entirely on your phone. Nothing leaves the device.",
+    url: "/",
+    siteName: "Citrus Care",
+    images: ["/landing-citrus-assessment.png"],
+  },
   manifest: "/manifest.json",
   applicationName: "Citrus Care",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent" },
