@@ -27,6 +27,11 @@ export async function getWateringLog(): Promise<WateringLog> {
   }
 }
 
+/** Replace the whole watering log (backup import). Throws on a write failure. */
+export async function saveWateringLog(log: WateringLog): Promise<void> {
+  await AsyncStorage.setItem(WATERING_LOG_STORAGE_KEY, serializeWateringLog(log));
+}
+
 /**
  * Record a "Watered today" tap and return the updated log, so the caller can
  * recompute the plan without a second read. Throws on a write failure: this one

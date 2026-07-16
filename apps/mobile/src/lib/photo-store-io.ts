@@ -25,6 +25,11 @@ async function savePhotoIndex(index: PhotoIndex): Promise<void> {
   await AsyncStorage.setItem(PHOTO_INDEX_STORAGE_KEY, serializePhotoIndex(index));
 }
 
+/** Replace the whole photo index (backup import). */
+export async function replacePhotoIndex(index: PhotoIndex): Promise<void> {
+  await savePhotoIndex(index);
+}
+
 /** Copy a (downscaled, temp-cache) JPEG into the durable per-plant photos
  * directory: documents/photos/{plantId}/{name}.jpg. Returns the new uri. */
 export async function savePlantPhoto(plantId: string, sourceUri: string): Promise<string> {

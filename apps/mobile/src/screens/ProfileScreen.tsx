@@ -12,6 +12,7 @@ import {
   needsDownloadWarning,
 } from "../lib/local-engine";
 import { availableDiskSpaceBytes } from "../lib/local-engine-io";
+import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, useTheme } from "../lib/theme";
@@ -88,6 +89,8 @@ export function ProfileScreen() {
 
       <LocalEngineCard />
 
+      <DataCard />
+
       <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
         <Text style={[styles.label, { color: t.sub }]}>About</Text>
         <View style={styles.aboutRow}>
@@ -125,6 +128,83 @@ export function ProfileScreen() {
       <Text style={[styles.foot, { color: t.sub }]}>
         Your plants, photos and history live only on this phone — nothing is sent to a server.
       </Text>
+    </View>
+  );
+}
+
+/** D-17: with nothing synced, a manual export is the only backup. Export writes
+ * a JSON of your plants + history to the share sheet; import merges one back
+ * without overwriting anything already here. Photos stay on the phone. */
+function DataCard() {
+  const { t } = useTheme();
+  const [busy, setBusy] = useState<null | "export" | "import">(null);
+
+  async function onExport() {
+    setBusy("export");
+    try {
+      const shared = await exportBackup();
+      if (!shared) Alert.alert("Backup saved", "Sharing isn't available on this device.");
+    } catch (e) {
+      console.error("[ProfileScreen] export failed:", (e as Error).message);
+      Alert.alert("Couldn't export", "Something went wrong creating the backup. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onImport() {
+    setBusy("import");
+    try {
+      const added = await importBackup();
+      if (added) {
+        Alert.alert(
+          "Backup imported",
+          `Added ${added.plants} plant${added.plants === 1 ? "" : "s"} and ${added.assessments} assessment${added.assessments === 1 ? "" : "s"}. Existing plants were kept as they are.`,
+        );
+      }
+    } catch (e) {
+      const message = (e as Error).message === BACKUP_IMPORT_INVALID ? BACKUP_IMPORT_INVALID : "Couldn't read that file. Please try again.";
+      Alert.alert("Import failed", message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+      <Text style={[styles.label, { color: t.sub }]}>Your data</Text>
+      <Text style={[styles.dataBody, { color: t.sub }]}>
+        Everything lives on this phone — and it&apos;s gone if you lose it. Export a backup of your
+        plants and history (not the photos) so you can restore it later.
+      </Text>
+      <View style={styles.dataRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Export my data"
+          disabled={busy !== null}
+          onPress={onExport}
+          style={[styles.dataButton, { borderColor: t.border, opacity: busy ? 0.6 : 1 }]}
+        >
+          {busy === "export" ? (
+            <ActivityIndicator color={t.sub} />
+          ) : (
+            <Text style={[styles.dataButtonText, { color: t.text }]}>Export</Text>
+          )}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Import a backup"
+          disabled={busy !== null}
+          onPress={onImport}
+          style={[styles.dataButton, { borderColor: t.border, opacity: busy ? 0.6 : 1 }]}
+        >
+          {busy === "import" ? (
+            <ActivityIndicator color={t.sub} />
+          ) : (
+            <Text style={[styles.dataButtonText, { color: t.text }]}>Import</Text>
+          )}
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -215,6 +295,17 @@ const styles = StyleSheet.create({
   },
   aboutKey: { fontSize: 13 },
   aboutValue: { fontSize: 13, fontWeight: "500", flexShrink: 1 },
+  dataBody: { fontSize: 12, lineHeight: 17, marginBottom: 4 },
+  dataRow: { flexDirection: "row", gap: 10, marginTop: 2 },
+  dataButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: RADIUS,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dataButtonText: { fontSize: 14, fontWeight: "600" },
   engineRow: {
     flexDirection: "row",
     alignItems: "center",
