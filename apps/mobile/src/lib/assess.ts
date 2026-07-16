@@ -1,14 +1,18 @@
-// The assess flow (D-16, local-first): save the downscaled JPEG on the phone
-// FIRST (the photo persists even if analysis fails) → escalate to Gemini by
-// POSTing the base64 image directly to /assess → link the local uri to the
-// persisted assessment id in the photo index. Pure, dependency-injected, and
-// tested; ReviewScreen wires the real photo-store-io/Supabase deps. Raw
-// server/network messages never reach the UI (generic-message rule).
+// The assess flow (D-16 local-first + D-15 Stage 2 engine router): save the
+// downscaled JPEG on the phone FIRST (the photo persists even if analysis
+// fails) → try the on-device model when the user enabled it and it is ready →
+// otherwise (or on ANY local failure) escalate silently to Gemini by POSTing
+// the base64 image directly to /assess → link the local uri to the persisted
+// assessment id in the photo index, recording which engine produced it. Pure,
+// dependency-injected, and tested; ReviewScreen wires the real
+// photo-store-io/Supabase/executorch deps. Raw server/network/model messages
+// never reach the UI (generic-message rule).
 
 import { assessmentDiagnosisSchema, type AssessmentDiagnosis } from "@citrus/shared";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, apiErrorFrom, type AuthorizedFetch } from "./api";
 import type { AssessEngine, PhotoIndexEntry } from "./photo-store";
+import { parseDiagnosisOutput } from "./spike-vlm";
 
 export const PHOTO_SAVE_FAILED_ERROR = "Couldn't save the photo. Please try again.";
 export const ANALYSIS_OFFLINE_ERROR =
@@ -20,11 +24,36 @@ const GENERIC_ERROR = "Something went wrong. Please check your connection and tr
 /** Strings thrown by this module that are safe to show verbatim. */
 const FLOW_ERRORS = new Set([PHOTO_SAVE_FAILED_ERROR, ANALYSIS_OFFLINE_ERROR, RESULT_LOAD_ERROR]);
 
-/** Engine router seam (D-15): every assessment records which engine produced
- * it. Only Gemini escalation exists today; the on-device model plugs in here. */
-const ENGINE: AssessEngine = "gemini";
+/** Hard ceiling on the whole on-device attempt (downscale + inference). The
+ * research doc budgets 3–10 s/photo at 512px; past 20 s the model is stuck or
+ * thrashing and the user is better served by Gemini than by waiting. */
+export const LOCAL_INFERENCE_TIMEOUT_MS = 20_000;
+
+const LOCAL_TIMEOUT_REASON = `on-device inference exceeded ${LOCAL_INFERENCE_TIMEOUT_MS}ms`;
 
 export type AssessPhase = "saving" | "analyzing";
+
+/** The on-device engine, injected. Absent (or not ready) → Gemini, which is
+ * also what every local failure collapses to. Wired in ReviewScreen from the
+ * LocalEngineProvider context; never imported here, so this module stays pure
+ * and the executorch native runtime stays out of the bundle graph. */
+export interface LocalAssessDeps {
+  /** True only when the user opted in AND the model session is loaded. */
+  isReady: () => boolean;
+  /** Downscale the saved photo to 512px long edge — the local model's input
+   * discipline (full-res turns seconds into minutes). Returns a temp uri. */
+  prepare: (uri: string) => Promise<string>;
+  /** Run the local VLM over the prepared image; returns its raw text. */
+  generate: (args: { imageUri: string; isCutCare: boolean }) => Promise<string>;
+  /** Insert the assessment row directly (local-engine-io persistLocalAssessment)
+   * — /assess can't save this one, it runs Gemini. Returns the new id. */
+  persist: (args: {
+    plantId: string;
+    diagnosis: AssessmentDiagnosis;
+    raw: string;
+    isCutCare: boolean;
+  }) => Promise<string>;
+}
 
 export interface AssessDeps {
   /** Bearer-authenticated fetch to apps/api (see api.ts / api-io.ts). */
@@ -38,6 +67,8 @@ export interface AssessDeps {
   linkPhoto: (assessmentId: string, entry: PhotoIndexEntry) => Promise<void>;
   /** Loads the persisted assessment's diagnosis JSON (fetchDiagnosisRow). */
   loadDiagnosis: (assessmentId: string) => Promise<unknown>;
+  /** D-15 Stage 2. Omit for a Gemini-only build. */
+  local?: LocalAssessDeps;
 }
 
 export interface AssessInput {
@@ -62,6 +93,8 @@ export interface AssessResult {
   diagnosis: AssessmentDiagnosis;
   /** Durable on-phone uri of the photo this assessment was made from. */
   localUri: string;
+  /** Which engine actually produced this diagnosis (provenance badge). */
+  engine: AssessEngine;
 }
 
 export async function runAssess(
@@ -83,6 +116,18 @@ export async function runAssess(
   }
 
   hooks.onPhase?.("analyzing");
+
+  // On-device first. Any failure at all — disabled, unready, timeout, throw,
+  // unparseable output, failed insert — falls through to Gemini without a word
+  // to the user; the reason is logged for us instead.
+  if (deps.local?.isReady()) {
+    const local = await tryLocalAssess(deps.local, input, localUri);
+    if (local) {
+      await linkPhotoBestEffort(deps, local.assessmentId, localUri, input.plantId, "on-device");
+      return { ...local, localUri, engine: "on-device" };
+    }
+  }
+
   const imageBase64 = await deps.readPhotoBase64(localUri);
 
   let res;
@@ -108,17 +153,7 @@ export async function runAssess(
   if (!res.ok) throw await apiErrorFrom(res);
   const { id } = (await res.json()) as { id: string };
 
-  // Best-effort: a failed index write only costs a thumbnail, never the result.
-  try {
-    await deps.linkPhoto(id, {
-      localUri,
-      plantId: input.plantId,
-      engine: ENGINE,
-      createdAt: new Date().toISOString(),
-    });
-  } catch (e) {
-    console.error("[runAssess] photo index link failed:", (e as Error).message);
-  }
+  await linkPhotoBestEffort(deps, id, localUri, input.plantId, "gemini");
 
   // The server already Zod-validated Gemini's output before inserting; this
   // re-parse guards the round-trip through Postgres with the same shared schema.
@@ -130,7 +165,82 @@ export async function runAssess(
     throw new Error(RESULT_LOAD_ERROR);
   }
 
-  return { assessmentId: id, diagnosis, localUri };
+  return { assessmentId: id, diagnosis, localUri, engine: "gemini" };
+}
+
+/** A failed index write only costs a thumbnail, never the result. */
+async function linkPhotoBestEffort(
+  deps: AssessDeps,
+  assessmentId: string,
+  localUri: string,
+  plantId: string,
+  engine: AssessEngine,
+): Promise<void> {
+  try {
+    await deps.linkPhoto(assessmentId, {
+      localUri,
+      plantId,
+      engine,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error("[runAssess] photo index link failed:", (e as Error).message);
+  }
+}
+
+/** The whole on-device attempt, bounded and swallowed: returns null for every
+ * failure mode so the caller's only job is "null → escalate". */
+async function tryLocalAssess(
+  local: LocalAssessDeps,
+  input: AssessInput,
+  localUri: string,
+): Promise<{ assessmentId: string; diagnosis: AssessmentDiagnosis } | null> {
+  try {
+    const inference = await withTimeout(
+      localDiagnose(local, input, localUri),
+      LOCAL_INFERENCE_TIMEOUT_MS,
+    );
+    // Unparseable output — already logged with its reason.
+    if (!inference) return null;
+    const assessmentId = await local.persist({
+      plantId: input.plantId,
+      diagnosis: inference.diagnosis,
+      raw: inference.raw,
+      isCutCare: input.isCutCare,
+    });
+    return { assessmentId, diagnosis: inference.diagnosis };
+  } catch (e) {
+    console.error("[runAssess] on-device attempt failed, escalating:", (e as Error).message);
+    return null;
+  }
+}
+
+async function localDiagnose(
+  local: LocalAssessDeps,
+  input: AssessInput,
+  localUri: string,
+): Promise<{ diagnosis: AssessmentDiagnosis; raw: string } | null> {
+  const imageUri = await local.prepare(localUri);
+  const raw = await local.generate({ imageUri, isCutCare: input.isCutCare });
+  // A small local model has no responseSchema enforcement — the shared Zod
+  // schema is the gate, and failing it is a normal, expected escalation.
+  const parsed = parseDiagnosisOutput(raw);
+  if (!parsed.ok) {
+    console.error("[runAssess] on-device output rejected, escalating:", parsed.reason);
+    return null;
+  }
+  return { diagnosis: parsed.diagnosis, raw };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(LOCAL_TIMEOUT_REASON)), ms);
+  });
+  // The abandoned inference keeps running to completion in the native runtime;
+  // we simply stop waiting on it. clearTimeout keeps the timer from pinning
+  // the JS thread awake after a fast win.
+  return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
 }
 
 /** Thin Supabase read for the just-inserted assessment (RLS-scoped). Kept here

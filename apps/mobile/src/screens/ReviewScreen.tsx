@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { RoundButton } from "../components/CaptureOverlay";
+import { useLocalEngine } from "../components/LocalEngineProvider";
 import { apiFetch } from "../lib/api-io";
 import {
   fetchDiagnosisRow,
@@ -10,7 +11,9 @@ import {
   type AssessResult,
 } from "../lib/assess";
 import { captureMode, type CaptureModeKey } from "../lib/capture-modes";
-import type { PreparedPhoto } from "../lib/photo-io";
+import { persistLocalAssessment } from "../lib/local-engine-io";
+import { SPIKE_MAX_DIMENSION } from "../lib/photo";
+import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import {
   linkPhotoToAssessment,
   readPhotoBase64,
@@ -21,13 +24,16 @@ import { RADIUS, useTheme } from "../lib/theme";
 
 // Post-capture review (design doc §3: capture → analyzing → result). The
 // photo is already downscaled (1600px JPEG q0.85); "Analyze" runs the tested
-// D-16 flow in lib/assess.ts (local save → direct-image /assess → parsed
-// diagnosis) and hands the result up to CaptureScreen, which shows
-// DiagnosisScreen. The saved local uri is kept so a retry skips the re-save.
+// flow in lib/assess.ts (local save → on-device model if the user enabled it,
+// else/on any failure a direct-image /assess → parsed diagnosis) and hands the
+// result up to CaptureScreen, which shows DiagnosisScreen. The saved local uri
+// is kept so a retry skips the re-save.
 
+// Deliberately engine-neutral: escalation from the local model to Gemini is
+// silent (D-15 Stage 2), so the label must not promise either one.
 const PHASE_LABEL: Record<AssessPhase, string> = {
   saving: "Saving photo…",
-  analyzing: "Analyzing with Gemini…",
+  analyzing: "Analyzing…",
 };
 
 interface Props {
@@ -42,6 +48,7 @@ interface Props {
 
 export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClose, onAssessed }: Props) {
   const { t } = useTheme();
+  const localEngine = useLocalEngine();
   const [phase, setPhase] = useState<AssessPhase | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Durable local uri kept for retry without re-saving the same photo. */
@@ -58,6 +65,23 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
           readPhotoBase64,
           linkPhoto: linkPhotoToAssessment,
           loadDiagnosis: (id) => fetchDiagnosisRow(supabase, id),
+          local: {
+            isReady: localEngine.isReady,
+            // 512px long edge for the local model (the saved copy has this
+            // photo's already-known dimensions); /assess still gets the 1600px.
+            prepare: async (uri) =>
+              (
+                await downscalePhoto(
+                  uri,
+                  { width: photo.width, height: photo.height },
+                  SPIKE_MAX_DIMENSION,
+                )
+              ).uri,
+            generate: localEngine.generate,
+            // An on-device result isn't persisted by /assess (that runs
+            // Gemini) — the phone inserts the row itself, RLS-scoped.
+            persist: (args) => persistLocalAssessment(supabase, args),
+          },
         },
         { plantId, photoUri: photo.uri, isCutCare: mode === "cut", savedUri },
         { onPhase: setPhase, onPhotoSaved: setSavedUri },
@@ -69,7 +93,7 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
     } finally {
       setPhase(null);
     }
-  }, [mode, onAssessed, photo.uri, plantId, savedUri]);
+  }, [localEngine, mode, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
 
   return (
     <View style={styles.root}>

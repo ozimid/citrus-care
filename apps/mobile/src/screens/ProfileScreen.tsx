@@ -1,8 +1,15 @@
 import * as Application from "expo-application";
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import { useLocalEngine } from "../components/LocalEngineProvider";
 import { apiOrigin } from "../lib/api-io";
 import { signOut } from "../lib/auth";
+import {
+  LOCAL_MODEL_DOWNLOAD_WARNING,
+  localEngineStatusLabel,
+  localEngineSubtitle,
+  needsDownloadWarning,
+} from "../lib/local-engine";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, useTheme } from "../lib/theme";
@@ -83,6 +90,8 @@ export function ProfileScreen({ email }: { email: string | null }) {
         )}
       </View>
 
+      <LocalEngineCard />
+
       <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
         <Text style={[styles.label, { color: t.sub }]}>About</Text>
         <View style={styles.aboutRow}>
@@ -148,6 +157,51 @@ export function ProfileScreen({ email }: { email: string | null }) {
   );
 }
 
+/** D-15 Stage 2: the on-device engine is opt-in and reversible. The toggle
+ * asks before the 1.3 GB download (once), then reports the session state; a
+ * failed session is honest about Gemini covering for it and retries on tap. */
+function LocalEngineCard() {
+  const { t } = useTheme();
+  const { state, settings, setEnabled, retry } = useLocalEngine();
+
+  function toggle(next: boolean) {
+    if (!next || !needsDownloadWarning(settings)) {
+      setEnabled(next);
+      return;
+    }
+    Alert.alert("Download the on-device model?", LOCAL_MODEL_DOWNLOAD_WARNING, [
+      { text: "Not now", style: "cancel" },
+      { text: "Download", onPress: () => setEnabled(true) },
+    ]);
+  }
+
+  const failed = state.kind === "failed";
+  return (
+    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+      <Text style={[styles.label, { color: t.sub }]}>On-device AI (beta)</Text>
+      <View style={styles.engineRow}>
+        <Text style={[styles.engineStatus, { color: failed ? t.danger : t.text }]}>
+          {localEngineStatusLabel(state)}
+        </Text>
+        <Switch
+          accessibilityLabel="On-device AI"
+          value={settings.enabled}
+          onValueChange={toggle}
+          trackColor={{ true: t.green }}
+        />
+      </View>
+      <Text style={[styles.engineSubtitle, { color: t.sub }]}>
+        {localEngineSubtitle(state, settings)}
+      </Text>
+      {failed ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Retry on-device model setup" onPress={retry} hitSlop={8}>
+          <Text style={[styles.devRow, { color: t.green }]}>Try again</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 68, paddingHorizontal: 20, gap: 14 },
   heading: { fontSize: 24, fontWeight: "600", letterSpacing: -0.4 },
@@ -178,6 +232,15 @@ const styles = StyleSheet.create({
   },
   aboutKey: { fontSize: 13 },
   aboutValue: { fontSize: 13, fontWeight: "500", flexShrink: 1 },
+  engineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    minHeight: 32,
+  },
+  engineStatus: { fontSize: 15, fontWeight: "600", flexShrink: 1 },
+  engineSubtitle: { fontSize: 12, lineHeight: 17 },
   devRow: { fontSize: 13, fontWeight: "600", paddingVertical: 6 },
   spikeFallback: { flex: 1, alignItems: "center", justifyContent: "center" },
   signOut: {

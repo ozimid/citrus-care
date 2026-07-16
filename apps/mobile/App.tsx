@@ -1,6 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useReducer, useState } from "react";
 import { ActivityIndicator, Modal, StyleSheet, View } from "react-native";
+import { LocalEngineProvider } from "./src/components/LocalEngineProvider";
 import { TabBar, type Tab } from "./src/components/TabBar";
 import { authReducer, initialAuthState } from "./src/lib/auth-state";
 import { supabase } from "./src/lib/supabase";
@@ -46,29 +47,34 @@ function Main({ userEmail }: { userEmail: string | null }) {
   const [plantsVersion, setPlantsVersion] = useState(0);
 
   return (
-    <View style={[styles.fill, { backgroundColor: t.canvas }]}>
-      <View style={styles.fill}>
-        {tab === "plants" ? (
-          <PlantsScreen refreshToken={plantsVersion} />
-        ) : (
-          <ProfileScreen email={userEmail} />
-        )}
+    // The on-device engine (D-15 Stage 2) is scoped to the signed-in app so
+    // the model session loads once and outlives tab switches and the capture
+    // modal. Opt-in and lazy: signed-out users never touch executorch.
+    <LocalEngineProvider>
+      <View style={[styles.fill, { backgroundColor: t.canvas }]}>
+        <View style={styles.fill}>
+          {tab === "plants" ? (
+            <PlantsScreen refreshToken={plantsVersion} />
+          ) : (
+            <ProfileScreen email={userEmail} />
+          )}
+        </View>
+        <TabBar active={tab} onSelect={setTab} onAssess={() => setCapturing(true)} />
+        {/* Full-screen capture flow over the tabs (design doc §3) — a Modal so
+            no nav library is needed yet. */}
+        <Modal
+          visible={capturing}
+          animationType="slide"
+          onRequestClose={() => setCapturing(false)}
+        >
+          <CaptureScreen
+            onClose={() => setCapturing(false)}
+            onAssessed={() => setPlantsVersion((v) => v + 1)}
+          />
+        </Modal>
+        <StatusBar style="auto" />
       </View>
-      <TabBar active={tab} onSelect={setTab} onAssess={() => setCapturing(true)} />
-      {/* Full-screen capture flow over the tabs (design doc §3) — a Modal so
-          no nav library is needed yet. */}
-      <Modal
-        visible={capturing}
-        animationType="slide"
-        onRequestClose={() => setCapturing(false)}
-      >
-        <CaptureScreen
-          onClose={() => setCapturing(false)}
-          onAssessed={() => setPlantsVersion((v) => v + 1)}
-        />
-      </Modal>
-      <StatusBar style="auto" />
-    </View>
+    </LocalEngineProvider>
   );
 }
 

@@ -1,14 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { ApiError } from "./api";
 import {
   ANALYSIS_OFFLINE_ERROR,
+  LOCAL_INFERENCE_TIMEOUT_MS,
   PHOTO_SAVE_FAILED_ERROR,
   RESULT_LOAD_ERROR,
   friendlyAssessError,
   runAssess,
   type AssessDeps,
   type AssessPhase,
+  type LocalAssessDeps,
 } from "./assess";
 import type { PhotoIndexEntry } from "./photo-store";
 
@@ -69,6 +71,7 @@ describe("runAssess (local-first, direct-image escalation)", () => {
       assessmentId: "assessment-9",
       diagnosis: DIAGNOSIS,
       localUri: "file:///docs/photos/plant-1/saved.jpg",
+      engine: "gemini",
     });
     expect(phases).toEqual(["saving", "analyzing"]);
     expect(saved).toEqual([{ plantId: "plant-1", sourceUri: "file:///tmp/photo.jpg" }]);
@@ -161,6 +164,226 @@ describe("runAssess (local-first, direct-image escalation)", () => {
   it("rejects a diagnosis row that fails the shared Zod schema", async () => {
     const { deps } = makeDeps({ loadDiagnosis: async () => ({ health_score: "not-a-number" }) });
     await expect(runAssess(deps, INPUT)).rejects.toThrow(RESULT_LOAD_ERROR);
+  });
+});
+
+// D-15 Stage 2 router: on-device first, silent Gemini escalation. The local
+// engine is a dep like any other — these tests are the decision table.
+
+const LOCAL_JSON = JSON.stringify({
+  health_score: 81,
+  summary: "Healthy foliage, no visible pests.",
+  symptoms: [],
+  causes: [],
+  recommendations: [{ priority: 1, action: "Keep watering weekly", detail: "Same schedule." }],
+});
+
+function makeLocal(overrides: Partial<LocalAssessDeps> = {}) {
+  const generated: { imageUri: string; isCutCare: boolean }[] = [];
+  const persisted: unknown[] = [];
+  const prepared: string[] = [];
+  const local: LocalAssessDeps = {
+    isReady: () => true,
+    prepare: async (uri) => {
+      prepared.push(uri);
+      return `${uri}#512`;
+    },
+    generate: async (args) => {
+      generated.push(args);
+      return LOCAL_JSON;
+    },
+    persist: async (args) => {
+      persisted.push(args);
+      return "assessment-local-1";
+    },
+    ...overrides,
+  };
+  return { local, generated, persisted, prepared };
+}
+
+describe("runAssess engine router (D-15 Stage 2)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("uses the on-device model when it is ready and its output is valid — no /assess call", async () => {
+    const { local, prepared, generated, persisted } = makeLocal();
+    const { deps, apiCalls, linked } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.engine).toBe("on-device");
+    expect(result.assessmentId).toBe("assessment-local-1");
+    expect(result.diagnosis.health_score).toBe(81);
+    expect(result.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
+
+    // The photo never leaves the phone: no network call at all.
+    expect(apiCalls).toEqual([]);
+
+    // 512px downscale before inference (research doc: full-res = minutes).
+    expect(prepared).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
+    expect(generated).toEqual([
+      { imageUri: "file:///docs/photos/plant-1/saved.jpg#512", isCutCare: false },
+    ]);
+
+    // Persisted directly (that endpoint runs Gemini), raw output kept.
+    expect(persisted).toEqual([
+      { plantId: "plant-1", diagnosis: result.diagnosis, raw: LOCAL_JSON, isCutCare: false },
+    ]);
+
+    // The index records the engine that actually produced the row.
+    expect(linked[0].entry).toMatchObject({ engine: "on-device", plantId: "plant-1" });
+  });
+
+  it("keeps the local photo save first, before any inference", async () => {
+    const order: string[] = [];
+    const { local } = makeLocal({
+      generate: async () => {
+        order.push("generate");
+        return LOCAL_JSON;
+      },
+    });
+    const { deps } = makeDeps({
+      local,
+      savePhoto: async () => {
+        order.push("save");
+        return "file:///docs/photos/plant-1/saved.jpg";
+      },
+    });
+    await runAssess(deps, INPUT);
+    expect(order).toEqual(["save", "generate"]);
+  });
+
+  it("passes cut mode through to the local prompt and the persisted row", async () => {
+    const { local, generated, persisted } = makeLocal();
+    const { deps } = makeDeps({ local });
+    await runAssess(deps, { ...INPUT, isCutCare: true });
+    expect(generated[0].isCutCare).toBe(true);
+    expect(persisted[0]).toMatchObject({ isCutCare: true });
+  });
+
+  it("escalates to Gemini when the user has the local engine disabled or unready", async () => {
+    const { local, generated } = makeLocal({ isReady: () => false });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.engine).toBe("gemini");
+    expect(result.assessmentId).toBe("assessment-9");
+    expect(generated).toEqual([]);
+    expect(apiCalls).toHaveLength(1);
+  });
+
+  it("escalates to Gemini when no local engine is wired at all (default build)", async () => {
+    const { deps, apiCalls } = makeDeps();
+    const result = await runAssess(deps, INPUT);
+    expect(result.engine).toBe("gemini");
+    expect(apiCalls).toHaveLength(1);
+  });
+
+  it("escalates to Gemini when the local model throws (e.g. OOM)", async () => {
+    const { local } = makeLocal({
+      generate: async () => {
+        throw new Error("ExecuTorch: failed to allocate 400MB");
+      },
+    });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.engine).toBe("gemini");
+    expect(apiCalls).toHaveLength(1);
+  });
+
+  it("escalates to Gemini when the local output fails the shared Zod schema", async () => {
+    const { local, persisted } = makeLocal({
+      generate: async () => 'Sure! Here you go: {"health_score": "very bad"}',
+    });
+    const { deps, apiCalls, linked } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.engine).toBe("gemini");
+    expect(result.diagnosis).toEqual(DIAGNOSIS);
+    // Never persist model output that didn't validate.
+    expect(persisted).toEqual([]);
+    expect(apiCalls).toHaveLength(1);
+    expect(linked[0].entry).toMatchObject({ engine: "gemini" });
+  });
+
+  it("escalates to Gemini when the local output contains no JSON at all", async () => {
+    const { local } = makeLocal({ generate: async () => "I cannot see a plant in this image." });
+    const { deps } = makeDeps({ local });
+    expect((await runAssess(deps, INPUT)).engine).toBe("gemini");
+  });
+
+  it("escalates to Gemini when the direct supabase insert of a local result fails", async () => {
+    const { local } = makeLocal({
+      persist: async () => {
+        throw new Error("RLS: new row violates row-level security policy");
+      },
+    });
+    const { deps, apiCalls } = makeDeps({ local });
+    const result = await runAssess(deps, INPUT);
+    expect(result.engine).toBe("gemini");
+    expect(apiCalls).toHaveLength(1);
+  });
+
+  it("never leaks the local failure to the user — the escalated result comes back clean", async () => {
+    const { local } = makeLocal({
+      generate: async () => {
+        throw new Error("ExecuTorch: vulkan device lost");
+      },
+    });
+    const { deps } = makeDeps({ local });
+    // No throw, no error string: the user just gets a diagnosis.
+    await expect(runAssess(deps, INPUT)).resolves.toMatchObject({ diagnosis: DIAGNOSIS });
+    // The reason is logged for us, never surfaced (generic-message rule).
+    expect(console.error).toHaveBeenCalled();
+  });
+});
+
+describe("runAssess local inference hard timeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("abandons a hung local model after LOCAL_INFERENCE_TIMEOUT_MS and escalates", async () => {
+    const { local } = makeLocal({ generate: () => new Promise<string>(() => {}) });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    const pending = runAssess(deps, INPUT);
+    await vi.advanceTimersByTimeAsync(LOCAL_INFERENCE_TIMEOUT_MS + 1);
+
+    const result = await pending;
+    expect(result.engine).toBe("gemini");
+    expect(apiCalls).toHaveLength(1);
+  });
+
+  it("keeps a local result that lands just inside the timeout", async () => {
+    const { local } = makeLocal({
+      generate: () =>
+        new Promise<string>((resolve) => setTimeout(() => resolve(LOCAL_JSON), LOCAL_INFERENCE_TIMEOUT_MS - 1)),
+    });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    const pending = runAssess(deps, INPUT);
+    await vi.advanceTimersByTimeAsync(LOCAL_INFERENCE_TIMEOUT_MS);
+
+    expect((await pending).engine).toBe("on-device");
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("bounds the timeout at 20 s (the agreed on-device budget + headroom)", () => {
+    expect(LOCAL_INFERENCE_TIMEOUT_MS).toBe(20_000);
   });
 });
 

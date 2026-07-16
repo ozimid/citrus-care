@@ -144,6 +144,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         plantId={selectedPlant.id}
         plantName={selectedPlant.name}
         mode={mode}
+        engine={result.engine}
         onDone={onClose}
       />
     );

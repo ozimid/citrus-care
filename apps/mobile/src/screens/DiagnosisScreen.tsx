@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { captureMode, type CaptureModeKey } from "../lib/capture-modes";
 import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
+import type { AssessEngine } from "../lib/photo-store";
 import { formatReminderDate, scheduleReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
@@ -37,10 +38,14 @@ interface Props {
   plantId: string;
   plantName: string;
   mode: CaptureModeKey;
+  /** Which engine produced this diagnosis (D-15 Stage 2 provenance badge).
+   * Omitted when reopening a stored timeline row — the engine isn't a column,
+   * only fresh results know it. */
+  engine?: AssessEngine;
   onDone: () => void;
 }
 
-export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, onDone }: Props) {
+export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, engine, onDone }: Props) {
   const { t, scheme } = useTheme();
   const [reminder, setReminder] = useState<ReminderState>({ kind: "idle" });
 
@@ -91,6 +96,7 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, onDone }:
             <Text style={[styles.bandBadgeText, { color }]}>{band.label}</Text>
           </View>
           <Text style={[styles.summary, { color: t.text }]}>{diagnosis.summary}</Text>
+          {engine ? <EngineBadge t={t} engine={engine} /> : null}
         </View>
 
         {diagnosis.comparison ? (
@@ -204,6 +210,24 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, onDone }:
   );
 }
 
+/** Provenance, stated plainly: emerald when the phone did it, neutral when
+ * Gemini did. An escalation says nothing extra — that a local attempt was made
+ * and dropped is our problem, not the user's. */
+function EngineBadge({ t, engine }: { t: Tokens; engine: AssessEngine }) {
+  const onDevice = engine === "on-device";
+  const color = onDevice ? t.green : t.sub;
+  return (
+    <View
+      accessibilityLabel={onDevice ? "Analyzed on this device" : "Analyzed by Gemini"}
+      style={[styles.engineBadge, { borderColor: color + "55" }]}
+    >
+      <Text style={[styles.engineBadgeText, { color }]}>
+        {onDevice ? "⬤ On-device" : "Gemini"}
+      </Text>
+    </View>
+  );
+}
+
 function Card({ t, title, children }: { t: Tokens; title: string; children: React.ReactNode }) {
   return (
     <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
@@ -264,6 +288,13 @@ const styles = StyleSheet.create({
   scoreKind: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
   bandBadge: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   bandBadgeText: { fontSize: 13, fontWeight: "700" },
+  engineBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  engineBadgeText: { fontSize: 11, fontWeight: "600", letterSpacing: 0.2 },
   summary: { fontSize: 14, lineHeight: 21, textAlign: "center" },
   body: { fontSize: 13, lineHeight: 19 },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
