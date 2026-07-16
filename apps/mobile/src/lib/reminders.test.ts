@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   REMINDER_INTERVALS,
+  WATERING_WINDOW_END_HOUR,
+  WATERING_WINDOW_START_HOUR,
   cancelReminder,
+  clampToWateringWindow,
   formatReminderDate,
   mapScheduledReminders,
   reminderContent,
   reminderDate,
   scheduleReminder,
+  scheduleWateringReminder,
+  wateringReminderContent,
   type ReminderScheduler,
   type ScheduledReminderRequest,
 } from "./reminders";
@@ -153,5 +158,129 @@ describe("mapScheduledReminders", () => {
       { identifier: "y", content: {} },
     ];
     expect(mapScheduledReminders(requests)).toEqual([]);
+  });
+});
+
+// F20 — watering notifications. Local, like the re-assessment reminders above,
+// and scheduled from the deterministic due date the watering math produced.
+// Local-time assertions below are built from local Date parts, so they hold in
+// any timezone the developer/CI happens to run in.
+
+describe("clampToWateringWindow", () => {
+  it("exposes a civilised 9:00-18:00 window", () => {
+    expect(WATERING_WINDOW_START_HOUR).toBe(9);
+    expect(WATERING_WINDOW_END_HOUR).toBe(18);
+  });
+
+  it("leaves a time already inside the window alone", () => {
+    const inside = new Date(2026, 6, 20, 13, 30);
+    expect(clampToWateringWindow(inside)).toEqual(inside);
+  });
+
+  it("pushes an early-morning due time forward to 9am the same day", () => {
+    const out = clampToWateringWindow(new Date(2026, 6, 20, 5, 15));
+    expect([out.getFullYear(), out.getMonth(), out.getDate()]).toEqual([2026, 6, 20]);
+    expect([out.getHours(), out.getMinutes(), out.getSeconds()]).toEqual([9, 0, 0]);
+  });
+
+  it("defers an evening due time to 9am the NEXT day — no 11pm buzz", () => {
+    const out = clampToWateringWindow(new Date(2026, 6, 20, 22, 40));
+    expect([out.getFullYear(), out.getMonth(), out.getDate()]).toEqual([2026, 6, 21]);
+    expect(out.getHours()).toBe(9);
+  });
+
+  it("rolls a late due time across a month boundary correctly", () => {
+    const out = clampToWateringWindow(new Date(2026, 6, 31, 20, 0));
+    expect([out.getFullYear(), out.getMonth(), out.getDate()]).toEqual([2026, 7, 1]);
+    expect(out.getHours()).toBe(9);
+  });
+
+  it("treats 18:00 exactly as outside the window", () => {
+    expect(clampToWateringWindow(new Date(2026, 6, 20, 18, 0)).getDate()).toBe(21);
+    expect(clampToWateringWindow(new Date(2026, 6, 20, 17, 59)).getDate()).toBe(20);
+  });
+});
+
+describe("wateringReminderContent", () => {
+  it("leads with the plant and carries the reason the math produced", () => {
+    const c = wateringReminderContent("Mr Lemon", "Hot week (34°C) — water 3 days sooner");
+    expect(c.title).toContain("Mr Lemon");
+    expect(c.title.toLowerCase()).toContain("water");
+    expect(c.body).toBe("Hot week (34°C) — water 3 days sooner");
+  });
+});
+
+describe("scheduleWateringReminder", () => {
+  const NOW_LOCAL = new Date(2026, 6, 20, 10, 0);
+  const INPUT = {
+    plantId: "plant-1",
+    plantName: "Mr Lemon",
+    dueAt: new Date(2026, 6, 27, 11, 0),
+    reason: "Every 7 days",
+    now: NOW_LOCAL,
+  };
+
+  it("schedules at the due date when it already falls inside the window", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    const outcome = await scheduleWateringReminder(scheduler, INPUT);
+
+    expect(outcome.ok).toBe(true);
+    expect(scheduled).toHaveLength(1);
+    const req = scheduled[0] as { content: { data: Record<string, unknown> }; trigger: { date: Date } };
+    expect(req.trigger.date).toEqual(new Date(2026, 6, 27, 11, 0));
+    expect(req.content.data).toMatchObject({ plantId: "plant-1", kind: "watering" });
+  });
+
+  it("moves a due date landing at night into the next morning's window", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    await scheduleWateringReminder(scheduler, { ...INPUT, dueAt: new Date(2026, 6, 27, 23, 0) });
+    const date = (scheduled[0] as { trigger: { date: Date } }).trigger.date;
+    expect([date.getDate(), date.getHours()]).toEqual([28, 9]);
+  });
+
+  it("schedules an already-overdue plant into the NEXT window, never in the past", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    const outcome = await scheduleWateringReminder(scheduler, {
+      ...INPUT,
+      dueAt: new Date(2026, 6, 1, 9, 0), // long overdue
+    });
+    expect(outcome.ok).toBe(true);
+    const date = (scheduled[0] as { trigger: { date: Date } }).trigger.date;
+    expect(date.getTime()).toBeGreaterThan(NOW_LOCAL.getTime());
+  });
+
+  it("replaces the plant's previous watering reminder instead of stacking them", async () => {
+    const existing: ScheduledReminderRequest[] = [
+      {
+        identifier: "old-watering",
+        content: { data: { plantId: "plant-1", plantName: "Mr Lemon", fireDate: "x", kind: "watering" } },
+      },
+      {
+        identifier: "other-plant",
+        content: { data: { plantId: "plant-2", plantName: "Fig", fireDate: "x", kind: "watering" } },
+      },
+      {
+        identifier: "reassess",
+        content: { data: { plantId: "plant-1", plantName: "Mr Lemon", fireDate: "x" } },
+      },
+    ];
+    const { scheduler, scheduled, cancelled } = makeScheduler({ getScheduled: async () => existing });
+    await scheduleWateringReminder(scheduler, INPUT);
+
+    // Only this plant's watering reminder is replaced; the re-assessment
+    // reminder and other plants' reminders survive.
+    expect(cancelled).toEqual(["old-watering"]);
+    expect(scheduled).toHaveLength(1);
+  });
+
+  it("does not schedule when notification permission is denied", async () => {
+    const { scheduler, scheduled } = makeScheduler({
+      getPermissions: async () => ({ granted: false, canAskAgain: false }),
+    });
+    expect(await scheduleWateringReminder(scheduler, INPUT)).toEqual({
+      ok: false,
+      reason: "permission-denied",
+    });
+    expect(scheduled).toHaveLength(0);
   });
 });

@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { assessmentDiagnosisSchema } from "@citrus/shared";
-import type { Assessment, AssessmentDiagnosis } from "@citrus/shared";
+import { assessmentDiagnosisSchema, careProfileSchema } from "@citrus/shared";
+import type { Assessment, AssessmentDiagnosis, CareProfile, Plant } from "@citrus/shared";
 
 export function buildSystemPrompt(isCutCare?: boolean): string {
   if (isCutCare) {
@@ -94,6 +94,70 @@ export function buildUserMessageText(args: {
   return lines.join("\n");
 }
 
+
+// ------------------------------------------------------------------
+// F20 — care profile: ONE text call per plant, at creation. The model supplies
+// only the horticultural baseline; the weather adjustment and the next-water
+// date are deterministic math on the phone (src/lib/watering.ts).
+// ------------------------------------------------------------------
+
+export type CareProfilePlant = Pick<
+  Plant,
+  "name" | "plant_type" | "species" | "cultivar" | "location" | "zip_code"
+>;
+
+export function buildCareProfileSystemPrompt(): string {
+  return `You are a plant care expert. Given a plant's identity, you produce a concise, practical care baseline for a home grower.
+
+Rules:
+1. base_watering_interval_days is the interval in FAIR weather for an established plant in normal soil. Be realistic per species: succulents/cacti 14-30, most trees and shrubs 5-10, herbs and vegetables 1-3, tropical foliage 5-8.
+2. temp_min_c / temp_max_c are the comfortable range. Above temp_max_c the plant is heat-stressed; below temp_min_c it is cold-stressed. These are stress thresholds, NOT survival limits.
+3. drought_tolerance: "high" = stores water and forgives a missed watering (succulent, olive, rosemary); "low" = wilts fast and resents drying out (fern, hydrangea, basil).
+4. indoor_ok: true only if the plant genuinely thrives indoors year-round.
+5. water_amount_note: how much per watering, concrete (volume or a rule like "until it drains"). <= 140 characters.
+6. notes: one or two sentences of the single most useful watering/siting habit for this plant. <= 300 characters.
+7. Base the numbers on the species/cultivar given. If the plant is vague, choose a sensible middle-of-the-road baseline rather than an extreme.
+
+Output rules:
+- Respond with VALID JSON ONLY. No prose, no markdown fences.
+- Conform exactly to this shape:
+{
+  "base_watering_interval_days": <number 1..60>,
+  "water_amount_note": "...",
+  "sun": "full|partial|shade",
+  "temp_min_c": <number, degrees Celsius>,
+  "temp_max_c": <number, degrees Celsius>,
+  "drought_tolerance": "low|medium|high",
+  "indoor_ok": <boolean>,
+  "notes": "..."
+}`;
+}
+
+export function buildCareProfileUserText(plant: CareProfilePlant): string {
+  const lines: string[] = [];
+  lines.push(`Plant Name: ${plant.name}`);
+  lines.push(`Plant Type: ${plant.plant_type}`);
+  if (plant.species) lines.push(`Species: ${plant.species}`);
+  if (plant.cultivar) lines.push(`Cultivar: ${plant.cultivar}`);
+  if (plant.location) lines.push(`Location: ${plant.location}`);
+  if (plant.zip_code) lines.push(`ZIP Code: ${plant.zip_code}`);
+  lines.push("");
+  lines.push("Return the care profile JSON as specified.");
+  return lines.join("\n");
+}
+
+export function parseCareProfile(raw: string): CareProfile {
+  const cleaned = stripJsonFences(raw).trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    throw new Error(
+      `Gemini returned non-JSON: ${(e as Error).message} :: ${cleaned.slice(0, 200)}`,
+    );
+  }
+  return careProfileSchema.parse(parsed);
+}
 
 export function parseAssessment(raw: string): AssessmentDiagnosis {
   const cleaned = stripJsonFences(raw).trim();
@@ -226,6 +290,82 @@ export async function callGeminiVision(args: {
   throw lastError instanceof Error
     ? lastError
     : new Error("Gemini API call failed after retries");
+}
+
+const careProfileResponseSchema = {
+  type: Type.OBJECT,
+  properties: {
+    base_watering_interval_days: { type: Type.NUMBER, minimum: 1, maximum: 60 },
+    water_amount_note: { type: Type.STRING },
+    sun: { type: Type.STRING, enum: ["full", "partial", "shade"] },
+    temp_min_c: { type: Type.NUMBER },
+    temp_max_c: { type: Type.NUMBER },
+    drought_tolerance: { type: Type.STRING, enum: ["low", "medium", "high"] },
+    indoor_ok: { type: Type.BOOLEAN },
+    notes: { type: Type.STRING },
+  },
+  required: [
+    "base_watering_interval_days",
+    "water_amount_note",
+    "sun",
+    "temp_min_c",
+    "temp_max_c",
+    "drought_tolerance",
+    "indoor_ok",
+    "notes",
+  ],
+};
+
+/** Text-only sibling of callGeminiVision — same client, same MODEL, same
+ * retry shape. No image: the care profile is derived from plant identity. */
+async function callGeminiText(args: {
+  systemPrompt: string;
+  userText: string;
+}): Promise<string> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+  let lastError: unknown = null;
+  const maxRetries = 2;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: MODEL,
+        contents: [{ role: "user", parts: [{ text: args.userText }] }],
+        config: {
+          systemInstruction: args.systemPrompt,
+          responseMimeType: "application/json",
+          responseSchema: careProfileResponseSchema,
+          maxOutputTokens: 1024,
+        },
+      });
+
+      const text = response.text;
+      if (!text) throw new Error("Gemini returned no text content");
+      return text;
+    } catch (e) {
+      lastError = e;
+      console.warn(`[gemini] care-profile attempt ${attempt} failed:`, (e as Error).message);
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gemini API call failed after retries");
+}
+
+/** The one and only Gemini call a plant's watering guidance ever needs. */
+export async function generateCareProfile(
+  plant: CareProfilePlant,
+): Promise<{ careProfile: CareProfile; raw: string }> {
+  const raw = await callGeminiText({
+    systemPrompt: buildCareProfileSystemPrompt(),
+    userText: buildCareProfileUserText(plant),
+  });
+  return { careProfile: parseCareProfile(raw), raw };
 }
 
 export async function assessPhotoWithGemini(args: {

@@ -94,6 +94,110 @@ export async function cancelReminder(scheduler: ReminderScheduler, id: string): 
   await scheduler.cancel(id);
 }
 
+// ------------------------------------------------------------------
+// F20 — watering reminders. Same local-notification machinery as the
+// re-assessment reminders above, fired at the due date the deterministic
+// watering math produced (src/lib/watering.ts). No server, no push.
+// ------------------------------------------------------------------
+
+/** Quiet hours: a watering nudge is only useful when you can act on it, so
+ * notifications land between 09:00 and 18:00 local. */
+export const WATERING_WINDOW_START_HOUR = 9;
+export const WATERING_WINDOW_END_HOUR = 18;
+
+/** Marks a notification as a watering reminder in its payload, so re-scheduling
+ * can replace exactly this plant's watering nudge and leave the plant's
+ * re-assessment reminder alone. */
+export const WATERING_REMINDER_KIND = "watering";
+
+/** Move a fire time into the next 09:00-18:00 local slot. Before 9 → 9am the
+ * same day; 18:00 or later → 9am tomorrow; inside the window → unchanged. */
+export function clampToWateringWindow(date: Date): Date {
+  const hour = date.getHours();
+  if (hour >= WATERING_WINDOW_START_HOUR && hour < WATERING_WINDOW_END_HOUR) return date;
+  const out = new Date(date);
+  if (hour >= WATERING_WINDOW_END_HOUR) {
+    // setDate rolls month/year boundaries for us.
+    out.setDate(out.getDate() + 1);
+  }
+  out.setHours(WATERING_WINDOW_START_HOUR, 0, 0, 0);
+  return out;
+}
+
+export function wateringReminderContent(
+  plantName: string,
+  reason: string,
+): { title: string; body: string } {
+  return {
+    title: `Time to water ${plantName} 💧`,
+    body: reason,
+  };
+}
+
+export interface ScheduleWateringInput {
+  plantId: string;
+  plantName: string;
+  /** Due date from wateringPlan().nextWaterDueAt. */
+  dueAt: Date;
+  /** wateringPlan().reason — the notification body, so the nudge explains itself. */
+  reason: string;
+  now?: Date;
+}
+
+/** True for this plant's watering reminders only. */
+function isWateringReminderFor(req: ScheduledReminderRequest, plantId: string): boolean {
+  const data = req.content.data ?? {};
+  return data.kind === WATERING_REMINDER_KIND && data.plantId === plantId;
+}
+
+/**
+ * (Re)schedule a plant's watering notification. Any previous watering reminder
+ * for the same plant is cancelled first — the due date moves every time the
+ * weather or a "Watered today" tap changes the math, and stacked notifications
+ * would nag with stale dates.
+ */
+export async function scheduleWateringReminder(
+  scheduler: ReminderScheduler,
+  input: ScheduleWateringInput,
+): Promise<ScheduleOutcome> {
+  let permission = await scheduler.getPermissions();
+  if (!permission.granted) {
+    if (!permission.canAskAgain) return { ok: false, reason: "permission-denied" };
+    permission = await scheduler.requestPermissions();
+    if (!permission.granted) return { ok: false, reason: "permission-denied" };
+  }
+
+  const now = input.now ?? new Date();
+  // An overdue plant must still fire in the future: start from now, never the
+  // past due date, then clamp into the window.
+  const from = input.dueAt.getTime() > now.getTime() ? input.dueAt : new Date(now.getTime() + 60_000);
+  const date = clampToWateringWindow(from);
+
+  // Best-effort de-dupe: a failed lookup must not block the reminder.
+  try {
+    const existing = await scheduler.getScheduled();
+    for (const req of existing) {
+      if (isWateringReminderFor(req, input.plantId)) await scheduler.cancel(req.identifier);
+    }
+  } catch (e) {
+    console.error("[scheduleWateringReminder] could not clear old reminders:", (e as Error).message);
+  }
+
+  const id = await scheduler.schedule({
+    content: {
+      ...wateringReminderContent(input.plantName, input.reason),
+      data: {
+        plantId: input.plantId,
+        plantName: input.plantName,
+        fireDate: date.toISOString(),
+        kind: WATERING_REMINDER_KIND,
+      },
+    },
+    trigger: { type: "date", date },
+  });
+  return { ok: true, id, date };
+}
+
 export interface ReminderListItem {
   id: string;
   plantName: string;

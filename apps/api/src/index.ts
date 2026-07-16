@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { loadLocalEnv } from "./env";
 import assess from "./routes/assess";
+import careProfile from "./routes/care-profile";
 
 loadLocalEnv();
 
@@ -26,6 +27,7 @@ app.onError((err, c) => {
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/assess", assess);
+app.route("/care-profile", careProfile);
 
 export default app;
 

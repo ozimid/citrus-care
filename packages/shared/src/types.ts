@@ -1,5 +1,24 @@
 export type UUID = string;
 
+/**
+ * F20 — the per-plant care baseline. Gemini generates this ONCE, at plant
+ * creation (`POST /care-profile`); everything downstream (weather adjustment,
+ * next-water date) is deterministic math on the phone, so the model never sees
+ * a watering decision. Stored as jsonb on plants.care_profile (migration 0006).
+ */
+export interface CareProfile {
+  /** Fair-weather baseline between waterings, 1..60 days. */
+  base_watering_interval_days: number;
+  water_amount_note: string;
+  sun: "full" | "partial" | "shade";
+  temp_min_c: number;
+  /** Above this the plant is heat-stressed — the watering math shortens. */
+  temp_max_c: number;
+  drought_tolerance: "low" | "medium" | "high";
+  indoor_ok: boolean;
+  notes: string;
+}
+
 export interface Plant {
   id: UUID;
   user_id: UUID;
@@ -10,6 +29,8 @@ export interface Plant {
   location: string | null;
   zip_code: string | null;
   cover_assessment_id: UUID | null;
+  /** Null until /care-profile has generated one (F20). */
+  care_profile: CareProfile | null;
   created_at: string;
 }
 
