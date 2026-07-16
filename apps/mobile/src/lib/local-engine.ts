@@ -16,22 +16,26 @@ export const LOCAL_MODEL_SIZE_LABEL = "1.3 GB";
  * 1.3 GB payload plus room to unpack/cache it without wedging the phone.
  * Deliberately storage-only. There is NO RAM gate: expo-device's totalMemory
  * reports total, not available (false precision), it would cost a new native
- * build, and the router already degrades safely — an OOM escalates to Gemini. */
+ * build, and a phone that truly can't run the model already fails honestly at
+ * assess time with a retryable error — a wrong guess here would block capable
+ * phones for good. */
 export const LOCAL_MODEL_REQUIRED_FREE_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** Everything a user should know BEFORE a 1.3 GB download. Size and the 512px
  * latency discipline come from docs/research/on-device-vlm-native.md; the free
  * space is LOCAL_MODEL_REQUIRED_FREE_BYTES. The RAM/OS line is a rule of thumb
- * (the doc's only device data point is a Galaxy Z Fold-class flagship), which
- * is exactly why the last clause is a promise and not a warning. */
+ * (the doc's only device data point is a Galaxy Z Fold-class flagship); the
+ * last clause is the D-17 deal stated plainly — this model is the only engine,
+ * so nothing is ever sent off the phone, and nothing covers for it either. */
 export const LOCAL_MODEL_REQUIREMENTS =
   `~${LOCAL_MODEL_SIZE_LABEL} download · needs ~2 GB free · works best on 8 GB+ RAM, Android 10+ · ` +
-  `falls back to the cloud automatically if your phone can't keep up`;
+  `does every assessment on this phone — nothing is ever sent anywhere`;
 
 /** Shown before the first download so the size/network cost is a choice. */
 export const LOCAL_MODEL_DOWNLOAD_WARNING =
-  `Downloads a ${LOCAL_MODEL_SIZE_LABEL} model over WiFi (once). After that your photos are analyzed ` +
-  `on this phone — nothing is sent anywhere. Anything the local model can't handle still goes to Gemini.` +
+  `Downloads a ${LOCAL_MODEL_SIZE_LABEL} model over WiFi (once). This model does every assessment: ` +
+  `your photos are analyzed on this phone and nothing is sent anywhere, ever. ` +
+  `If an analysis fails, you just retry — there is no fallback.` +
   `\n\n${LOCAL_MODEL_REQUIREMENTS}`;
 
 /** "1.4 GB" — GB as everyone's storage settings mean it. */
@@ -53,12 +57,13 @@ export function hasRoomForLocalModel(availableBytes: number | null): boolean {
 export function insufficientStorageMessage(availableBytes: number): string {
   return (
     `The on-device model needs about 2 GB free — you have ${formatGigabytes(availableBytes)}. ` +
-    `Free some space and try again. Gemini keeps analyzing your photos meanwhile.`
+    `Free some space and try again — assessments can't run without it.`
   );
 }
 
 export interface LocalEngineSettings {
-  /** The user's opt-in. Off means the router never touches the local model. */
+  /** The user's opt-in. Off means the model is never loaded — and since it is
+   * the only engine (D-17), assessments don't run. */
   enabled: boolean;
   /** True once the model has finished downloading on this phone — suppresses
    * the size warning on re-enable (the files survive a disable). */
@@ -70,8 +75,9 @@ export const DEFAULT_LOCAL_ENGINE_SETTINGS: LocalEngineSettings = {
   downloaded: false,
 };
 
-/** Stored settings are untrusted: anything malformed degrades to "off", which
- * is the safe default (Gemini handles everything). Never throws. */
+/** Stored settings are untrusted: anything malformed degrades to "off", the
+ * safe default (never start a 1.3 GB download on a guess — the assess flow
+ * tells the user how to set the engine up). Never throws. */
 export function parseLocalEngineSettings(json: string | null): LocalEngineSettings {
   if (!json) return DEFAULT_LOCAL_ENGINE_SETTINGS;
   let raw: unknown;
@@ -114,9 +120,9 @@ export type LocalEngineState =
   | { kind: "ready" }
   | { kind: "failed" };
 
-/** settings + session status → what the Profile row shows and whether the
- * router may use the local model. `runtime` is null while the (lazily
- * imported) session component hasn't mounted yet. */
+/** settings + session status → what the Profile row shows and whether an
+ * assessment can run at all. `runtime` is null while the (lazily imported)
+ * session component hasn't mounted yet. */
 export function localEngineState(
   settings: LocalEngineSettings,
   runtime: LocalEngineRuntime | null,
@@ -133,8 +139,9 @@ export function localEngineState(
   return { kind: "preparing" };
 }
 
-/** The single gate the router asks: a diagnosis only runs locally when the
- * session is actually loaded. Every other state escalates to Gemini. */
+/** The single gate the assess flow asks: a diagnosis only runs when the
+ * session is actually loaded. Every other state means no assessment — an
+ * honest, retryable "not ready" error, never a fallback (D-17). */
 export function shouldRouteLocal(state: LocalEngineState): boolean {
   return state.kind === "ready";
 }
@@ -155,7 +162,8 @@ export function localEngineStatusLabel(state: LocalEngineState): string {
 }
 
 /** Row subtitle. Honest about the two things a user can't see: disabling keeps
- * the downloaded files, and a failed/off engine silently means Gemini. */
+ * the downloaded files, and a failed/off engine means assessments don't run at
+ * all — there is no fallback (D-17). */
 export function localEngineSubtitle(
   state: LocalEngineState,
   settings: LocalEngineSettings,
@@ -163,16 +171,16 @@ export function localEngineSubtitle(
   switch (state.kind) {
     case "off":
       return settings.downloaded
-        ? "Gemini is analyzing your photos. The downloaded model stays on this phone — turn this back on any time, or remove it by deleting the app."
-        : `Analyze photos privately on this phone. First use downloads ${LOCAL_MODEL_SIZE_LABEL} over WiFi.`;
+        ? "Assessments are paused while this is off. The downloaded model stays on this phone — turn this back on any time, or remove it by deleting the app."
+        : `Assessments run entirely on this phone and need this model. First use downloads ${LOCAL_MODEL_SIZE_LABEL} over WiFi.`;
     case "downloading":
-      return `Downloading ${LOCAL_MODEL_SIZE_LABEL} over WiFi — one time. Gemini handles assessments meanwhile.`;
+      return `Downloading ${LOCAL_MODEL_SIZE_LABEL} over WiFi — one time. Assessments will work as soon as it finishes.`;
     case "preparing":
       return "Starting the on-device model…";
     case "ready":
-      return "Photos are analyzed on this phone. Anything the local model can't read goes to Gemini automatically.";
+      return "Photos are analyzed on this phone — nothing is sent anywhere, ever.";
     case "failed":
-      return "Couldn't set up the on-device model — Gemini is handling your assessments. Tap to try again.";
+      return "Couldn't set up the on-device model — assessments can't run until this is fixed. Tap to try again.";
   }
 }
 

@@ -16,11 +16,13 @@ import {
   shouldRouteLocal,
   type LocalEngineRuntime,
   type LocalEngineSettings,
+  type LocalEngineState,
 } from "./local-engine";
 
-// D-15 Stage 2: the on-device engine is opt-in (off by default) and the router
-// only uses it once the executorch session reports ready. Everything here is
-// pure — the AsyncStorage/Supabase wiring lives in local-engine-io.ts.
+// D-17: the on-device engine is opt-in (off by default) and the ONLY engine —
+// assess uses it exactly when the executorch session reports ready; every
+// other state is an honest, retryable "not ready", never a fallback.
+// Everything here is pure — the AsyncStorage wiring lives in local-engine-io.ts.
 
 const OFF: LocalEngineSettings = { enabled: false, downloaded: false };
 const ON: LocalEngineSettings = { enabled: true, downloaded: false };
@@ -114,8 +116,30 @@ describe("row copy (honest about what disabling does)", () => {
     expect(localEngineSubtitle({ kind: "off" }, OFF)).toMatch(/1\.3 GB/);
   });
 
-  it("tells the user Gemini is covering them while the local engine is failed", () => {
-    expect(localEngineSubtitle({ kind: "failed" }, ON)).toMatch(/Gemini/);
+  it("is honest that assessments can't run while the engine is failed", () => {
+    const subtitle = localEngineSubtitle({ kind: "failed" }, ON);
+    expect(subtitle).toMatch(/can't run/i);
+    expect(subtitle).toMatch(/try again/i);
+  });
+
+  it("never promises a cloud fallback anywhere — D-17: Gemma is the only engine", () => {
+    const states: LocalEngineState[] = [
+      { kind: "off" },
+      { kind: "downloading", percent: 50 },
+      { kind: "preparing" },
+      { kind: "ready" },
+      { kind: "failed" },
+    ];
+    const settingsVariants = [OFF, ON, ON_CACHED, { enabled: false, downloaded: true }];
+    const allCopy = [
+      LOCAL_MODEL_REQUIREMENTS,
+      LOCAL_MODEL_DOWNLOAD_WARNING,
+      insufficientStorageMessage(1.4 * 1024 * 1024 * 1024),
+      ...states.flatMap((s) => settingsVariants.map((v) => localEngineSubtitle(s, v))),
+    ];
+    for (const text of allCopy) {
+      expect(text).not.toMatch(/gemini|cloud/i);
+    }
   });
 });
 
@@ -125,8 +149,9 @@ describe("row copy (honest about what disabling does)", () => {
 
 // F22 Part 2 — the honest precheck before a 1.3 GB download. Deliberately
 // storage only: no RAM gate (expo-device's totalMemory reports total, not
-// available — false precision for a new native build), because the router
-// already degrades safely (OOM → escalate to Gemini).
+// available — false precision for a new native build), because a phone that
+// can't run the model already fails honestly at assess time (retryable —
+// D-17 left nothing to escalate to).
 
 describe("hasRoomForLocalModel (free-storage precheck)", () => {
   it("asks for ~2 GB — the 1.3 GB model plus unpacking headroom", () => {
@@ -160,12 +185,12 @@ describe("hasRoomForLocalModel (free-storage precheck)", () => {
 });
 
 describe("stated requirements (numbers come from the research doc)", () => {
-  it("states size, free space, the device rule of thumb, and the fallback", () => {
+  it("states size, free space, the device rule of thumb, and that nothing leaves the phone", () => {
     expect(LOCAL_MODEL_REQUIREMENTS).toContain("1.3 GB");
     expect(LOCAL_MODEL_REQUIREMENTS).toContain("2 GB free");
     expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/8 GB\+ RAM/);
     expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/Android 10\+/);
-    expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/falls back to the cloud/i);
+    expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/nothing is ever sent/i);
   });
 
   it("repeats them in the pre-download warning — before the 1.3 GB, not after", () => {

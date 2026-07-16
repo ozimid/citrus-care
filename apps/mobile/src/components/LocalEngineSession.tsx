@@ -6,7 +6,7 @@
 // only in dev/EAS builds — so LocalEngineProvider imports it LAZILY and mounts
 // it only after the user opts in. Everywhere else (Expo Go, opted-out users)
 // this file is never evaluated, and a failure to load it degrades to
-// "Setup failed" → Gemini, exactly like any other local failure.
+// "Setup failed" — retryable, exactly like any other local failure (D-17).
 
 import { useEffect } from "react";
 import { initExecutorch, models, useLLM } from "react-native-executorch";

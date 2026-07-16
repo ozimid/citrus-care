@@ -7,7 +7,7 @@
 // runtime only exists in dev/EAS builds, so the session is a lazy import
 // mounted only after opt-in (same discipline as ProfileScreen's spike row),
 // wrapped in an error boundary so a missing native module degrades to
-// "Setup failed" → Gemini instead of taking the app down.
+// "Setup failed" (retryable; assessments wait) instead of taking the app down.
 
 import {
   Component,
@@ -69,7 +69,7 @@ const OFF_CONTEXT: LocalEngineContextValue = {
 const LocalEngineContext = createContext<LocalEngineContextValue>(OFF_CONTEXT);
 
 /** Never throws when unwrapped: no provider simply means "no local engine",
- * which is a fully supported state (Gemini handles everything). */
+ * a supported state — assess then surfaces its honest "not ready" error. */
 export function useLocalEngine(): LocalEngineContextValue {
   return useContext(LocalEngineContext);
 }

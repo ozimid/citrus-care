@@ -5,9 +5,9 @@
 // is pure and tested; the filesystem/AsyncStorage wiring is the thin
 // photo-store-io.ts (same split as photo.ts vs photo-io.ts).
 
-/** Which engine actually produced the diagnosis (D-15 Stage 2): the on-device
- * Gemma 4 E2B session, or the Gemini escalation that covers everything the
- * local model can't do. Recorded per assessment — the router picks per photo. */
+/** Which engine produced the diagnosis. Since D-17 only "on-device" (Gemma 4
+ * E2B) is ever written — "gemini" stays in the union so index entries recorded
+ * before the pivot still parse instead of being dropped by the sanitizer. */
 export type AssessEngine = "gemini" | "on-device";
 
 export interface PhotoIndexEntry {
