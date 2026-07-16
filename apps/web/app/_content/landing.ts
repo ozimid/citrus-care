@@ -73,10 +73,9 @@ export const landingContent = {
       "Citrus Care is a free Android app. There is no sign-up and no server — your plants, photos, and history live only on your phone.",
     download: {
       label: "Download the APK (161 MB)",
-      // EAS preview build 18196321 (2026-07-16). NOTE: Expo artifact links
-      // expire ~14 days after the build (this one 2026-07-30) — re-link on
-      // each new build, or move to permanent hosting (PRD §0 Next).
-      href: "https://expo.dev/artifacts/eas/CIhyaHTHQ_Tz94k6pHKAtw549zAzyArMhBcX-N-ISKs.apk",
+      // Evergreen: releases/latest always points at the newest GitHub Release,
+      // so publishing a new release updates this link with no code change.
+      href: "https://github.com/ozimid/citrus-care/releases/latest/download/citrus-care.apk",
       note: "Installs directly — no Play Store. Your browser will ask you to allow installing apps the first time.",
     },
     requirements: [
