@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -118,7 +117,10 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
       <View style={styles.backdrop}>
         <Pressable accessibilityLabel="Close" style={styles.backdropTouch} onPress={close} />
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {/* "padding" on BOTH platforms: inside an RN Modal Android never gets
+            the window's adjustResize, so an undefined behavior left the lower
+            fields (ZIP code) hidden under the keyboard (feedback 2026-07-16). */}
+        <KeyboardAvoidingView behavior="padding">
           <View style={[styles.sheet, { backgroundColor: t.card }]}>
             <View style={styles.header}>
               <Text style={[styles.title, { color: t.text }]}>

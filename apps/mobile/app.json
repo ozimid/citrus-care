@@ -23,7 +23,11 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FDE68A"
+      }
     },
     "plugins": [
       "expo-web-browser",
@@ -51,6 +55,7 @@
         "projectId": "db82c83f-6bce-4302-890e-54d22876a148"
       }
     },
-    "owner": "ozimid"
+    "owner": "ozimid",
+    "icon": "./assets/icon.png"
   }
 }
