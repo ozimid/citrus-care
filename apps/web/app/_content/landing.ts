@@ -72,9 +72,11 @@ export const landingContent = {
     description:
       "Citrus Care is a free Android app. There is no sign-up and no server — your plants, photos, and history live only on your phone.",
     download: {
-      label: "Download the APK",
-      // Replaced with the built APK URL once the app is published.
-      href: "#",
+      label: "Download the APK (161 MB)",
+      // EAS preview build 18196321 (2026-07-16). NOTE: Expo artifact links
+      // expire ~14 days after the build (this one 2026-07-30) — re-link on
+      // each new build, or move to permanent hosting (PRD §0 Next).
+      href: "https://expo.dev/artifacts/eas/CIhyaHTHQ_Tz94k6pHKAtw549zAzyArMhBcX-N-ISKs.apk",
       note: "Installs directly — no Play Store. Your browser will ask you to allow installing apps the first time.",
     },
     requirements: [
