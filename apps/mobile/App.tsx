@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Modal, StyleSheet, View } from "react-native";
 import { LocalEngineProvider } from "./src/components/LocalEngineProvider";
 import { TabBar, type Tab } from "./src/components/TabBar";
-import { useTheme } from "./src/lib/theme";
+import { useTheme } from "./src/lib/theme-io";
 import { CaptureScreen } from "./src/screens/CaptureScreen";
 import { PlantsScreen } from "./src/screens/PlantsScreen";
 import { ProfileScreen } from "./src/screens/ProfileScreen";

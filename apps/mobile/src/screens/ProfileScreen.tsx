@@ -15,7 +15,8 @@ import { availableDiskSpaceBytes } from "../lib/local-engine-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
-import { RADIUS, useTheme } from "../lib/theme";
+import { RADIUS } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // Profile tab (D-17): no account — data lives on the phone. Scheduled
 // re-assessment reminders (local notifications; listed + cancellable), the

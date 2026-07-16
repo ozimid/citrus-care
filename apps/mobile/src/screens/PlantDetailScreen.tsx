@@ -30,7 +30,8 @@ import { GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
 import { deletePlantWithPhotos, fetchPlantDetail } from "../lib/plants-io";
 import { loadPhotoIndex } from "../lib/photo-store-io";
 import { plantSubLabel } from "../lib/plants";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 import { CaptureScreen } from "./CaptureScreen";
 import { DiagnosisScreen } from "./DiagnosisScreen";
 

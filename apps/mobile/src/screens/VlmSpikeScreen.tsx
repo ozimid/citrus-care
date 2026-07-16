@@ -38,7 +38,8 @@ import {
   parseDiagnosisOutput,
   type DiagnosisParseResult,
 } from "../lib/spike-vlm";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 initExecutorch({ resourceFetcher: ExpoResourceFetcher });
 

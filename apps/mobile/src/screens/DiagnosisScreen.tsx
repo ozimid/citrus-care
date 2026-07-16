@@ -5,7 +5,8 @@ import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
 import { subjectLabel } from "../lib/plant-detail";
 import { formatReminderDate, scheduleReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // Diagnosis result screen (design doc §4 row 9, mirroring the web
 // AssessmentCard): score ring in the shared band colors, band label, summary,

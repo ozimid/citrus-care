@@ -23,7 +23,8 @@ import {
 } from "../lib/new-plant";
 import { GENERIC_UPDATE_PLANT_ERROR } from "../lib/plant-mutations";
 import { insertPlant, updatePlant } from "../lib/plants-io";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // New/edit plant bottom sheet per the native design doc §4 (#5/#7): same
 // fields and validation as the web form (apps/web/app/plants/new/

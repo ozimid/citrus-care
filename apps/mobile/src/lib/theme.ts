@@ -1,8 +1,7 @@
 // Visual tokens per the native design doc §5 (carry-over from
 // apps/web/app/globals.css): neutral canvas, emerald brand, 10pt radius,
-// light + dark from day one.
-
-import { useColorScheme } from "react-native";
+// light + dark from day one. Pure by the repo convention — the useTheme hook
+// (which needs react-native's useColorScheme) lives in theme-io.ts.
 
 export interface Tokens {
   canvas: string;
@@ -39,8 +38,3 @@ export const themes: Record<"light" | "dark", Tokens> = {
 };
 
 export const RADIUS = 10;
-
-export function useTheme(): { t: Tokens; scheme: "light" | "dark" } {
-  const scheme = useColorScheme() === "dark" ? "dark" : "light";
-  return { t: themes[scheme], scheme };
-}

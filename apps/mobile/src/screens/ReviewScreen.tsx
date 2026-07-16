@@ -15,7 +15,8 @@ import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { linkPhotoToAssessment, savePlantPhoto } from "../lib/photo-store-io";
 import { SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
-import { RADIUS, useTheme } from "../lib/theme";
+import { RADIUS } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // Post-capture review (design doc §3: capture → analyzing → result). The photo
 // is already downscaled (1600px JPEG q0.85); "Analyze" runs the tested flow in
