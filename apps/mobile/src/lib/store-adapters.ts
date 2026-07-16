@@ -69,6 +69,5 @@ export function timelineRowsFromStore(assessments: StoredAssessment[], plantId: 
       health_score: assessment.diagnosis.health_score,
       diagnosis: assessment.diagnosis,
       is_cut_care: assessment.diagnosis.subject === "cut",
-      engine: assessment.engine,
     }));
 }

@@ -100,12 +100,11 @@ export interface Assessment {
   is_cut_care: boolean;
   cut_health_score: number | null;
   /**
-   * F22 — which engine produced this diagnosis, and for an escalation, why the
-   * on-device attempt was dropped: `assessmentEngineSchema`'s value space
-   * ("on-device" | "gemini" | "gemini:<reason>"). Typed as a plain string
-   * because this is a free-text column read back from Postgres: null on every
-   * pre-F22 row, and the reader (engineKind) treats anything unrecognized as
-   * unknown rather than trusting it. Metadata only — never authorize on it.
+   * F22 — which engine produced this diagnosis. Typed as a plain string
+   * because this was a free-text column read back from Postgres: null on
+   * every pre-F22 row, and historical rows may carry the retired Gemini
+   * values ("gemini" | "gemini:<reason>") alongside "on-device". Metadata
+   * only — never authorize on it.
    */
   engine?: string | null;
 }

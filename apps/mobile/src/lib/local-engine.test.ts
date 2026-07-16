@@ -1,16 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
   DEFAULT_LOCAL_ENGINE_SETTINGS,
-  ENGINE_STATS_LIMIT,
   LOCAL_MODEL_DOWNLOAD_WARNING,
   LOCAL_MODEL_REQUIRED_FREE_BYTES,
   LOCAL_MODEL_REQUIREMENTS,
-  buildLocalAssessmentRow,
-  engineBadgeLabel,
-  engineKind,
-  engineStatsLabel,
-  escalationEngine,
   formatGigabytes,
   hasRoomForLocalModel,
   insufficientStorageMessage,
@@ -21,7 +14,6 @@ import {
   parseLocalEngineSettings,
   serializeLocalEngineSettings,
   shouldRouteLocal,
-  tallyEngines,
   type LocalEngineRuntime,
   type LocalEngineSettings,
 } from "./local-engine";
@@ -130,169 +122,6 @@ describe("row copy (honest about what disabling does)", () => {
 // F21 removed localSystemPrompt: with one unified prompt there is no mode to
 // specialize on, so the local session uses SPIKE_SYSTEM_PROMPT directly and
 // the cut framing lives inside it (spike-vlm.test.ts covers the wording).
-
-const DIAGNOSIS: AssessmentDiagnosis = {
-  health_score: 64,
-  summary: "Minor leaf yellowing.",
-  symptoms: [{ label: "Yellow tips", severity: "low" }],
-  causes: [{ label: "Underwatering", likelihood: "medium", rationale: "Dry, crisp margins." }],
-  recommendations: [{ priority: 1, action: "Water deeply", detail: "Until it drains." }],
-};
-
-// The row MUST match what apps/api/src/routes/assess.ts inserts, or a locally
-// produced assessment breaks the timeline (deltas, cut-care split, RLS).
-describe("buildLocalAssessmentRow (mirrors the /assess insert)", () => {
-  it("builds the same row shape the server writes, with photo_path null (D-16)", () => {
-    expect(
-      buildLocalAssessmentRow({
-        plantId: "plant-1",
-        userId: "user-7",
-        diagnosis: DIAGNOSIS,
-        raw: '{"health_score":64}',
-        previousAssessmentId: "assessment-3",
-      }),
-    ).toEqual({
-      plant_id: "plant-1",
-      user_id: "user-7",
-      photo_path: null,
-      health_score: 64,
-      symptoms: DIAGNOSIS.symptoms,
-      diagnosis: DIAGNOSIS,
-      recommendations: DIAGNOSIS.recommendations,
-      compared_to_assessment_id: "assessment-3",
-      raw_output: '{"health_score":64}',
-      is_cut_care: false,
-      cut_health_score: null,
-      engine: "on-device",
-    });
-  });
-
-  // F21: the cut split is the model's call, not a toggle the user flipped —
-  // and the server derives it the same way, or timelines diverge by engine.
-  it("derives the cut split from the diagnosis's own subject (server parity)", () => {
-    const row = buildLocalAssessmentRow({
-      plantId: "plant-1",
-      userId: "user-7",
-      diagnosis: { ...DIAGNOSIS, subject: "cut" },
-      raw: "{}",
-      previousAssessmentId: null,
-    });
-    expect(row.is_cut_care).toBe(true);
-    expect(row.cut_health_score).toBe(64);
-    expect(row.compared_to_assessment_id).toBeNull();
-  });
-
-  it("leaves the cut split off for every other subject", () => {
-    for (const subject of ["leaf", "whole_plant", "not_a_plant"] as const) {
-      const row = buildLocalAssessmentRow({
-        plantId: "plant-1",
-        userId: "user-7",
-        diagnosis: { ...DIAGNOSIS, subject },
-        raw: "{}",
-        previousAssessmentId: null,
-      });
-      expect(row.is_cut_care).toBe(false);
-      expect(row.cut_health_score).toBeNull();
-    }
-  });
-
-  // F22: the row this builder writes is BY DEFINITION an on-device one — it
-  // only exists because the local model produced the diagnosis.
-  it("stamps the row with the on-device engine (F22 provenance)", () => {
-    expect(
-      buildLocalAssessmentRow({
-        plantId: "plant-1",
-        userId: "user-7",
-        diagnosis: DIAGNOSIS,
-        raw: "{}",
-        previousAssessmentId: null,
-      }).engine,
-    ).toBe("on-device");
-  });
-});
-
-// F22 — the engine badge is ephemeral no longer: `assessments.engine` records
-// which engine answered and, for escalations, WHY the local one was dropped.
-// That column is the go/no-go dataset, so its value space is closed and the
-// mapping from a router failure to a stored string is pure.
-
-describe("escalationEngine (F22 — which engine, and why we escalated)", () => {
-  it("is plain gemini when the local engine was never tried", () => {
-    // Off, unready, or not wired at all: no local attempt happened, so there
-    // is no failure to record — this is not an escalation.
-    expect(escalationEngine(null)).toBe("gemini");
-  });
-
-  it("records the specific reason the local attempt was abandoned", () => {
-    expect(escalationEngine("timeout")).toBe("gemini:local_timeout");
-    expect(escalationEngine("invalid")).toBe("gemini:local_invalid");
-    expect(escalationEngine("error")).toBe("gemini:local_error");
-  });
-});
-
-describe("engineKind (stored string → what the UI and the tally count)", () => {
-  it("reads the two engines, with every escalation reason still counting as Gemini", () => {
-    expect(engineKind("on-device")).toBe("on-device");
-    expect(engineKind("gemini")).toBe("gemini");
-    expect(engineKind("gemini:local_timeout")).toBe("gemini");
-    expect(engineKind("gemini:local_invalid")).toBe("gemini");
-    expect(engineKind("gemini:local_error")).toBe("gemini");
-  });
-
-  it("treats a pre-F22 row (no column value) as unknown, never as Gemini", () => {
-    // Guessing "gemini" here would silently poison the go/no-go ratio with
-    // rows written before the column existed.
-    expect(engineKind(null)).toBe("unknown");
-    expect(engineKind(undefined)).toBe("unknown");
-    expect(engineKind("")).toBe("unknown");
-    expect(engineKind("geminiish")).toBe("unknown");
-  });
-});
-
-describe("engineBadgeLabel (subtle marker, or nothing)", () => {
-  it("labels the two engines exactly as the fresh-diagnosis badge does", () => {
-    expect(engineBadgeLabel("on-device")).toBe("⬤ On-device");
-    expect(engineBadgeLabel("gemini")).toBe("Gemini");
-  });
-
-  it("says Gemini for an escalated row — the reason is ours, not the user's", () => {
-    expect(engineBadgeLabel("gemini:local_timeout")).toBe("Gemini");
-  });
-
-  it("renders no badge at all for a pre-F22 row", () => {
-    // "Unknown" on every historical row is noise, not information.
-    expect(engineBadgeLabel(null)).toBeNull();
-  });
-});
-
-describe("tallyEngines / engineStatsLabel (the F22 payoff — the real dataset)", () => {
-  it("counts the last-N engines by kind", () => {
-    expect(
-      tallyEngines(["on-device", "gemini", "gemini:local_timeout", "on-device", null]),
-    ).toEqual({ onDevice: 2, gemini: 2, unknown: 1 });
-  });
-
-  it("reads the last 20 assessments", () => {
-    expect(ENGINE_STATS_LIMIT).toBe(20);
-  });
-
-  it("states the split in plain words", () => {
-    expect(engineStatsLabel({ onDevice: 14, gemini: 6, unknown: 0 })).toBe(
-      "Last 20 assessments: 14 on-device · 6 Gemini",
-    );
-  });
-
-  it("excludes pre-F22 rows from the ratio instead of guessing at them", () => {
-    expect(engineStatsLabel({ onDevice: 10, gemini: 5, unknown: 5 })).toBe(
-      "Last 15 assessments: 10 on-device · 5 Gemini",
-    );
-  });
-
-  it("says nothing when there is nothing countable yet", () => {
-    expect(engineStatsLabel({ onDevice: 0, gemini: 0, unknown: 0 })).toBeNull();
-    expect(engineStatsLabel({ onDevice: 0, gemini: 0, unknown: 12 })).toBeNull();
-  });
-});
 
 // F22 Part 2 — the honest precheck before a 1.3 GB download. Deliberately
 // storage only: no RAM gate (expo-device's totalMemory reports total, not

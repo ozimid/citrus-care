@@ -12,7 +12,6 @@ import {
 } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
-import { EngineBadge } from "../components/EngineBadge";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
 import { WateringCard } from "../components/WateringCard";
@@ -274,9 +273,6 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
             diagnosis={viewing.diagnosis}
             plantId={plant.id}
             plantName={plant.name}
-            // F22: a reopened row can finally say which engine produced it —
-            // before the column existed this badge was lost with the session.
-            engine={viewing.entry.engine}
             onDone={() => setViewing(null)}
           />
         ) : null}
@@ -329,9 +325,6 @@ function TimelineRowCard({
               <Text style={[styles.deltaChipText, { color: chipColor }]}>{entry.deltaLabel}</Text>
             </View>
           ) : null}
-          {/* F22: which engine produced this row. Renders nothing for a
-              pre-F22 row — the badge used to vanish for every row. */}
-          <EngineBadge t={t} engine={entry.engine} />
         </View>
         {entry.summary ? (
           <Text style={[styles.rowSummary, { color: t.sub }]} numberOfLines={2}>

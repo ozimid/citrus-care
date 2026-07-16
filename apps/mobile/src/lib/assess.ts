@@ -115,8 +115,6 @@ export interface AssessedResult {
   diagnosis: AssessmentDiagnosis;
   /** Durable on-phone uri of the photo this assessment was made from. */
   localUri: string;
-  /** Provenance — always "on-device" now (Gemma is the only engine). */
-  engine: AssessEngine;
 }
 
 /** F21 — the model read the photo as a non-plant, so nothing was written.
@@ -126,7 +124,6 @@ export interface RejectedResult {
   status: "rejected";
   diagnosis: AssessmentDiagnosis;
   localUri: string;
-  engine: AssessEngine;
 }
 
 export type AssessResult = AssessedResult | RejectedResult;
@@ -159,7 +156,7 @@ export async function runAssess(
 
   const outcome = await runLocal(deps.local, input, localUri, hooks);
   if (outcome.status === "rejected") {
-    return { status: "rejected", diagnosis: outcome.diagnosis, localUri, engine: "on-device" };
+    return { status: "rejected", diagnosis: outcome.diagnosis, localUri };
   }
   await linkPhotoBestEffort(deps, outcome.assessmentId, localUri, input.plantId, "on-device");
   return {
@@ -167,7 +164,6 @@ export async function runAssess(
     assessmentId: outcome.assessmentId,
     diagnosis: outcome.diagnosis,
     localUri,
-    engine: "on-device",
   };
 }
 

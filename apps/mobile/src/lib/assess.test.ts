@@ -114,7 +114,6 @@ describe("runAssess (Gemma-only)", () => {
       assessmentId: "assessment-local-1",
       diagnosis: LOCAL_DIAGNOSIS,
       localUri: "file:///docs/photos/plant-1/saved.jpg",
-      engine: "on-device",
     });
     expect(phases).toEqual(["saving", "analyzing"]);
     expect(saved).toEqual([{ plantId: "plant-1", sourceUri: "file:///tmp/photo.jpg" }]);
@@ -162,7 +161,6 @@ describe("runAssess (Gemma-only)", () => {
     });
     const { deps } = makeDeps({ local });
     const result = await runAssess(deps, INPUT);
-    expect(result.engine).toBe("on-device");
     expect(result.diagnosis.subject).toBe("cut");
     expect(persisted).toHaveLength(1);
   });
@@ -273,7 +271,6 @@ describe("runAssess not_a_plant rejection (F21)", () => {
 
     expect(result.status).toBe("rejected");
     expect(result.diagnosis.subject).toBe("not_a_plant");
-    expect(result.engine).toBe("on-device");
     expect(result.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
     expect(persisted).toEqual([]);
     // Nothing to link: there is no assessment to link a photo to.
@@ -315,7 +312,7 @@ describe("runAssess local inference budget (slow hint + hard ceiling)", () => {
 
     const result = await pending;
     expect(slow).toHaveLength(1);
-    expect(result.engine).toBe("on-device");
+    expect(result.status).toBe("assessed");
   });
 
   it("interrupts the session and errors at the hard ceiling", async () => {
@@ -339,7 +336,7 @@ describe("runAssess local inference budget (slow hint + hard ceiling)", () => {
 
     const pending = runAssess(deps, INPUT);
     await vi.advanceTimersByTimeAsync(LOCAL_HARD_CEILING_MS);
-    expect((await pending).engine).toBe("on-device");
+    expect((await pending).status).toBe("assessed");
   });
 
   it("gives the slow hint room before the hard ceiling", () => {

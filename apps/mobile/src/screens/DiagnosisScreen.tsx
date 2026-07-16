@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
-import { EngineBadge } from "../components/EngineBadge";
 import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
 import { subjectLabel } from "../lib/plant-detail";
 import { formatReminderDate, scheduleReminder } from "../lib/reminders";
@@ -13,7 +12,8 @@ import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 // symptom chips, likely causes, ranked care-plan cards (first emphasized), a
 // contextual "remind me" CTA (permission asked at tap — design doc open
 // question 2), and a primary CTA back to Plants. The assessment is already
-// persisted server-side by /assess, so "save to timeline" is implicit.
+// persisted in the on-device store by the assess flow, so "save to timeline"
+// is implicit.
 
 const REMINDER_DENIED_NOTE =
   "Notifications are off for Citrus Care. Enable them in your device settings to get reminders.";
@@ -37,15 +37,10 @@ interface Props {
   diagnosis: AssessmentDiagnosis;
   plantId: string;
   plantName: string;
-  /** Which engine produced this diagnosis (D-15 Stage 2 provenance badge).
-   * Fresh results pass their own engine; a reopened timeline row passes the
-   * stored assessments.engine (F22, migration 0007), which is null — and so
-   * renders no badge — only for rows written before that column existed. */
-  engine?: string | null;
   onDone: () => void;
 }
 
-export function DiagnosisScreen({ diagnosis, plantId, plantName, engine, onDone }: Props) {
+export function DiagnosisScreen({ diagnosis, plantId, plantName, onDone }: Props) {
   const { t, scheme } = useTheme();
   const [reminder, setReminder] = useState<ReminderState>({ kind: "idle" });
 
@@ -102,14 +97,13 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, engine, onDone 
             {diagnosis.subject ? (
               <View
                 accessibilityLabel={`Detected: ${subjectLabel(diagnosis.subject)}`}
-                style={[styles.engineBadge, { borderColor: t.border }]}
+                style={[styles.subjectChip, { borderColor: t.border }]}
               >
-                <Text style={[styles.engineBadgeText, { color: t.sub }]}>
+                <Text style={[styles.subjectChipText, { color: t.sub }]}>
                   Detected: {subjectLabel(diagnosis.subject)}
                 </Text>
               </View>
             ) : null}
-            <EngineBadge t={t} engine={engine} />
           </View>
         </View>
 
@@ -285,13 +279,13 @@ const styles = StyleSheet.create({
   bandBadge: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   bandBadgeText: { fontSize: 13, fontWeight: "700" },
   badgeRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
-  engineBadge: {
+  subjectChip: {
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 3,
   },
-  engineBadgeText: { fontSize: 11, fontWeight: "600", letterSpacing: 0.2 },
+  subjectChipText: { fontSize: 11, fontWeight: "600", letterSpacing: 0.2 },
   summary: { fontSize: 14, lineHeight: 21, textAlign: "center" },
   body: { fontSize: 13, lineHeight: 19 },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

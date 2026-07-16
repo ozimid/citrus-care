@@ -2,9 +2,9 @@
 // phone, in one AsyncStorage blob keyed by assessment id (a global map, not
 // nested under plants, so by-id lookup is O(1) and cross-plant queries are
 // trivial). health_score / is_cut_care are NOT stored — they are derived from
-// the diagnosis on read (store-adapters), exactly as buildLocalAssessmentRow
-// derived them for the old Postgres insert. Untrusted on read: a malformed
-// record is dropped, never thrown. IO wiring is the thin assessment-store-io.ts.
+// the diagnosis on read (store-adapters), exactly as the old Postgres insert
+// derived them at write time. Untrusted on read: a malformed record is
+// dropped, never thrown. IO wiring is the thin assessment-store-io.ts.
 
 import type { AssessmentDiagnosis } from "@citrus/shared";
 

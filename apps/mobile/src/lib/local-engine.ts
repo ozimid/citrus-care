@@ -1,12 +1,10 @@
 // On-device engine (D-15 Stage 2), pure half: the opt-in setting + the
 // state machine that turns the executorch session's runtime status into a
-// Profile row, plus the assessment row a locally produced diagnosis persists
-// as. Off by default — the 1.3 GB Gemma 4 E2B download is never started
-// unasked (docs/research/on-device-vlm-native.md). The AsyncStorage and
-// Supabase wiring is the thin local-engine-io.ts; the executorch session
-// itself lives in components/LocalEngineSession.tsx (native, dev-build only).
+// Profile row. Off by default — the 1.3 GB Gemma 4 E2B download is never
+// started unasked (docs/research/on-device-vlm-native.md). The AsyncStorage
+// wiring is the thin local-engine-io.ts; the executorch session itself lives
+// in components/LocalEngineSession.tsx (native, dev-build only).
 
-import type { AssessmentDiagnosis, AssessmentEngine } from "@citrus/shared";
 import { SPIKE_USER_PROMPT } from "./spike-vlm";
 
 export const LOCAL_ENGINE_STORAGE_KEY = "citrus.local-engine.v1";
@@ -57,82 +55,6 @@ export function insufficientStorageMessage(availableBytes: number): string {
     `The on-device model needs about 2 GB free — you have ${formatGigabytes(availableBytes)}. ` +
     `Free some space and try again. Gemini keeps analyzing your photos meanwhile.`
   );
-}
-
-// ---- F22 provenance: which engine answered, and why we escalated ----
-
-/** Why an on-device attempt was abandoned. Each one is a different go/no-go
- * signal: "too slow" is not the same finding as "got it wrong". */
-export type LocalFailureReason = "timeout" | "invalid" | "error";
-
-const ESCALATION_ENGINE: Record<LocalFailureReason, AssessmentEngine> = {
-  timeout: "gemini:local_timeout",
-  invalid: "gemini:local_invalid",
-  error: "gemini:local_error",
-};
-
-/** Router failure → the string persisted in assessments.engine. `null` means
- * the local engine was never tried (off, unready, or not wired at all), which
- * is plain "gemini" — no attempt happened, so there is nothing to explain. */
-export function escalationEngine(reason: LocalFailureReason | null): AssessmentEngine {
-  return reason ? ESCALATION_ENGINE[reason] : "gemini";
-}
-
-export type EngineKind = "on-device" | "gemini" | "unknown";
-
-/** Stored column value → what the badge and the tally count. Every escalation
- * reason collapses to "gemini" (Gemini did answer). Anything unrecognized —
- * including the null on every pre-F22 row — is "unknown", never a guess:
- * guessing "gemini" would silently poison the ratio we built this for. */
-export function engineKind(engine: string | null | undefined): EngineKind {
-  if (engine === "on-device") return "on-device";
-  if (engine === "gemini" || engine?.startsWith("gemini:")) return "gemini";
-  return "unknown";
-}
-
-/** Badge text, or null for "render no badge". An escalation says nothing extra
- * — that a local attempt was made and dropped is our problem, not the user's —
- * and "Unknown" on every historical row is noise, not information. */
-export function engineBadgeLabel(engine: string | null | undefined): string | null {
-  switch (engineKind(engine)) {
-    case "on-device":
-      return "⬤ On-device";
-    case "gemini":
-      return "Gemini";
-    case "unknown":
-      return null;
-  }
-}
-
-/** How many assessments the Profile stat line looks back over. */
-export const ENGINE_STATS_LIMIT = 20;
-
-export interface EngineTally {
-  onDevice: number;
-  gemini: number;
-  /** Pre-F22 rows. Counted, but never in the ratio. */
-  unknown: number;
-}
-
-export function tallyEngines(engines: (string | null | undefined)[]): EngineTally {
-  const tally: EngineTally = { onDevice: 0, gemini: 0, unknown: 0 };
-  for (const engine of engines) {
-    const kind = engineKind(engine);
-    if (kind === "on-device") tally.onDevice += 1;
-    else if (kind === "gemini") tally.gemini += 1;
-    else tally.unknown += 1;
-  }
-  return tally;
-}
-
-/** The F22 payoff, read-only: "Last 20 assessments: 14 on-device · 6 Gemini".
- * The count is of rows that actually carry provenance — pre-F22 rows are
- * excluded rather than guessed at, so the number can be smaller than the
- * window. Null when there is nothing countable: no line beats a line of zeros. */
-export function engineStatsLabel(tally: EngineTally): string | null {
-  const counted = tally.onDevice + tally.gemini;
-  if (counted === 0) return null;
-  return `Last ${counted} assessment${counted === 1 ? "" : "s"}: ${tally.onDevice} on-device · ${tally.gemini} Gemini`;
 }
 
 export interface LocalEngineSettings {
@@ -259,54 +181,3 @@ export function localEngineSubtitle(
 // the cut framing lives inside it and applies when the model reads a cut.
 
 export const LOCAL_USER_PROMPT = SPIKE_USER_PROMPT;
-
-export interface LocalAssessmentRowInput {
-  plantId: string;
-  userId: string;
-  diagnosis: AssessmentDiagnosis;
-  /** The model's raw text, kept for debugging exactly as /assess keeps Gemini's. */
-  raw: string;
-  previousAssessmentId: string | null;
-}
-
-/** Mirrors the insert in apps/api/src/routes/assess.ts. */
-export interface LocalAssessmentRow {
-  plant_id: string;
-  user_id: string;
-  photo_path: null;
-  health_score: number;
-  symptoms: AssessmentDiagnosis["symptoms"];
-  diagnosis: AssessmentDiagnosis;
-  recommendations: AssessmentDiagnosis["recommendations"];
-  compared_to_assessment_id: string | null;
-  raw_output: string;
-  is_cut_care: boolean;
-  cut_health_score: number | null;
-  /** F22 — always "on-device": this row exists BECAUSE the local model
-   * produced the diagnosis. The Gemini side of the column is written by
-   * /assess (migration 0007). */
-  engine: AssessmentEngine;
-}
-
-/** An on-device diagnosis is persisted by the phone itself — /assess runs
- * Gemini, so it can't save this one. The row MUST match what the server
- * inserts field-for-field or timelines (deltas, cut-care split) diverge by
- * engine — including F21's rule that the cut split comes from the model's own
- * subject. photo_path stays null: photos never reach a server store (D-16). */
-export function buildLocalAssessmentRow(input: LocalAssessmentRowInput): LocalAssessmentRow {
-  const isCut = input.diagnosis.subject === "cut";
-  return {
-    plant_id: input.plantId,
-    user_id: input.userId,
-    photo_path: null,
-    health_score: input.diagnosis.health_score,
-    symptoms: input.diagnosis.symptoms,
-    diagnosis: input.diagnosis,
-    recommendations: input.diagnosis.recommendations,
-    compared_to_assessment_id: input.previousAssessmentId,
-    raw_output: input.raw,
-    is_cut_care: isCut,
-    cut_health_score: isCut ? input.diagnosis.health_score : null,
-    engine: "on-device",
-  };
-}

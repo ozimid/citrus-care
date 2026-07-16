@@ -30,9 +30,6 @@ export interface TimelineRow {
   /** jsonb straight from Postgres — untrusted until Zod-parsed. */
   diagnosis: unknown;
   is_cut_care: boolean | null;
-  /** F22 — null on every pre-F22 row; optional because a row read before the
-   * column existed simply has no field. engineKind treats both as unknown. */
-  engine?: string | null;
 }
 
 export type TimelineDelta = "better" | "same" | "worse" | "unknown";
@@ -59,9 +56,6 @@ export interface TimelineEntry {
   isCutCare: boolean;
   /** Raw jsonb, parsed on tap via parseTimelineDiagnosis. */
   diagnosis: unknown;
-  /** F22 — which engine produced this row ("on-device" | "gemini" |
-   * "gemini:<reason>"); null on pre-F22 rows, which render no badge. */
-  engine: string | null;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -141,7 +135,6 @@ export function mapTimelineRows(rows: TimelineRow[] | null | undefined): Timelin
       localUri: null,
       isCutCare: row.is_cut_care === true,
       diagnosis: row.diagnosis,
-      engine: row.engine ?? null,
     };
   });
 }

@@ -1,8 +1,8 @@
-// On-device engine, IO half (D-15 Stage 2): AsyncStorage for the opt-in
-// setting + the RLS-scoped Supabase insert that persists a locally produced
-// assessment. Thin by design (README testing policy) — the row shape, the
-// state machine and the settings parsing are pure and tested in
-// local-engine.ts / local-engine.test.ts.
+// On-device engine, IO half (D-15 Stage 2, D-17 local-only): AsyncStorage for
+// the opt-in setting + the on-device store insert that persists a locally
+// produced assessment. Thin by design (README testing policy) — the state
+// machine and the settings parsing are pure and tested in local-engine.ts /
+// local-engine.test.ts.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Paths } from "expo-file-system";

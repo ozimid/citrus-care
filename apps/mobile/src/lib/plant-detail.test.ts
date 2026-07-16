@@ -104,25 +104,6 @@ describe("mapTimelineRows", () => {
     expect(entries[0].isCutCare).toBe(false);
   });
 
-  // F22: the stored provenance rides along untouched — the badge decision
-  // (including "no badge") is engineBadgeLabel's, tested in local-engine.
-  it("carries the engine through to the entry, null for a pre-F22 row", () => {
-    const [a3, a2, a1] = mapTimelineRows([
-      { ...rows()[0], engine: "on-device" },
-      { ...rows()[1], engine: "gemini:local_timeout" },
-      { ...rows()[2], engine: null },
-    ]);
-    expect(a3.engine).toBe("on-device");
-    expect(a2.engine).toBe("gemini:local_timeout");
-    expect(a1.engine).toBeNull();
-  });
-
-  it("treats a missing engine field as null (rows read before the column landed)", () => {
-    const row = rows()[0];
-    delete (row as { engine?: unknown }).engine;
-    expect(mapTimelineRows([row])[0].engine).toBeNull();
-  });
-
   it("returns [] for null/undefined data", () => {
     expect(mapTimelineRows(null)).toEqual([]);
     expect(mapTimelineRows(undefined)).toEqual([]);

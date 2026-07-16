@@ -140,7 +140,6 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         diagnosis={result.diagnosis}
         plantId={selectedPlant.id}
         plantName={selectedPlant.name}
-        engine={result.engine}
         onDone={onClose}
       />
     );
