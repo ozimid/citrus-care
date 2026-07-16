@@ -9,11 +9,12 @@ import {
   type AssessedResult,
   type RejectedResult,
 } from "../lib/assess";
+import { LOCAL_USER_PROMPT } from "../lib/local-engine";
 import { persistLocalAssessment } from "../lib/local-engine-io";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { linkPhotoToAssessment, savePlantPhoto } from "../lib/photo-store-io";
-import { supabase } from "../lib/supabase";
+import { SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
 import { RADIUS, useTheme } from "../lib/theme";
 
 // Post-capture review (design doc §3: capture → analyzing → result). The photo
@@ -76,9 +77,17 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
                   SPIKE_MAX_DIMENSION,
                 )
               ).uri,
-            generate: localEngine.generate,
+            // The diagnosis prompts live in the pure lib modules; the session
+            // is given them per call (F21: one prompt, the model reports subject).
+            generate: ({ imageUri }) =>
+              localEngine.generate({
+                system: SPIKE_SYSTEM_PROMPT,
+                user: LOCAL_USER_PROMPT,
+                imageUri,
+              }),
+            interrupt: localEngine.interrupt,
             // The phone inserts the row itself into the local store.
-            persist: (args) => persistLocalAssessment(supabase, args),
+            persist: persistLocalAssessment,
           },
         },
         { plantId, photoUri: photo.uri, savedUri, force },

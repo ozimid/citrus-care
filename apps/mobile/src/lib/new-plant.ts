@@ -1,12 +1,12 @@
-// New-plant form logic: form state → validated insert payload. Pure module
-// (no react-native/expo imports) so vitest runs it in Node; the sheet UI in
-// src/components/NewPlantSheet.tsx stays thin. Validation is the shared
-// newPlantSchema (web parity) plus a mobile-side 5-digit ZIP rule; the insert
-// row mirrors the web server action (apps/web/app/plants/actions.ts):
-// explicit user_id, nulls for missing optionals, RLS enforces ownership.
+// New-plant form logic: form state → validated payload → local StoredPlant.
+// Pure module (no react-native/expo imports) so vitest runs it in Node; the
+// sheet UI in src/components/NewPlantSheet.tsx and the AsyncStorage write in
+// plants-io.ts stay thin. Validation is the shared newPlantSchema (web parity)
+// plus a mobile-side 5-digit ZIP rule. D-17: no user_id — plants live only on
+// the phone.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { newPlantSchema, type NewPlantInput } from "@citrus/shared";
+import type { StoredPlant } from "./plant-store";
 
 export const GENERIC_CREATE_PLANT_ERROR = "Could not add the plant. Please try again.";
 
@@ -94,44 +94,21 @@ export function validateNewPlant(form: NewPlantForm): NewPlantValidation {
   return { ok: true, data: parsed.data };
 }
 
-/** Mirrors the web createPlant insert: explicit user_id (RLS also scopes it),
- * null for every absent optional. */
-export function buildPlantInsertRow(data: NewPlantInput, userId: string) {
+/** Validated form input → a new on-device plant record. No user_id (no
+ * accounts), care_profile null until it is generated on-device (F20), cover
+ * null until the first assessment. id + createdAt are injected so this stays
+ * pure/testable; the IO caller mints them. */
+export function buildStoredPlant(data: NewPlantInput, id: string, createdAt: string): StoredPlant {
   return {
-    user_id: userId,
+    id,
     name: data.name,
     plant_type: data.plant_type,
     species: data.species ?? null,
     cultivar: data.cultivar ?? null,
     location: data.location ?? null,
     zip_code: data.zip_code ?? null,
+    cover_assessment_id: null,
+    care_profile: null,
+    created_at: createdAt,
   };
-}
-
-/** Thin insert wrapper (same pattern as fetchPlants in plants.ts): generic
- * client-facing message, details only in the console. Returns the new row's id
- * — the sheet uses it to kick off the plant's F20 care profile. */
-export async function insertPlant(client: SupabaseClient, data: NewPlantInput): Promise<string> {
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-  if (!user) {
-    console.error("[insertPlant] no authenticated user");
-    throw new Error(GENERIC_CREATE_PLANT_ERROR);
-  }
-  const { data: row, error } = await client
-    .from("plants")
-    .insert(buildPlantInsertRow(data, user.id))
-    .select("id")
-    .single();
-  if (error) {
-    console.error("[insertPlant] insert failed:", error.message);
-    throw new Error(GENERIC_CREATE_PLANT_ERROR);
-  }
-  const id = (row as { id?: unknown } | null)?.id;
-  if (typeof id !== "string") {
-    console.error("[insertPlant] insert returned no id");
-    throw new Error(GENERIC_CREATE_PLANT_ERROR);
-  }
-  return id;
 }

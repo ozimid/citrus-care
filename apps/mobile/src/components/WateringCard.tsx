@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { apiFetch } from "../lib/api-io";
+import { useLocalEngine } from "./LocalEngineProvider";
+import { generateAndStoreCareProfile } from "../lib/care-profile-io";
 import { cancelWateringReminders, scheduleWateringReminder, syncWateringReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, type Tokens } from "../lib/theme";
@@ -8,7 +9,6 @@ import {
   dueLabel,
   lastWateredAt,
   parseStoredCareProfile,
-  requestCareProfile,
   wateringPlan,
   type WateringPlan,
 } from "../lib/watering";
@@ -17,19 +17,22 @@ import { loadWeatherFor } from "../lib/weather-io";
 
 // F20 — the watering card on plant detail. Everything it shows is deterministic
 // math (src/lib/watering.ts) on top of three inputs: the plant's care profile
-// (Gemini, once, at creation), the ZIP's forecast (Open-Meteo, cached 6h) and
-// the local watering log. The model is never in this path.
+// (generated ON-DEVICE, once, D-17), the ZIP's forecast (Open-Meteo, cached 6h)
+// and the local watering log. No model in the watering math itself.
 //
-// The three degraded states are deliberate and quiet, because watering guidance
-// is an enhancement — never an error:
+// The degraded states are deliberate and quiet, because watering guidance is an
+// enhancement — never an error:
 //   no ZIP          → a hint telling the user how to turn the feature on
-//   no care profile → "generating…" plus a quiet retry
+//   no care profile → generated on-device when the model is ready; a quiet retry
 //   no weather      → the card still renders on the plant's base schedule
 // The card only disappears when there is genuinely nothing to say.
 
 interface PlantInput {
   id: string;
   name: string;
+  plant_type: string;
+  species: string | null;
+  cultivar: string | null;
   location: string | null;
   zip_code: string | null;
   care_profile?: unknown;
@@ -51,10 +54,13 @@ interface Props {
 }
 
 export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: Props) {
+  const localEngine = useLocalEngine();
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const [reminderSet, setReminderSet] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One auto-backfill attempt per mounted card — never a loop.
+  const backfilledRef = useRef(false);
 
   // Memoized on the raw jsonb: parseStoredCareProfile returns a fresh object
   // every call, and compute() depends on its identity — re-parsing per render
@@ -107,18 +113,33 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
     compute();
   }, [compute]);
 
-  /** Quiet retry: the profile is generated once, fire-and-forget, at plant
-   * creation — if that call was lost (offline, rate limit) this is the recovery. */
-  const retryProfile = useCallback(async () => {
+  /** Generate the care profile ON-DEVICE (D-17). Needs the model ready; if it
+   * isn't, say so plainly rather than spinning. On success the reloaded plant
+   * row re-renders the card with a profile. */
+  const generateProfile = useCallback(async () => {
+    if (!localEngine.isReady()) {
+      setError("Turn on On-device AI in Profile to generate watering guidance.");
+      setPhase({ kind: "no-profile", retrying: false });
+      return;
+    }
+    setError(null);
     setPhase({ kind: "no-profile", retrying: true });
-    const generated = await requestCareProfile(apiFetch, plant.id);
+    const generated = await generateAndStoreCareProfile(localEngine.generate, plant);
     if (generated) {
       onProfileGenerated?.();
-      return; // The reloaded plant row re-renders the card with a profile.
+      return;
     }
-    // requestCareProfile already logged the details; stay in the same state.
     setPhase({ kind: "no-profile", retrying: false });
-  }, [onProfileGenerated, plant.id]);
+  }, [localEngine, onProfileGenerated, plant]);
+
+  // Opportunistic backfill: when the card mounts with no profile and the model
+  // is ready, generate one automatically (once). Manual "Retry" covers the case
+  // where the model wasn't ready yet.
+  useEffect(() => {
+    if (profile || backfilledRef.current || !localEngine.isReady()) return;
+    backfilledRef.current = true;
+    void generateProfile();
+  }, [profile, localEngine, generateProfile]);
 
   const watered = useCallback(async () => {
     setBusy(true);
@@ -170,18 +191,21 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
         </Text>
       ) : phase.kind === "no-profile" ? (
         <>
-          <Text style={[styles.body, { color: t.sub }]}>Care profile is generating…</Text>
+          <Text style={[styles.body, { color: t.sub }]}>
+            {phase.retrying ? "Generating watering guidance on this phone…" : "No watering guidance yet."}
+          </Text>
+          {error ? <Text style={[styles.meta, { color: t.danger }]}>{error}</Text> : null}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Retry care profile"
+            accessibilityLabel="Generate care profile"
             disabled={phase.retrying}
-            onPress={retryProfile}
+            onPress={generateProfile}
             style={[styles.secondary, { borderColor: t.border, opacity: phase.retrying ? 0.6 : 1 }]}
           >
             {phase.retrying ? (
               <ActivityIndicator color={t.sub} />
             ) : (
-              <Text style={[styles.secondaryText, { color: t.sub }]}>Retry</Text>
+              <Text style={[styles.secondaryText, { color: t.sub }]}>Generate</Text>
             )}
           </Pressable>
         </>

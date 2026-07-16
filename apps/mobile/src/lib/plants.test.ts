@@ -6,7 +6,6 @@ import {
   latestTrend,
   mapPlantRows,
   plantSubLabel,
-  PLANTS_SELECT,
   type PlantRow,
 } from "./plants";
 
@@ -183,27 +182,5 @@ describe("mapPlantRows", () => {
   it("returns an empty list for null/undefined data", () => {
     expect(mapPlantRows(null)).toEqual([]);
     expect(mapPlantRows(undefined)).toEqual([]);
-  });
-});
-
-// Regression: PGRST201 on device — plants↔assessments have TWO relationships
-// (assessments.plant_id and plants.cover_assessment_id), so the embed must
-// name the FK explicitly or PostgREST rejects the whole query.
-describe("PLANTS_SELECT", () => {
-  it("disambiguates the assessments embed with the plant_id FK hint", () => {
-    expect(PLANTS_SELECT).toContain("assessments!plant_id(");
-  });
-
-  it("pulls the embedded diagnosis so cards can show the trend chip", () => {
-    const embed = PLANTS_SELECT.slice(PLANTS_SELECT.indexOf("assessments!plant_id("));
-    expect(embed).toContain("diagnosis");
-  });
-
-  // F20: the list computes each card's watering plan locally, so the query has
-  // to carry the ZIP (weather) and the care profile (baseline) with it.
-  it("pulls zip_code and care_profile so cards can show the needs-water chip", () => {
-    const columns = PLANTS_SELECT.slice(0, PLANTS_SELECT.indexOf("assessments!plant_id("));
-    expect(columns).toContain("zip_code");
-    expect(columns).toContain("care_profile");
   });
 });

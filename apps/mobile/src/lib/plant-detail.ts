@@ -1,10 +1,9 @@
-// Plant detail data: the plant row (incl. zip_code for the quarantine check)
-// plus the full assessment timeline, mapped into render-ready entries. Pure
-// mapping half is tested (plant-detail.test.ts); the queries are thin.
+// Plant detail row + timeline mapping (pure, tested). D-17: the plant row and
+// its assessments are reconstructed from the on-device stores by store-adapters
+// and fed to these mappers; the thin read is fetchPlantDetail in plants-io.ts.
 // Photos are local-only (D-16): entries join to on-phone uris through the
 // photo-store index; entries without a local photo render a placeholder.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   assessmentDiagnosisSchema,
   assessmentSubjectSchema,
@@ -23,16 +22,6 @@ export type PlantDetailRow = Pick<
   /** F20 jsonb — untrusted until parseStoredCareProfile validates it. */
   care_profile?: unknown;
 };
-
-export const PLANT_DETAIL_SELECT =
-  "id,name,plant_type,species,cultivar,location,zip_code,care_profile,created_at";
-
-/** Timeline columns; photo_path is gone (D-16 — photos never reach the
- * server). is_cut_care is the cut split, since F21 derived from the model's
- * own diagnosis.subject rather than a toggle the user flipped; `diagnosis`
- * carries that subject, which the delta advisory compares row-to-row. `engine`
- * is F22 provenance (migration 0007 — the whole query 42703s without it). */
-export const TIMELINE_SELECT = "id,created_at,health_score,diagnosis,is_cut_care,engine";
 
 export interface TimelineRow {
   id: string;
@@ -199,36 +188,4 @@ export function parseTimelineDiagnosis(raw: unknown): AssessmentDiagnosis | null
 export interface PlantDetailData {
   plant: PlantDetailRow;
   timeline: TimelineEntry[];
-}
-
-/** Thin two-query fetch (plant row + all assessments, newest first). Generic
- * client-facing message; details stay in the console (web parity rule). */
-export async function fetchPlantDetail(
-  client: SupabaseClient,
-  plantId: string,
-): Promise<PlantDetailData> {
-  const { data: plant, error: plantError } = await client
-    .from("plants")
-    .select(PLANT_DETAIL_SELECT)
-    .eq("id", plantId)
-    .maybeSingle();
-  if (plantError || !plant) {
-    console.error("[fetchPlantDetail] plant query failed:", plantError?.message ?? "not found");
-    throw new Error(PLANT_DETAIL_LOAD_ERROR);
-  }
-
-  const { data: rows, error: rowsError } = await client
-    .from("assessments")
-    .select(TIMELINE_SELECT)
-    .eq("plant_id", plantId)
-    .order("created_at", { ascending: false });
-  if (rowsError) {
-    console.error("[fetchPlantDetail] timeline query failed:", rowsError.message);
-    throw new Error(PLANT_DETAIL_LOAD_ERROR);
-  }
-
-  return {
-    plant: plant as unknown as PlantDetailRow,
-    timeline: mapTimelineRows(rows as unknown as TimelineRow[]),
-  };
 }

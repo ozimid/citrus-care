@@ -1,8 +1,9 @@
-// Plants list data access + pure row mapping. The mapping half is unit-tested
-// (plants.test.ts); fetchPlants is a thin query kept in sync with the web list
-// page (apps/web/app/plants/page.tsx). RLS scopes rows to the signed-in user.
+// Plants list row mapping (pure, unit-tested). D-17: rows are reconstructed
+// from the on-device stores by store-adapters and fed here; the thin read is
+// fetchPlants in plants-io.ts. The nested-assessments shape is a legacy of the
+// PostgREST embed the adapter now recreates — kept so these mappers, and their
+// tests, are unchanged.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Assessment, CareProfile, Plant } from "@citrus/shared";
 import { comparisonDelta } from "./plant-detail";
 import { parseStoredCareProfile } from "./watering";
@@ -40,9 +41,6 @@ export interface PlantListItem {
   careProfile: CareProfile | null;
   lastAssessedAt: string | null;
 }
-
-export const PLANTS_SELECT =
-  "id,name,plant_type,species,cultivar,location,zip_code,care_profile,created_at,assessments!plant_id(health_score,created_at,diagnosis)";
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
 export function plantSubLabel(row: PlantRow): string {
@@ -103,20 +101,4 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
     careProfile: parseStoredCareProfile(row.care_profile),
     lastAssessedAt: latestAssessedAt(row.assessments),
   }));
-}
-
-export async function fetchPlants(client: SupabaseClient): Promise<PlantListItem[]> {
-  const { data, error } = await client
-    .from("plants")
-    .select(PLANTS_SELECT)
-    .order("created_at", { ascending: false })
-    .order("created_at", { referencedTable: "assessments", ascending: false })
-    .limit(1, { referencedTable: "assessments" });
-
-  if (error) {
-    // Generic client-facing message; details stay in the console (web parity rule).
-    console.error("[fetchPlants] query failed:", error.message);
-    throw new Error("Could not load your plants.");
-  }
-  return mapPlantRows(data as unknown as PlantRow[]);
 }

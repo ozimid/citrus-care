@@ -5,11 +5,9 @@ import {
   formatTimelineDate,
   mapTimelineRows,
   parseTimelineDiagnosis,
-  PLANT_DETAIL_SELECT,
   sliderPair,
   subjectLabel,
   subjectOf,
-  TIMELINE_SELECT,
   trendChipLabel,
   type TimelineRow,
 } from "./plant-detail";
@@ -55,31 +53,6 @@ function indexFor(ids: Record<string, string>): PhotoIndex {
   }
   return index;
 }
-
-describe("select constants", () => {
-  it("pulls zip_code for the quarantine check", () => {
-    expect(PLANT_DETAIL_SELECT).toContain("zip_code");
-  });
-
-  // F20: the watering card needs the plant's own baseline, and it renders from
-  // the same single plant query — no extra round trip for the profile.
-  it("pulls care_profile for the watering card", () => {
-    expect(PLANT_DETAIL_SELECT).toContain("care_profile");
-  });
-
-  it("pulls the timeline columns, WITHOUT photo_path (photos are local-only, D-16)", () => {
-    for (const col of ["id", "created_at", "health_score", "diagnosis", "is_cut_care"]) {
-      expect(TIMELINE_SELECT).toContain(col);
-    }
-    expect(TIMELINE_SELECT).not.toContain("photo_path");
-  });
-
-  // F22: without this column a reopened timeline row can't answer "which
-  // model produced this?" — the badge was ephemeral before.
-  it("pulls the engine column (F22 provenance — migration 0007)", () => {
-    expect(TIMELINE_SELECT).toContain("engine");
-  });
-});
 
 describe("formatTimelineDate", () => {
   it("formats as 'Mon D, YYYY' (UTC, deterministic)", () => {

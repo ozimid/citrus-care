@@ -12,8 +12,8 @@ import {
 } from "react-native";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { bandColor, healthBand } from "../lib/health";
-import { fetchPlants, type PlantListItem } from "../lib/plants";
-import { supabase } from "../lib/supabase";
+import { type PlantListItem } from "../lib/plants";
+import { fetchPlants } from "../lib/plants-io";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 import { distinctZips, wateringPlansFor, type WateringPlan } from "../lib/watering";
 import { getWateringLog } from "../lib/watering-io";
@@ -58,7 +58,7 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
 
   const load = useCallback(async () => {
     try {
-      const plants = await fetchPlants(supabase);
+      const plants = await fetchPlants();
       setItems(plants);
       setError(null);
       // Don't block the list on weather — the chips arrive a beat later.

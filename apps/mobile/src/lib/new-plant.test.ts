@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { NewPlantInput } from "@citrus/shared";
 import {
-  buildPlantInsertRow,
+  buildStoredPlant,
   emptyNewPlantForm,
   formFromPlant,
-  GENERIC_CREATE_PLANT_ERROR,
-  insertPlant,
   showsCitrusCultivarPicker,
   validateNewPlant,
 } from "./new-plant";
@@ -114,96 +110,24 @@ describe("validateNewPlant", () => {
   });
 });
 
-describe("buildPlantInsertRow", () => {
-  it("builds the insert row with an explicit user_id and nulls for missing optionals (web createPlant parity)", () => {
+describe("buildStoredPlant", () => {
+  it("builds a local plant record (no user_id; null cover + care_profile until generated)", () => {
     const result = validateNewPlant(
       filled({ species: "", cultivar: "", location: "", zip_code: "" }),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(buildPlantInsertRow(result.data, "user-123")).toEqual({
-      user_id: "user-123",
+    expect(buildStoredPlant(result.data, "plant-1", "2026-07-15T00:00:00Z")).toEqual({
+      id: "plant-1",
       name: "Mr Lemon by the door",
       plant_type: "tree",
       species: null,
       cultivar: null,
       location: null,
       zip_code: null,
+      cover_assessment_id: null,
+      care_profile: null,
+      created_at: "2026-07-15T00:00:00Z",
     });
-  });
-});
-
-// F20: the sheet fires requestCareProfile(plantId) right after a successful
-// insert, so the insert has to hand the new row's id back.
-
-const INPUT: NewPlantInput = {
-  name: "Mr Lemon",
-  plant_type: "tree",
-  species: null,
-  cultivar: null,
-  location: null,
-  zip_code: "90210",
-};
-
-interface Call {
-  op: string;
-  args: unknown[];
-}
-
-function fakeInsertClient(
-  calls: Call[],
-  result: { data: unknown; error: { message: string } | null },
-): SupabaseClient {
-  return {
-    auth: {
-      getUser: async () => ({ data: { user: { id: "user-123" } } }),
-    },
-    from(table: string) {
-      calls.push({ op: "from", args: [table] });
-      return {
-        insert(row: unknown) {
-          calls.push({ op: "insert", args: [row] });
-          return {
-            select(cols: string) {
-              calls.push({ op: "select", args: [cols] });
-              return {
-                single: async () => {
-                  calls.push({ op: "single", args: [] });
-                  return result;
-                },
-              };
-            },
-          };
-        },
-      };
-    },
-  } as unknown as SupabaseClient;
-}
-
-describe("insertPlant", () => {
-  it("returns the new plant's id so the caller can request its care profile", async () => {
-    const calls: Call[] = [];
-    const id = await insertPlant(
-      fakeInsertClient(calls, { data: { id: "plant-9" }, error: null }),
-      INPUT,
-    );
-    expect(id).toBe("plant-9");
-    expect(calls[0]).toEqual({ op: "from", args: ["plants"] });
-    expect(calls[1]).toEqual({ op: "insert", args: [buildPlantInsertRow(INPUT, "user-123")] });
-    expect(calls[2].op).toBe("select");
-  });
-
-  it("maps an insert failure to the generic user-facing string", async () => {
-    await expect(
-      insertPlant(fakeInsertClient([], { data: null, error: { message: "boom" } }), INPUT),
-    ).rejects.toThrow(GENERIC_CREATE_PLANT_ERROR);
-  });
-
-  // A row that came back without an id would silently skip the care-profile
-  // request; treat it as a failed insert rather than a half-created plant.
-  it("treats a missing id in the returned row as a failure", async () => {
-    await expect(
-      insertPlant(fakeInsertClient([], { data: {}, error: null }), INPUT),
-    ).rejects.toThrow(GENERIC_CREATE_PLANT_ERROR);
   });
 });

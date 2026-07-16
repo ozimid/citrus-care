@@ -45,8 +45,13 @@ interface LocalEngineContextValue {
   retry: () => void;
   /** Stable + live: safe to call long after render (e.g. at the Analyze tap). */
   isReady: () => boolean;
-  /** Rejects when the session isn't loaded — the router escalates on any throw. */
+  /** Rejects when the session isn't loaded. Serialized: the single native
+   * session runs one request at a time (a diagnosis and a care-profile call
+   * never overlap), FIFO. */
   generate: LocalGenerate;
+  /** Interrupt the in-flight inference (assess flow's hard ceiling). No-op
+   * when nothing is running. */
+  interrupt: () => void;
 }
 
 const OFF_CONTEXT: LocalEngineContextValue = {
@@ -58,6 +63,7 @@ const OFF_CONTEXT: LocalEngineContextValue = {
   generate: async () => {
     throw new Error("local engine not available");
   },
+  interrupt: () => {},
 };
 
 const LocalEngineContext = createContext<LocalEngineContextValue>(OFF_CONTEXT);
@@ -74,6 +80,11 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
   // Bumping remounts the session, which re-runs useLLM's load (retry path).
   const [session, setSession] = useState(0);
   const generateRef = useRef<LocalGenerate | null>(null);
+  const interruptRef = useRef<(() => void) | null>(null);
+  // Single-flight FIFO tail: the native session runs one generate at a time, so
+  // every request chains behind the previous (a care-profile call and a
+  // diagnosis call must not overlap on the one session).
+  const generateTailRef = useRef<Promise<unknown>>(Promise.resolve());
 
   useEffect(() => {
     loadLocalEngineSettings()
@@ -132,17 +143,28 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
       setEnabled,
       retry,
       isReady: () => shouldRouteLocal(stateRef.current) && generateRef.current !== null,
-      generate: async (args) => {
-        const fn = generateRef.current;
-        if (!fn) throw new Error("local engine session is not loaded");
-        return fn(args);
+      generate: (req) => {
+        // Chain behind whatever is already running (FIFO single-flight). The
+        // tail swallows errors so one failed request never wedges the queue.
+        const run = generateTailRef.current.catch(() => {}).then(() => {
+          const fn = generateRef.current;
+          if (!fn) throw new Error("local engine session is not loaded");
+          return fn(req);
+        });
+        generateTailRef.current = run.catch(() => {});
+        return run;
       },
+      interrupt: () => interruptRef.current?.(),
     }),
     [state, settings, setEnabled, retry],
   );
 
   const onGenerate = useCallback((fn: LocalGenerate | null) => {
     generateRef.current = fn;
+  }, []);
+
+  const onInterrupt = useCallback((fn: (() => void) | null) => {
+    interruptRef.current = fn;
   }, []);
 
   const onSessionCrash = useCallback((e: Error) => {
@@ -159,7 +181,11 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
         // nothing to show while it loads — the Profile row reports progress.
         <SessionBoundary key={session} onError={onSessionCrash}>
           <Suspense fallback={null}>
-            <LocalEngineSession onRuntime={setRuntime} onGenerate={onGenerate} />
+            <LocalEngineSession
+              onRuntime={setRuntime}
+              onGenerate={onGenerate}
+              onInterrupt={onInterrupt}
+            />
           </Suspense>
         </SessionBoundary>
       )}

@@ -16,17 +16,14 @@ import {
   emptyNewPlantForm,
   formFromPlant,
   GENERIC_CREATE_PLANT_ERROR,
-  insertPlant,
   showsCitrusCultivarPicker,
   validateNewPlant,
   type NewPlantFieldErrors,
   type NewPlantForm,
 } from "../lib/new-plant";
-import { apiFetch } from "../lib/api-io";
-import { GENERIC_UPDATE_PLANT_ERROR, updatePlant } from "../lib/plant-mutations";
-import { supabase } from "../lib/supabase";
+import { GENERIC_UPDATE_PLANT_ERROR } from "../lib/plant-mutations";
+import { insertPlant, updatePlant } from "../lib/plants-io";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
-import { requestCareProfile } from "../lib/watering";
 
 // New/edit plant bottom sheet per the native design doc §4 (#5/#7): same
 // fields and validation as the web form (apps/web/app/plants/new/
@@ -96,14 +93,12 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
     setBusy(true);
     try {
       if (plant) {
-        await updatePlant(supabase, plant.id, result.data);
+        await updatePlant(plant.id, result.data);
       } else {
-        const newPlantId = await insertPlant(supabase, result.data);
-        // F20: kick off the plant's care profile and DON'T wait for it. Adding
-        // a plant must never hang on (or fail because of) a Gemini call — a
-        // plant without a profile simply shows no watering guidance, and the
-        // detail screen retries. requestCareProfile swallows its own errors.
-        void requestCareProfile(apiFetch, newPlantId);
+        await insertPlant(result.data);
+        // F20: the plant is created without a care profile. It is generated
+        // on-device, opportunistically, when the detail screen's watering card
+        // finds the model ready — so adding a plant never waits on the model.
         setForm(emptyNewPlantForm);
       }
       setCultivarOpen(false);

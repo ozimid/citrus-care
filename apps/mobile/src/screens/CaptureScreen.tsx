@@ -7,8 +7,8 @@ import { PlantPickerSheet } from "../components/PlantPickerSheet";
 import type { AssessedResult } from "../lib/assess";
 import { preselectedPlantId } from "../lib/capture-modes";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
-import { fetchPlants, type PlantListItem } from "../lib/plants";
-import { supabase } from "../lib/supabase";
+import { type PlantListItem } from "../lib/plants";
+import { fetchPlants } from "../lib/plants-io";
 import { RADIUS } from "../lib/theme";
 import { DiagnosisScreen } from "./DiagnosisScreen";
 import { ReviewScreen } from "./ReviewScreen";
@@ -58,7 +58,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    fetchPlants(supabase)
+    fetchPlants()
       .then((items) => {
         if (cancelled) return;
         setPlants(items);

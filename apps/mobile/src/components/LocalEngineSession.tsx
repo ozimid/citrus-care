@@ -11,8 +11,7 @@
 import { useEffect } from "react";
 import { initExecutorch, models, useLLM } from "react-native-executorch";
 import { ExpoResourceFetcher } from "react-native-executorch-expo-resource-fetcher";
-import { LOCAL_USER_PROMPT, type LocalEngineRuntime } from "../lib/local-engine";
-import { SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
+import type { LocalEngineRuntime } from "../lib/local-engine";
 
 initExecutorch({ resourceFetcher: ExpoResourceFetcher });
 
@@ -21,15 +20,27 @@ initExecutorch({ resourceFetcher: ExpoResourceFetcher });
  * Same model the Stage 1 spike measured against the go/no-go bar. */
 const LOCAL_MODEL = models.llm.gemma4_e2b_multimodal();
 
-export type LocalGenerate = (args: { imageUri: string }) => Promise<string>;
+/** One generation request. `imageUri` set = a multimodal (diagnosis) call;
+ * absent = a text-only (care-profile) call — Gemma 4 is an LLM with vision, so
+ * mediaPath is optional. The prompts live in the pure lib modules and are
+ * passed in, keeping this session dumb and stateless per call. */
+export interface LocalGenerateRequest {
+  system: string;
+  user: string;
+  imageUri?: string;
+}
+
+export type LocalGenerate = (req: LocalGenerateRequest) => Promise<string>;
 
 interface Props {
   onRuntime: (runtime: LocalEngineRuntime) => void;
-  /** Registers (or clears) the generate closure the assess router calls. */
+  /** Registers (or clears) the generate closure the router / care profile call. */
   onGenerate: (fn: LocalGenerate | null) => void;
+  /** Registers (or clears) interrupt() — frees the session at the hard ceiling. */
+  onInterrupt: (fn: (() => void) | null) => void;
 }
 
-export function LocalEngineSession({ onRuntime, onGenerate }: Props) {
+export function LocalEngineSession({ onRuntime, onGenerate, onInterrupt }: Props) {
   const llm = useLLM({ model: LOCAL_MODEL });
 
   useEffect(() => {
@@ -45,17 +56,22 @@ export function LocalEngineSession({ onRuntime, onGenerate }: Props) {
   }, [llm.error]);
 
   useEffect(() => {
+    onInterrupt(() => llm.interrupt());
+    return () => onInterrupt(null);
+  }, [llm, onInterrupt]);
+
+  useEffect(() => {
     if (!llm.isReady) {
       onGenerate(null);
       return;
     }
-    // generate() over sendMessage(): stateless per photo, so one diagnosis
-    // never carries context (or latency) from the previous one.
-    // One prompt, no mode (F21): the model reports the subject it saw.
-    onGenerate(({ imageUri }) =>
+    // generate() over sendMessage(): stateless per call, so no request carries
+    // context (or latency) from the previous one. mediaPath only when an image
+    // is supplied — a care-profile call is pure text on the same model.
+    onGenerate(({ system, user, imageUri }) =>
       llm.generate([
-        { role: "system", content: SPIKE_SYSTEM_PROMPT },
-        { role: "user", content: LOCAL_USER_PROMPT, mediaPath: imageUri },
+        { role: "system", content: system },
+        { role: "user", content: user, ...(imageUri ? { mediaPath: imageUri } : {}) },
       ]),
     );
     return () => onGenerate(null);

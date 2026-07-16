@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
+  COMPARISON_SAME_BAND,
   allAssessments,
   assessmentsForPlant,
+  deltaFromScores,
   latestAssessmentId,
   parseAssessmentStore,
   removePlantAssessments,
   serializeAssessmentStore,
   upsertAssessment,
+  withComputedComparison,
   type AssessmentStore,
   type StoredAssessment,
 } from "./assessment-store";
@@ -108,5 +111,53 @@ describe("parseAssessmentStore / serializeAssessmentStore", () => {
       "not-an-object": "nope",
     });
     expect(Object.keys(parseAssessmentStore(stored))).toEqual(["good"]);
+  });
+});
+
+// D-17: the on-device model gets no prior context (stateless per photo), so it
+// never emits `comparison`. We restore the better/same/worse trend
+// DETERMINISTICALLY from the two health scores — more reliable than asking a 2B
+// model to compare, and it feeds the unchanged comparisonDelta / latestTrend
+// mappers exactly like Gemini's comparison used to.
+describe("deltaFromScores", () => {
+  it("is 'better' when the score rises past the same-band", () => {
+    expect(deltaFromScores(60, 60 + COMPARISON_SAME_BAND)).toBe("better");
+    expect(deltaFromScores(50, 90)).toBe("better");
+  });
+
+  it("is 'worse' when the score falls past the same-band", () => {
+    expect(deltaFromScores(80, 80 - COMPARISON_SAME_BAND)).toBe("worse");
+    expect(deltaFromScores(90, 40)).toBe("worse");
+  });
+
+  it("is 'same' inside the band (noise, not a real trend)", () => {
+    expect(deltaFromScores(80, 80)).toBe("same");
+    expect(deltaFromScores(80, 80 + COMPARISON_SAME_BAND - 1)).toBe("same");
+    expect(deltaFromScores(80, 80 - COMPARISON_SAME_BAND + 1)).toBe("same");
+  });
+});
+
+describe("withComputedComparison", () => {
+  it("injects a comparison the timeline mapper can read", () => {
+    const result = withComputedComparison(diagnosis({ health_score: 85 }), 60);
+    expect(result.comparison?.delta).toBe("better");
+    expect(result.comparison?.notes).toContain("60");
+    expect(result.comparison?.notes).toContain("85");
+  });
+
+  it("leaves the first assessment WITHOUT a comparison (so it reads 'First')", () => {
+    const result = withComputedComparison(diagnosis({ health_score: 85 }), null);
+    expect(result.comparison).toBeUndefined();
+  });
+
+  it("strips a stray comparison on a first assessment", () => {
+    const withStray = diagnosis({ comparison: { delta: "better", notes: "hallucinated" } });
+    expect(withComputedComparison(withStray, null).comparison).toBeUndefined();
+  });
+
+  it("does not mutate the input diagnosis", () => {
+    const input = diagnosis({ health_score: 85 });
+    withComputedComparison(input, 60);
+    expect(input.comparison).toBeUndefined();
   });
 });

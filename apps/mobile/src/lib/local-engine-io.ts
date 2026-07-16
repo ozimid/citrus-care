@@ -9,10 +9,18 @@ import { Paths } from "expo-file-system";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
+  assessmentsForPlant,
+  upsertAssessment,
+  withComputedComparison,
+  type StoredAssessment,
+} from "./assessment-store";
+import { loadAssessmentStore, saveAssessmentStore } from "./assessment-store-io";
+import { newLocalId } from "./local-id";
+import { setPlantCover } from "./plant-store-io";
+import {
   DEFAULT_LOCAL_ENGINE_SETTINGS,
   ENGINE_STATS_LIMIT,
   LOCAL_ENGINE_STORAGE_KEY,
-  buildLocalAssessmentRow,
   parseLocalEngineSettings,
   serializeLocalEngineSettings,
   type LocalEngineSettings,
@@ -65,57 +73,37 @@ export async function fetchRecentEngines(client: SupabaseClient): Promise<(strin
 export interface PersistLocalAssessmentInput {
   plantId: string;
   diagnosis: AssessmentDiagnosis;
+  /** The model's raw text — accepted for the assess-flow contract, not stored
+   * (the structured diagnosis is what matters, and raw would bloat the store). */
   raw: string;
 }
 
-/** Insert an on-device diagnosis straight into `assessments` (RLS scopes it to
- * the signed-in user — anon key only, same as every other mobile query), then
- * mirror /assess's wiring: link the previous assessment so timeline deltas keep
- * working, and best-effort update the plant's cover. Returns the new id.
- * Throws on failure — the router treats that as "escalate to Gemini". */
-export async function persistLocalAssessment(
-  client: SupabaseClient,
-  input: PersistLocalAssessmentInput,
-): Promise<string> {
-  const { data: userData, error: userErr } = await client.auth.getUser();
-  const userId = userData?.user?.id;
-  if (userErr || !userId) throw new Error("no authenticated user for the local insert");
+/** Insert an on-device diagnosis into the local assessment store (D-17). The
+ * newest existing assessment is the comparison anchor: its health score drives
+ * the deterministic better/same/worse delta injected here so the timeline trend
+ * survives without a model-emitted comparison. Best-effort cover update. Throws
+ * on a store write failure (the assess flow surfaces it as a retryable error). */
+export async function persistLocalAssessment(input: PersistLocalAssessmentInput): Promise<string> {
+  const store = await loadAssessmentStore();
+  const previous = assessmentsForPlant(store, input.plantId)[0] ?? null;
+  const diagnosis = withComputedComparison(input.diagnosis, previous?.diagnosis.health_score ?? null);
 
-  // Same lookup as /assess: newest assessment for this plant becomes the
-  // comparison anchor (RLS already limits this to the user's own rows).
-  const { data: prevRow } = await client
-    .from("assessments")
-    .select("id")
-    .eq("plant_id", input.plantId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const assessment: StoredAssessment = {
+    id: newLocalId(Date.now(), Math.random()),
+    plantId: input.plantId,
+    createdAt: new Date().toISOString(),
+    diagnosis,
+    comparedToId: previous?.id ?? null,
+    engine: "on-device",
+  };
+  await saveAssessmentStore(upsertAssessment(store, assessment));
 
-  const { data: inserted, error: insertErr } = await client
-    .from("assessments")
-    .insert(
-      buildLocalAssessmentRow({
-        plantId: input.plantId,
-        userId,
-        diagnosis: input.diagnosis,
-        raw: input.raw,
-        previousAssessmentId: (prevRow as { id: string } | null)?.id ?? null,
-      }),
-    )
-    .select("id")
-    .single();
-
-  if (insertErr || !inserted) {
-    throw new Error(insertErr?.message ?? "local assessment insert returned no row");
+  // A missed cover only costs a thumbnail — never fail the assessment for it.
+  try {
+    await setPlantCover(input.plantId, assessment.id);
+  } catch (e) {
+    console.error("[local-engine-io] cover update failed:", (e as Error).message);
   }
-  const id = (inserted as { id: string }).id;
 
-  // Best-effort, exactly as /assess does it: a missed cover costs a thumbnail.
-  const { error: coverErr } = await client
-    .from("plants")
-    .update({ cover_assessment_id: id })
-    .eq("id", input.plantId);
-  if (coverErr) console.error("[local-engine-io] cover update failed:", coverErr.message);
-
-  return id;
+  return assessment.id;
 }

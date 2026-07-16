@@ -19,7 +19,6 @@ import { WateringCard } from "../components/WateringCard";
 import { bandColor, healthBand } from "../lib/health";
 import {
   attachLocalPhotos,
-  fetchPlantDetail,
   parseTimelineDiagnosis,
   PLANT_DETAIL_LOAD_ERROR,
   sliderPair,
@@ -28,10 +27,10 @@ import {
   type TimelineDelta,
   type TimelineEntry,
 } from "../lib/plant-detail";
-import { deletePlantWithPhotos, GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
-import { deleteLocalPlantPhotos, loadPhotoIndex } from "../lib/photo-store-io";
+import { GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
+import { deletePlantWithPhotos, fetchPlantDetail } from "../lib/plants-io";
+import { loadPhotoIndex } from "../lib/photo-store-io";
 import { plantSubLabel } from "../lib/plants";
-import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
 import { CaptureScreen } from "./CaptureScreen";
 import { DiagnosisScreen } from "./DiagnosisScreen";
@@ -65,7 +64,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const detail = await fetchPlantDetail(supabase, plantId);
+      const detail = await fetchPlantDetail(plantId);
       // Join the synced assessments to their on-phone photos (D-16).
       const index = await loadPhotoIndex();
       setData({ ...detail, timeline: attachLocalPhotos(detail.timeline, index) });
@@ -103,10 +102,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           onPress: async () => {
             setDeleting(true);
             try {
-              await deletePlantWithPhotos(
-                { client: supabase, deleteLocalPhotos: deleteLocalPlantPhotos },
-                plantId,
-              );
+              await deletePlantWithPhotos(plantId);
               onChanged();
               onClose();
             } catch {

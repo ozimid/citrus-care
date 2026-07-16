@@ -98,3 +98,43 @@ export function parseAssessmentStore(json: string | null): AssessmentStore {
 export function serializeAssessmentStore(store: AssessmentStore): string {
   return JSON.stringify(store);
 }
+
+// ---- Deterministic trend (D-17) ----
+
+/** Score change within ±this is "same" — noise, not a real trend. */
+export const COMPARISON_SAME_BAND = 5;
+
+export type Delta = "better" | "same" | "worse";
+
+/** better/same/worse from the previous vs current health score. */
+export function deltaFromScores(previous: number, current: number): Delta {
+  const change = current - previous;
+  if (change >= COMPARISON_SAME_BAND) return "better";
+  if (change <= -COMPARISON_SAME_BAND) return "worse";
+  return "same";
+}
+
+function comparisonNote(previous: number, current: number, delta: Delta): string {
+  if (delta === "better") return `Health rose from ${previous} to ${current}.`;
+  if (delta === "worse") return `Health fell from ${previous} to ${current}.`;
+  return `Health held around ${current}.`;
+}
+
+/** The on-device model is stateless per photo and emits no `comparison`, so we
+ * compute one from the two scores. A first assessment (no previous score) gets
+ * NO comparison — that is what makes the timeline read "First". */
+export function withComputedComparison(
+  diagnosis: AssessmentDiagnosis,
+  previousScore: number | null,
+): AssessmentDiagnosis {
+  if (previousScore === null) {
+    if (diagnosis.comparison === undefined) return diagnosis;
+    const { comparison: _stray, ...rest } = diagnosis;
+    return rest;
+  }
+  const delta = deltaFromScores(previousScore, diagnosis.health_score);
+  return {
+    ...diagnosis,
+    comparison: { delta, notes: comparisonNote(previousScore, diagnosis.health_score, delta) },
+  };
+}
