@@ -2,8 +2,10 @@ export const landingContent = {
   hero: {
     eyebrow: "Private, on-device plant care",
     title: "Citrus Care",
+    // Problem-first, plain words (friend feedback 2026-07-16: "write it like
+    // for dummies — otherwise it's not clear").
     description:
-      "Snap a leaf, a whole tree, or a pruning cut and get a scored diagnosis with ranked care steps — analyzed by AI running on your phone. No account, no cloud, free.",
+      "Is your plant dying? Take a photo — the app tells you what's wrong and exactly what to do about it, then reminds you to check back. Like a pet-care app, but for plants. Free, no account, and the AI runs on your phone.",
     primaryCta: { label: "Download for Android", href: "#get-the-app" },
   },
   stats: [
@@ -81,7 +83,7 @@ export const landingContent = {
     requirements: [
       "A recent Android phone with about 2 GB of free storage",
       "A one-time ~1.3 GB download for the on-device AI model, over Wi-Fi",
-      "Works best on a higher-memory phone — weaker devices get an honest “can’t run it” message instead of a broken experience",
+      "No graphics card or VRAM involved — the AI shares your phone's normal memory. 6 GB+ RAM recommended; weaker devices get an honest “can’t run it” message instead of a broken experience",
     ],
     installSteps: [
       "Download the APK from the button above.",
