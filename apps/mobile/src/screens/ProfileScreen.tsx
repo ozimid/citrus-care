@@ -1,6 +1,17 @@
 import * as Application from "expo-application";
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from "react-native";
 import { useLocalEngine } from "../components/LocalEngineProvider";
 import {
   LOCAL_MODEL_DOWNLOAD_WARNING,
@@ -15,6 +26,7 @@ import { availableDiskSpaceBytes } from "../lib/local-engine-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
+import { BMC_URL, buildFeedbackMailto } from "../lib/support";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
 
@@ -91,6 +103,8 @@ export function ProfileScreen() {
       <LocalEngineCard />
 
       <DataCard />
+
+      <SupportCard />
 
       <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
         <Text style={[styles.label, { color: t.sub }]}>About</Text>
@@ -204,6 +218,55 @@ function DataCard() {
           ) : (
             <Text style={[styles.dataButtonText, { color: t.text }]}>Import</Text>
           )}
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/** Support & feedback — both rows are LINK-OUTS the user taps (mail app /
+ * browser); the app itself sends nothing (D-17). The feedback draft carries
+ * app + Android version because the user asked for troubleshooting context. */
+function SupportCard() {
+  const { t } = useTheme();
+
+  function openFeedback() {
+    const url = buildFeedbackMailto(Application.nativeApplicationVersion, Platform.Version);
+    Linking.openURL(url).catch((e) => {
+      console.error("[ProfileScreen] feedback mailto failed:", (e as Error).message);
+      Alert.alert("Couldn't open your mail app", "You can email feedback@citruscare.net directly.");
+    });
+  }
+
+  function openCoffee() {
+    Linking.openURL(BMC_URL).catch((e) => {
+      console.error("[ProfileScreen] coffee link failed:", (e as Error).message);
+      Alert.alert("Couldn't open the browser", "The page is buymeacoffee.com/citruscare.");
+    });
+  }
+
+  return (
+    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+      <Text style={[styles.label, { color: t.sub }]}>Support & feedback</Text>
+      <Text style={[styles.dataBody, { color: t.sub }]}>
+        Citrus Care is free and has no ads. Feedback and coffees both help.
+      </Text>
+      <View style={styles.dataRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Buy me a coffee"
+          onPress={openCoffee}
+          style={[styles.dataButton, { borderColor: t.border }]}
+        >
+          <Text style={[styles.dataButtonText, { color: t.text }]}>☕ Buy me a coffee</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Send feedback"
+          onPress={openFeedback}
+          style={[styles.dataButton, { borderColor: t.border }]}
+        >
+          <Text style={[styles.dataButtonText, { color: t.text }]}>Send feedback</Text>
         </Pressable>
       </View>
     </View>

@@ -372,6 +372,15 @@ function SupportSection({ content }: { content: LandingContent }) {
             <Coffee className="size-4" aria-hidden="true" />
             {support.cta.label}
           </a>
+          <p className="text-sm text-muted-foreground">
+            {support.feedback.prompt}{" "}
+            <a
+              href={support.feedback.href}
+              className="font-medium text-emerald-700 underline dark:text-emerald-300"
+            >
+              {support.feedback.label}
+            </a>
+          </p>
         </div>
       </div>
     </section>

@@ -16,6 +16,10 @@ test("landing page shows hero and the get-the-app section", async ({ page }) => 
   ).toBeVisible();
   // D-17: no account, on-device AI — the download link, not "ask Oleksii".
   await expect(page.getByRole("link", { name: /download the apk/i })).toBeVisible();
+  // Support section: BMC + the routed feedback address (zero-backend feedback).
+  const feedback = page.getByRole("link", { name: /feedback@citruscare\.net/i });
+  await expect(feedback).toBeVisible();
+  await expect(feedback).toHaveAttribute("href", /^mailto:feedback@citruscare\.net/);
 });
 
 // D-17: no accounts, nothing synced — the privacy note says exactly that.

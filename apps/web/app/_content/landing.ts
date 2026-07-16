@@ -97,6 +97,11 @@ export const landingContent = {
     title: "Support the app",
     body: "Citrus Care is free and always on-device. If it helps your garden, you can buy me a coffee.",
     cta: { label: "Buy me a coffee ☕", href: "https://buymeacoffee.com/citruscare" },
+    feedback: {
+      prompt: "Found a bug or want a feature?",
+      label: "Email feedback@citruscare.net",
+      href: "mailto:feedback@citruscare.net?subject=Citrus%20Care%20feedback",
+    },
   },
 } as const;
 
