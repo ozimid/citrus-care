@@ -21,7 +21,12 @@ const assessBodySchema = z.object({
   plantId: z.string().min(1),
   imageBase64: z.string().min(1),
   mime: z.literal("image/jpeg"),
+  /** F21: accepted and IGNORED. The cut split is now the model's call
+   * (diagnosis.subject), but an un-reloaded phone still posts this flag and a
+   * 400 would be a worse answer than quietly ignoring it. Drop after a release. */
   isCutCare: z.boolean().optional(),
+  /** "Save anyway" — persist even when the model says it is not a plant. */
+  force: z.boolean().optional(),
 });
 
 /** Decoded byte size of a base64 string, without decoding it. */
@@ -40,7 +45,7 @@ assess.post("/", async (c) => {
   if (!parsed.success) {
     return c.json({ error: "Invalid input" }, 400);
   }
-  const { plantId, imageBase64, mime, isCutCare } = parsed.data;
+  const { plantId, imageBase64, mime, force } = parsed.data;
 
   if (base64DecodedBytes(imageBase64) > MAX_IMAGE_BYTES) {
     return c.json({ error: "Image too large. Please retry." }, 400);
@@ -88,7 +93,7 @@ assess.post("/", async (c) => {
     .maybeSingle();
   const previous = prevRow as PreviousLite | null;
 
-  const systemPrompt = buildSystemPrompt(isCutCare);
+  const systemPrompt = buildSystemPrompt();
   const userText = buildUserMessageText({
     plant: {
       name: plant.name,
@@ -98,7 +103,6 @@ assess.post("/", async (c) => {
       location: plant.location,
       zip_code: plant.zip_code,
     },
-    isCutCare,
     previous,
   });
 
@@ -121,6 +125,15 @@ assess.post("/", async (c) => {
     );
   }
 
+  // F21: a photo the model reads as non-plant does not belong in a plant's
+  // timeline. Hand the diagnosis back unsaved so the client can explain
+  // itself and offer "save anyway", which re-posts with force.
+  if (diagnosis.subject === "not_a_plant" && !force) {
+    return c.json({ rejected: true, diagnosis });
+  }
+
+  const isCut = diagnosis.subject === "cut";
+
   const { data: inserted, error: insertErr } = await supabase
     .from("assessments")
     .insert({
@@ -133,8 +146,8 @@ assess.post("/", async (c) => {
       recommendations: diagnosis.recommendations,
       compared_to_assessment_id: previous?.id ?? null,
       raw_output: raw,
-      is_cut_care: !!isCutCare,
-      cut_health_score: isCutCare ? diagnosis.health_score : null,
+      is_cut_care: isCut,
+      cut_health_score: isCut ? diagnosis.health_score : null,
     })
     .select("id")
     .single();

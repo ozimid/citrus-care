@@ -277,7 +277,6 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
             diagnosis={viewing.diagnosis}
             plantId={plant.id}
             plantName={plant.name}
-            mode={viewing.entry.isCutCare ? "cut" : "leaf"}
             onDone={() => setViewing(null)}
           />
         ) : null}

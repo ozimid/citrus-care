@@ -7,7 +7,7 @@
 // itself lives in components/LocalEngineSession.tsx (native, dev-build only).
 
 import type { AssessmentDiagnosis } from "@citrus/shared";
-import { SPIKE_SYSTEM_PROMPT } from "./spike-vlm";
+import { SPIKE_USER_PROMPT } from "./spike-vlm";
 
 export const LOCAL_ENGINE_STORAGE_KEY = "citrus.local-engine.v1";
 
@@ -138,21 +138,11 @@ export function localEngineSubtitle(
   }
 }
 
-/** The compact on-device prompt (shared with the Stage 1 spike), specialized
- * for cut care the way the server's buildSystemPrompt is. A ~2B local model
- * has no responseSchema enforcement, hence the explicit JSON-only rules. */
-export function localSystemPrompt(isCutCare: boolean): string {
-  if (!isCutCare) return SPIKE_SYSTEM_PROMPT;
-  return SPIKE_SYSTEM_PROMPT.replace(
-    "You are a plant care expert. Diagnose the plant in the photo and prescribe prioritized care actions for a home grower.",
-    `You are a plant care expert specializing in pruning. Diagnose the health of the pruning cut or branch wound in the photo and prescribe prioritized aftercare for a home grower.
+// F21 removed localSystemPrompt(isCutCare): with the prompt unified there is
+// no mode to specialize on, so the session sends SPIKE_SYSTEM_PROMPT as-is —
+// the cut framing lives inside it and applies when the model reads a cut.
 
-Judge the cut itself: a correct cut is just outside the branch collar — a flush cut (too close to the trunk) or a long stub both heal badly. Look for decay, borer holes, or callous forming over the edges. health_score rates the cut/wound, not the tree.`,
-  );
-}
-
-export const LOCAL_USER_PROMPT =
-  "Diagnose the health of the plant in this photo. Reply with the JSON object only.";
+export const LOCAL_USER_PROMPT = SPIKE_USER_PROMPT;
 
 export interface LocalAssessmentRowInput {
   plantId: string;
@@ -160,7 +150,6 @@ export interface LocalAssessmentRowInput {
   diagnosis: AssessmentDiagnosis;
   /** The model's raw text, kept for debugging exactly as /assess keeps Gemini's. */
   raw: string;
-  isCutCare: boolean;
   previousAssessmentId: string | null;
 }
 
@@ -182,8 +171,10 @@ export interface LocalAssessmentRow {
 /** An on-device diagnosis is persisted by the phone itself — /assess runs
  * Gemini, so it can't save this one. The row MUST match what the server
  * inserts field-for-field or timelines (deltas, cut-care split) diverge by
- * engine. photo_path stays null: photos never reach a server store (D-16). */
+ * engine — including F21's rule that the cut split comes from the model's own
+ * subject. photo_path stays null: photos never reach a server store (D-16). */
 export function buildLocalAssessmentRow(input: LocalAssessmentRowInput): LocalAssessmentRow {
+  const isCut = input.diagnosis.subject === "cut";
   return {
     plant_id: input.plantId,
     user_id: input.userId,
@@ -194,7 +185,7 @@ export function buildLocalAssessmentRow(input: LocalAssessmentRowInput): LocalAs
     recommendations: input.diagnosis.recommendations,
     compared_to_assessment_id: input.previousAssessmentId,
     raw_output: input.raw,
-    is_cut_care: input.isCutCare,
-    cut_health_score: input.isCutCare ? input.diagnosis.health_score : null,
+    is_cut_care: isCut,
+    cut_health_score: isCut ? input.diagnosis.health_score : null,
   };
 }

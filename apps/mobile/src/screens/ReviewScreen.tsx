@@ -8,9 +8,9 @@ import {
   friendlyAssessError,
   runAssess,
   type AssessPhase,
-  type AssessResult,
+  type AssessedResult,
+  type RejectedResult,
 } from "../lib/assess";
-import { captureMode, type CaptureModeKey } from "../lib/capture-modes";
 import { persistLocalAssessment } from "../lib/local-engine-io";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
@@ -40,23 +40,26 @@ interface Props {
   photo: PreparedPhoto;
   plantId: string;
   plantName: string;
-  mode: CaptureModeKey;
   onRetake: () => void;
   onClose: () => void;
-  onAssessed: (result: AssessResult) => void;
+  onAssessed: (result: AssessedResult) => void;
 }
 
-export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClose, onAssessed }: Props) {
+export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onAssessed }: Props) {
   const { t } = useTheme();
   const localEngine = useLocalEngine();
   const [phase, setPhase] = useState<AssessPhase | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Durable local uri kept for retry without re-saving the same photo. */
   const [savedUri, setSavedUri] = useState<string | null>(null);
+  /** F21: the model read a non-plant and nothing was saved. The photo is
+   * still on the phone; the user decides whether to keep the assessment. */
+  const [rejection, setRejection] = useState<RejectedResult | null>(null);
   const busy = phase !== null;
 
-  const analyze = useCallback(async () => {
+  const analyze = useCallback(async (force = false) => {
     setError(null);
+    setRejection(null);
     try {
       const result = await runAssess(
         {
@@ -83,9 +86,13 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
             persist: (args) => persistLocalAssessment(supabase, args),
           },
         },
-        { plantId, photoUri: photo.uri, isCutCare: mode === "cut", savedUri },
+        { plantId, photoUri: photo.uri, savedUri, force },
         { onPhase: setPhase, onPhotoSaved: setSavedUri },
       );
+      if (result.status === "rejected") {
+        setRejection(result);
+        return;
+      }
       onAssessed(result);
     } catch (e) {
       // Details were logged where they occurred; the UI gets only the friendly string.
@@ -93,7 +100,7 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
     } finally {
       setPhase(null);
     }
-  }, [localEngine, mode, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
+  }, [localEngine, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
 
   return (
     <View style={styles.root}>
@@ -107,18 +114,32 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
         <RoundButton label="Retake" glyph="‹" disabled={busy} onPress={onRetake} />
         <View style={styles.chip}>
           <Text style={styles.chipText} numberOfLines={1}>
-            🪴 {plantName} · {captureMode(mode).label}
+            🪴 {plantName}
           </Text>
         </View>
         <RoundButton label="Close" glyph="✕" disabled={busy} onPress={onClose} />
       </View>
       <View style={styles.bottomArea}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
+        {rejection && !busy ? (
+          <View style={styles.rejection}>
+            <Text style={styles.rejectionTitle}>That doesn&apos;t look like a plant</Text>
+            <Text style={styles.rejectionBody}>
+              {rejection.diagnosis.subject_note || rejection.diagnosis.summary}
+            </Text>
+            <Text style={styles.rejectionBody}>
+              Nothing was added to {plantName}&apos;s timeline. Retake the photo, or save it anyway
+              if we got this wrong.
+            </Text>
+          </View>
+        ) : null}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={busy ? PHASE_LABEL[phase] : error ? "Try again" : "Analyze"}
+          accessibilityLabel={
+            busy ? PHASE_LABEL[phase] : rejection ? "Retake photo" : error ? "Try again" : "Analyze"
+          }
           disabled={busy}
-          onPress={analyze}
+          onPress={rejection ? onRetake : () => analyze()}
           style={[styles.analyze, { backgroundColor: t.green, opacity: busy ? 0.75 : 1 }]}
         >
           {busy ? (
@@ -128,11 +149,21 @@ export function ReviewScreen({ photo, plantId, plantName, mode, onRetake, onClos
             </View>
           ) : (
             <Text style={[styles.analyzeText, { color: t.onGreen }]}>
-              {error ? "Try again" : "Analyze"}
+              {rejection ? "Retake" : error ? "Try again" : "Analyze"}
             </Text>
           )}
         </Pressable>
-        {savedUri && !busy ? (
+        {rejection && !busy ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Save anyway"
+            onPress={() => analyze(true)}
+            style={styles.saveAnyway}
+          >
+            <Text style={styles.saveAnywayText}>Save anyway</Text>
+          </Pressable>
+        ) : null}
+        {savedUri && !busy && !rejection ? (
           <Text style={styles.note}>Photo saved on this phone — retrying skips the save.</Text>
         ) : null}
       </View>
@@ -180,6 +211,25 @@ const styles = StyleSheet.create({
   analyzeBusy: { flexDirection: "row", alignItems: "center", gap: 10 },
   analyzeText: { fontSize: 16, fontWeight: "600" },
   note: { color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center" },
+  rejection: {
+    backgroundColor: "rgba(0,0,0,0.72)",
+    borderRadius: RADIUS,
+    padding: 14,
+    gap: 6,
+  },
+  rejectionTitle: { color: "#ffffff", fontSize: 15, fontWeight: "700" },
+  rejectionBody: { color: "rgba(255,255,255,0.82)", fontSize: 13, lineHeight: 19 },
+  saveAnyway: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  saveAnywayText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 14,
+    fontWeight: "600",
+    textDecorationLine: "underline",
+  },
   error: {
     color: "#ffffff",
     backgroundColor: "rgba(220,38,38,0.85)",

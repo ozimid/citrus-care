@@ -19,9 +19,17 @@ export const recommendationSchema = z.object({
   detail: z.string().min(1),
 });
 
+/** F21 — the subject the model reports having seen. Closed value space: the
+ * cut split and the non-plant rejection both key off it, so an unrecognized
+ * value is model output we refuse rather than guess at. */
+export const assessmentSubjectSchema = z.enum(["leaf", "whole_plant", "cut", "not_a_plant"]);
+
 export const assessmentDiagnosisSchema: z.ZodType<AssessmentDiagnosis> = z.object({
   health_score: z.number().int().min(0).max(100),
   summary: z.string().min(1).max(300),
+  // Optional for the read path only — see AssessmentDiagnosis.subject.
+  subject: assessmentSubjectSchema.optional(),
+  subject_note: z.string().max(200).optional(),
   symptoms: z.array(symptomSchema).max(8),
   causes: z.array(causeSchema).max(6),
   recommendations: z.array(recommendationSchema).max(5),

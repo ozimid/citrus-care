@@ -3,7 +3,10 @@
 // fails) → try the on-device model when the user enabled it and it is ready →
 // otherwise (or on ANY local failure) escalate silently to Gemini by POSTing
 // the base64 image directly to /assess → link the local uri to the persisted
-// assessment id in the photo index, recording which engine produced it. Pure,
+// assessment id in the photo index, recording which engine produced it.
+// F21: no capture mode goes in — the model reports the subject it saw, and a
+// "not_a_plant" reading from EITHER engine comes back as a rejected result
+// that was never persisted (the caller offers "save anyway" → force). Pure,
 // dependency-injected, and tested; ReviewScreen wires the real
 // photo-store-io/Supabase/executorch deps. Raw server/network/model messages
 // never reach the UI (generic-message rule).
@@ -44,14 +47,13 @@ export interface LocalAssessDeps {
    * discipline (full-res turns seconds into minutes). Returns a temp uri. */
   prepare: (uri: string) => Promise<string>;
   /** Run the local VLM over the prepared image; returns its raw text. */
-  generate: (args: { imageUri: string; isCutCare: boolean }) => Promise<string>;
+  generate: (args: { imageUri: string }) => Promise<string>;
   /** Insert the assessment row directly (local-engine-io persistLocalAssessment)
    * — /assess can't save this one, it runs Gemini. Returns the new id. */
   persist: (args: {
     plantId: string;
     diagnosis: AssessmentDiagnosis;
     raw: string;
-    isCutCare: boolean;
   }) => Promise<string>;
 }
 
@@ -74,11 +76,11 @@ export interface AssessDeps {
 export interface AssessInput {
   plantId: string;
   photoUri: string;
-  /** Cut mode maps to the server's isCutCare flag; leaf/whole-plant are
-   * client-side framing guidance only — /assess accepts no other mode field. */
-  isCutCare: boolean;
   /** Durable local uri from a previous attempt: retry without re-saving. */
   savedUri?: string | null;
+  /** "Save anyway" — persist even when the model reads the photo as a
+   * non-plant. The user's override, never the model's (F21). */
+  force?: boolean;
 }
 
 export interface AssessHooks {
@@ -88,7 +90,9 @@ export interface AssessHooks {
   onPhotoSaved?: (localUri: string) => void;
 }
 
-export interface AssessResult {
+/** Saved to the timeline — the normal outcome. */
+export interface AssessedResult {
+  status: "assessed";
   assessmentId: string;
   diagnosis: AssessmentDiagnosis;
   /** Durable on-phone uri of the photo this assessment was made from. */
@@ -96,6 +100,18 @@ export interface AssessResult {
   /** Which engine actually produced this diagnosis (provenance badge). */
   engine: AssessEngine;
 }
+
+/** F21 — the model read the photo as a non-plant, so nothing was written.
+ * Not an error: the diagnosis explains itself, and re-running with
+ * `force: true` saves it anyway. The photo is on the phone either way. */
+export interface RejectedResult {
+  status: "rejected";
+  diagnosis: AssessmentDiagnosis;
+  localUri: string;
+  engine: AssessEngine;
+}
+
+export type AssessResult = AssessedResult | RejectedResult;
 
 export async function runAssess(
   deps: AssessDeps,
@@ -123,6 +139,11 @@ export async function runAssess(
   if (deps.local?.isReady()) {
     const local = await tryLocalAssess(deps.local, input, localUri);
     if (local) {
+      // A rejection is an answer, not a local failure: escalating would spend
+      // a Gemini call to be told the same thing, and there is no row to link.
+      if (local.status === "rejected") {
+        return { status: "rejected", diagnosis: local.diagnosis, localUri, engine: "on-device" };
+      }
       await linkPhotoBestEffort(deps, local.assessmentId, localUri, input.plantId, "on-device");
       return { ...local, localUri, engine: "on-device" };
     }
@@ -139,7 +160,8 @@ export async function runAssess(
         plantId: input.plantId,
         imageBase64,
         mime: "image/jpeg",
-        isCutCare: input.isCutCare,
+        // No mode field: the model detects the subject (F21).
+        ...(input.force ? { force: true } : {}),
       }),
     });
   } catch (e) {
@@ -151,7 +173,25 @@ export async function runAssess(
     throw new Error(ANALYSIS_OFFLINE_ERROR);
   }
   if (!res.ok) throw await apiErrorFrom(res);
-  const { id } = (await res.json()) as { id: string };
+  const payload = (await res.json()) as
+    | { id: string; rejected?: undefined }
+    | { rejected: true; diagnosis: unknown };
+
+  // The server declined to save a non-plant photo (F21). Its diagnosis is
+  // still model output — the shared schema is the gate, exactly as on the
+  // saved path; a rejection we can't parse is just a failure.
+  if (payload.rejected) {
+    let diagnosis: AssessmentDiagnosis;
+    try {
+      diagnosis = assessmentDiagnosisSchema.parse(payload.diagnosis);
+    } catch (e) {
+      console.error("[runAssess] rejection payload failed schema:", (e as Error).message);
+      throw new Error(RESULT_LOAD_ERROR);
+    }
+    return { status: "rejected", diagnosis, localUri, engine: "gemini" };
+  }
+
+  const { id } = payload;
 
   await linkPhotoBestEffort(deps, id, localUri, input.plantId, "gemini");
 
@@ -165,7 +205,7 @@ export async function runAssess(
     throw new Error(RESULT_LOAD_ERROR);
   }
 
-  return { assessmentId: id, diagnosis, localUri, engine: "gemini" };
+  return { status: "assessed", assessmentId: id, diagnosis, localUri, engine: "gemini" };
 }
 
 /** A failed index write only costs a thumbnail, never the result. */
@@ -189,12 +229,17 @@ async function linkPhotoBestEffort(
 }
 
 /** The whole on-device attempt, bounded and swallowed: returns null for every
- * failure mode so the caller's only job is "null → escalate". */
+ * failure mode so the caller's only job is "null → escalate". A rejection is
+ * NOT a failure — it comes back as a real outcome. */
 async function tryLocalAssess(
   local: LocalAssessDeps,
   input: AssessInput,
   localUri: string,
-): Promise<{ assessmentId: string; diagnosis: AssessmentDiagnosis } | null> {
+): Promise<
+  | { status: "assessed"; assessmentId: string; diagnosis: AssessmentDiagnosis }
+  | { status: "rejected"; diagnosis: AssessmentDiagnosis }
+  | null
+> {
   try {
     const inference = await withTimeout(
       localDiagnose(local, input, localUri),
@@ -202,13 +247,19 @@ async function tryLocalAssess(
     );
     // Unparseable output — already logged with its reason.
     if (!inference) return null;
+
+    // Same rule the server applies (F21): don't put a non-plant in a plant's
+    // timeline unless the user explicitly said to.
+    if (inference.diagnosis.subject === "not_a_plant" && !input.force) {
+      return { status: "rejected", diagnosis: inference.diagnosis };
+    }
+
     const assessmentId = await local.persist({
       plantId: input.plantId,
       diagnosis: inference.diagnosis,
       raw: inference.raw,
-      isCutCare: input.isCutCare,
     });
-    return { assessmentId, diagnosis: inference.diagnosis };
+    return { status: "assessed", assessmentId, diagnosis: inference.diagnosis };
   } catch (e) {
     console.error("[runAssess] on-device attempt failed, escalating:", (e as Error).message);
     return null;
@@ -221,7 +272,7 @@ async function localDiagnose(
   localUri: string,
 ): Promise<{ diagnosis: AssessmentDiagnosis; raw: string } | null> {
   const imageUri = await local.prepare(localUri);
-  const raw = await local.generate({ imageUri, isCutCare: input.isCutCare });
+  const raw = await local.generate({ imageUri });
   // A small local model has no responseSchema enforcement — the shared Zod
   // schema is the gate, and failing it is a normal, expected escalation.
   const parsed = parseDiagnosisOutput(raw);

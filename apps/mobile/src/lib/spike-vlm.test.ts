@@ -21,6 +21,20 @@ describe("prompts", () => {
     expect(SPIKE_SYSTEM_PROMPT).toContain("recommendations");
   });
 
+  // F21: both engines must agree on the contract, or the same photo means
+  // different things depending on which model happened to answer.
+  it("asks the local model for the subject too, with the same enum as the server", () => {
+    expect(SPIKE_SYSTEM_PROMPT).toContain("subject");
+    for (const value of ["leaf", "whole_plant", "cut", "not_a_plant"]) {
+      expect(SPIKE_SYSTEM_PROMPT).toContain(value);
+    }
+  });
+
+  it("carries the cut framing and the no-penalty rule, compactly", () => {
+    expect(SPIKE_SYSTEM_PROMPT).toMatch(/branch collar/i);
+    expect(SPIKE_SYSTEM_PROMPT).toMatch(/never penali[sz]e/i);
+  });
+
   it("user prompt asks for the diagnosis of the attached photo", () => {
     expect(SPIKE_USER_PROMPT.length).toBeGreaterThan(0);
   });

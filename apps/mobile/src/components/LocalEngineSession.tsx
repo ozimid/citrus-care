@@ -11,7 +11,8 @@
 import { useEffect } from "react";
 import { initExecutorch, models, useLLM } from "react-native-executorch";
 import { ExpoResourceFetcher } from "react-native-executorch-expo-resource-fetcher";
-import { LOCAL_USER_PROMPT, localSystemPrompt, type LocalEngineRuntime } from "../lib/local-engine";
+import { LOCAL_USER_PROMPT, type LocalEngineRuntime } from "../lib/local-engine";
+import { SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
 
 initExecutorch({ resourceFetcher: ExpoResourceFetcher });
 
@@ -20,7 +21,7 @@ initExecutorch({ resourceFetcher: ExpoResourceFetcher });
  * Same model the Stage 1 spike measured against the go/no-go bar. */
 const LOCAL_MODEL = models.llm.gemma4_e2b_multimodal();
 
-export type LocalGenerate = (args: { imageUri: string; isCutCare: boolean }) => Promise<string>;
+export type LocalGenerate = (args: { imageUri: string }) => Promise<string>;
 
 interface Props {
   onRuntime: (runtime: LocalEngineRuntime) => void;
@@ -50,9 +51,10 @@ export function LocalEngineSession({ onRuntime, onGenerate }: Props) {
     }
     // generate() over sendMessage(): stateless per photo, so one diagnosis
     // never carries context (or latency) from the previous one.
-    onGenerate(({ imageUri, isCutCare }) =>
+    // One prompt, no mode (F21): the model reports the subject it saw.
+    onGenerate(({ imageUri }) =>
       llm.generate([
-        { role: "system", content: localSystemPrompt(isCutCare) },
+        { role: "system", content: SPIKE_SYSTEM_PROMPT },
         { role: "user", content: LOCAL_USER_PROMPT, mediaPath: imageUri },
       ]),
     );

@@ -54,9 +54,27 @@ export interface Recommendation {
   detail: string;
 }
 
+/**
+ * F21 — what the model says it actually photographed. The user used to pick
+ * this before the shot (Leaf / Whole plant / Cut) and the choice conditioned
+ * the prompt, so a tree shot in "Leaf" mode came back as a quality complaint.
+ * A vision model is the thing that is good at this; the app adapts to its
+ * answer. `assessments.is_cut_care` is derived from `subject === "cut"`.
+ */
+export type AssessmentSubject = "leaf" | "whole_plant" | "cut" | "not_a_plant";
+
 export interface AssessmentDiagnosis {
   health_score: number;
   summary: string;
+  /**
+   * Optional ONLY for the read path: every assessment written since F21 has
+   * one (Gemini's responseSchema requires it), but rows from before it do not,
+   * and the same schema guards timeline taps and the assess round-trip —
+   * requiring it would make every historical assessment unopenable.
+   */
+  subject?: AssessmentSubject;
+  /** Short "why I read it that way" note from the model. */
+  subject_note?: string;
   symptoms: Symptom[];
   causes: Cause[];
   recommendations: Recommendation[];

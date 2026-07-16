@@ -10,6 +10,16 @@ import {
 import { assessmentDiagnosisSchema, careProfileSchema } from "@citrus/shared";
 import type { Assessment } from "@citrus/shared";
 
+/** Minimal diagnosis that satisfies every field the schema has always had —
+ * the base the F21 subject cases vary. */
+const DIAGNOSIS_OK = {
+  health_score: 70,
+  summary: "Healthy enough.",
+  symptoms: [],
+  causes: [],
+  recommendations: [],
+};
+
 describe("buildSystemPrompt", () => {
   it("frames the model as a plant expert with structured output rules", () => {
     const p = buildSystemPrompt();
@@ -17,6 +27,36 @@ describe("buildSystemPrompt", () => {
     expect(p).toMatch(/JSON/);
     expect(p).toMatch(/health_score/);
     expect(p).toMatch(/old.*leaves|new.*leaves|pattern/i);
+  });
+
+  // F21: the user no longer pre-classifies the photo — the model does. One
+  // prompt, no isCutCare branch: buildSystemPrompt takes no arguments at all.
+  it("takes no arguments — there is exactly one prompt", () => {
+    expect(buildSystemPrompt.length).toBe(0);
+  });
+
+  it("asks the model to identify the subject first, with the schema's enum values", () => {
+    const p = buildSystemPrompt();
+    expect(p).toContain("subject");
+    for (const value of ["leaf", "whole_plant", "cut", "not_a_plant"]) {
+      expect(p).toContain(value);
+    }
+  });
+
+  it("keeps the cut-anatomy expertise inside the one prompt (it applies when subject is cut)", () => {
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/branch collar/i);
+    expect(p).toMatch(/flush cut/i);
+    expect(p).toMatch(/stub/i);
+    expect(p).toMatch(/callous|sealant|aftercare/i);
+  });
+
+  // The defect that motivated F21: a tree shot in "Leaf" mode came back as
+  // "image quality is poor". Framing is never a defect.
+  it("forbids penalizing a photo for being a whole-plant shot rather than a leaf close-up", () => {
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/never penali[sz]e/i);
+    expect(p).toMatch(/whole-plant|whole plant/i);
   });
 });
 
@@ -65,6 +105,24 @@ describe("buildUserMessageText", () => {
     expect(t).toContain("60");
     expect(t).toContain("nitrogen");
   });
+
+  // F21: no mode reaches the model. It was the mode line that turned a tree
+  // photo into "poor quality" — the model was told to expect a leaf.
+  it("never tells the model what kind of shot to expect", () => {
+    const t = buildUserMessageText({
+      plant: {
+        name: "X",
+        plant_type: "tree",
+        species: null,
+        cultivar: null,
+        location: null,
+        zip_code: null,
+      },
+      previous: null,
+    });
+    expect(t).not.toMatch(/Assessment Mode/i);
+    expect(t).not.toMatch(/Pruning Cut or Branch Wound/i);
+  });
 });
 
 describe("parseAssessment", () => {
@@ -89,6 +147,18 @@ describe("parseAssessment", () => {
     const out = parseAssessment(raw);
     expect(out.health_score).toBe(72);
     expect(out.causes[0].label).toContain("Iron");
+  });
+
+  it("carries the detected subject through (F21)", () => {
+    const out = parseAssessment(
+      JSON.stringify({ ...DIAGNOSIS_OK, subject: "cut", subject_note: "Sawn branch end." }),
+    );
+    expect(out.subject).toBe("cut");
+    expect(out.subject_note).toBe("Sawn branch end.");
+  });
+
+  it("throws when the model invents a subject outside the enum", () => {
+    expect(() => parseAssessment(JSON.stringify({ ...DIAGNOSIS_OK, subject: "shrub" }))).toThrow();
   });
 
   it("strips ```json fences if the model wraps the JSON (defense-in-depth)", () => {
@@ -126,6 +196,41 @@ describe("assessmentDiagnosisSchema", () => {
   it("requires the core fields", () => {
     const r = assessmentDiagnosisSchema.safeParse({});
     expect(r.success).toBe(false);
+  });
+
+  // F21: the model reports what it saw. is_cut_care is derived from this
+  // instead of a user toggle, so the value space is closed.
+  it("accepts each detected subject", () => {
+    for (const subject of ["leaf", "whole_plant", "cut", "not_a_plant"]) {
+      expect(assessmentDiagnosisSchema.safeParse({ ...DIAGNOSIS_OK, subject }).success).toBe(true);
+    }
+  });
+
+  it("rejects a subject outside the enum (model output is never trusted)", () => {
+    expect(assessmentDiagnosisSchema.safeParse({ ...DIAGNOSIS_OK, subject: "tree" }).success).toBe(
+      false,
+    );
+    expect(assessmentDiagnosisSchema.safeParse({ ...DIAGNOSIS_OK, subject: 3 }).success).toBe(false);
+  });
+
+  it("carries an optional short subject_note explaining the call", () => {
+    const parsed = assessmentDiagnosisSchema.safeParse({
+      ...DIAGNOSIS_OK,
+      subject: "whole_plant",
+      subject_note: "Full canopy and trunk visible, no single leaf in focus.",
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.subject_note).toContain("canopy");
+    expect(assessmentDiagnosisSchema.safeParse({ ...DIAGNOSIS_OK, subject_note: 12 }).success).toBe(
+      false,
+    );
+  });
+
+  // Rows written before F21 have no subject. The schema also guards the read
+  // path (timeline taps, the assess round-trip), so requiring it would make
+  // every historical assessment unopenable.
+  it("still parses a pre-F21 diagnosis that has no subject", () => {
+    expect(assessmentDiagnosisSchema.safeParse(DIAGNOSIS_OK).success).toBe(true);
   });
 });
 

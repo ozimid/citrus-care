@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
-import { captureMode, type CaptureModeKey } from "../lib/capture-modes";
 import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
 import type { AssessEngine } from "../lib/photo-store";
+import { subjectLabel } from "../lib/plant-detail";
 import { formatReminderDate, scheduleReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, useTheme, type Tokens } from "../lib/theme";
@@ -37,7 +37,6 @@ interface Props {
   diagnosis: AssessmentDiagnosis;
   plantId: string;
   plantName: string;
-  mode: CaptureModeKey;
   /** Which engine produced this diagnosis (D-15 Stage 2 provenance badge).
    * Omitted when reopening a stored timeline row — the engine isn't a column,
    * only fresh results know it. */
@@ -45,7 +44,7 @@ interface Props {
   onDone: () => void;
 }
 
-export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, engine, onDone }: Props) {
+export function DiagnosisScreen({ diagnosis, plantId, plantName, engine, onDone }: Props) {
   const { t, scheme } = useTheme();
   const [reminder, setReminder] = useState<ReminderState>({ kind: "idle" });
 
@@ -78,7 +77,7 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, engine, o
         <Text style={[styles.heading, { color: t.text }]}>Diagnosis</Text>
         <View style={[styles.contextChip, { backgroundColor: t.card, borderColor: t.border }]}>
           <Text style={[styles.contextChipText, { color: t.sub }]} numberOfLines={1}>
-            🪴 {plantName} · {captureMode(mode).label}
+            🪴 {plantName}
           </Text>
         </View>
       </View>
@@ -90,13 +89,27 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, engine, o
             <Text style={[styles.scoreOutOf, { color: t.sub }]}>/ 100</Text>
           </View>
           <Text style={[styles.scoreKind, { color: t.sub }]}>
-            {mode === "cut" ? "PRUNING CUT HEALTH" : "HEALTH"}
+            {diagnosis.subject === "cut" ? "PRUNING CUT HEALTH" : "HEALTH"}
           </Text>
           <View style={[styles.bandBadge, { backgroundColor: color + "22" }]}>
             <Text style={[styles.bandBadgeText, { color }]}>{band.label}</Text>
           </View>
           <Text style={[styles.summary, { color: t.text }]}>{diagnosis.summary}</Text>
-          {engine ? <EngineBadge t={t} engine={engine} /> : null}
+          {/* F21: what the model says it saw — the answer to a question the
+              user used to have to answer first. Absent on pre-F21 rows. */}
+          <View style={styles.badgeRow}>
+            {diagnosis.subject ? (
+              <View
+                accessibilityLabel={`Detected: ${subjectLabel(diagnosis.subject)}`}
+                style={[styles.engineBadge, { borderColor: t.border }]}
+              >
+                <Text style={[styles.engineBadgeText, { color: t.sub }]}>
+                  Detected: {subjectLabel(diagnosis.subject)}
+                </Text>
+              </View>
+            ) : null}
+            {engine ? <EngineBadge t={t} engine={engine} /> : null}
+          </View>
         </View>
 
         {diagnosis.comparison ? (
@@ -288,6 +301,7 @@ const styles = StyleSheet.create({
   scoreKind: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
   bandBadge: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   bandBadgeText: { fontSize: 13, fontWeight: "700" },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
   engineBadge: {
     borderWidth: 1,
     borderRadius: 999,

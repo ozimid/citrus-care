@@ -1,32 +1,15 @@
 import { describe, expect, it } from "vitest";
-import {
-  CAPTURE_MODES,
-  DEFAULT_CAPTURE_MODE,
-  captureMode,
-  preselectedPlantId,
-} from "./capture-modes";
+import { CAPTURE_HINT, preselectedPlantId } from "./capture-modes";
 
-describe("CAPTURE_MODES", () => {
-  it("offers exactly the three design-doc modes, leaf first", () => {
-    expect(CAPTURE_MODES.map((m) => m.key)).toEqual(["leaf", "plant", "cut"]);
-  });
-
-  it("defaults to the leaf close-up (design doc §6)", () => {
-    expect(DEFAULT_CAPTURE_MODE).toBe("leaf");
-  });
-
-  it("carries the per-mode guidance hints", () => {
-    expect(captureMode("leaf").hint).toBe(
-      "Get close — fill the outline with the affected leaf",
-    );
-    expect(captureMode("plant").hint).toBe(
-      "Step back — fit the whole plant in the frame",
-    );
-    expect(captureMode("cut").hint).toBe("Frame the fresh cut end inside the circle");
-  });
-
-  it("labels the segmented pill Leaf / Whole plant / Cut", () => {
-    expect(CAPTURE_MODES.map((m) => m.label)).toEqual(["Leaf", "Whole plant", "Cut"]);
+// F21 deleted the three capture modes: classifying the photo was the user's
+// job only because the prompt branched on it, and it manufactured false
+// negatives (a tree shot in "Leaf" mode came back as "poor quality"). What
+// survives is the photo-quality nudge the capture research earned — one hint,
+// no classification.
+describe("CAPTURE_HINT", () => {
+  it("nudges for a close, filled frame without asking what the subject is", () => {
+    expect(CAPTURE_HINT).toBe("Fill the frame with the affected part — closer is better");
+    expect(CAPTURE_HINT).not.toMatch(/leaf|whole plant|cut/i);
   });
 });
 

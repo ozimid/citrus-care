@@ -2,50 +2,50 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { assessmentDiagnosisSchema, careProfileSchema } from "@citrus/shared";
 import type { Assessment, AssessmentDiagnosis, CareProfile, Plant } from "@citrus/shared";
 
-export function buildSystemPrompt(isCutCare?: boolean): string {
-  if (isCutCare) {
-    return `You are a plant care expert specializing in pruning and branch wound healing. You diagnose the health of a pruning cut or branch wound from a photo and prescribe prioritized care actions for home growers.
+// F21 — ONE prompt, no branch. The user used to pick the shot type before
+// taking it, and that choice conditioned this prompt: a tree photographed in
+// "Leaf" mode came back as "image quality is poor", a false negative the mode
+// system manufactured. Identifying what is in a photo is the model's job, so
+// it reports the subject and the app adapts. The cut-anatomy expertise below
+// is the old cut-care prompt, preserved — it applies when subject is "cut".
+export function buildSystemPrompt(): string {
+  return `You are a plant care expert. You diagnose problems from a single photo and prescribe prioritized care actions for home growers.
 
-Diagnostic rules — apply these BEFORE recommending anything:
+STEP 1 — Identify the subject. Decide what the photo actually shows and report it in "subject":
+- "leaf": a close-up of one or a few leaves, where lesion-level detail is readable.
+- "whole_plant": a whole plant, tree, shrub or a large part of one — assess vigor, structure, canopy density, and overall condition.
+- "cut": a pruning cut, sawn branch end, or bark wound — the cut itself is the subject.
+- "not_a_plant": there is no plant, plant part, or plant wound in the photo at all (e.g. a person, a pet, a wall, a screenshot).
+Put a short reason (<= 150 characters) in "subject_note".
+
+STEP 2 — Diagnose what is ACTUALLY there, appropriately for the subject you identified:
+- NEVER penalize a photo for being a different kind of shot than you expected. A whole-plant photo is a legitimate whole-plant assessment, not a failed leaf close-up. Judge quality only on genuine defects — too dark to read, badly out of focus, or the plant is not visible at all. Framing is not a defect.
+- Consider the plant type (e.g. tree, shrub, flower, succulent, vegetable, herb, vine, other) and species. Nutrient and watering requirements vary wildly.
+- Note WHICH leaves show the symptom if applicable: old/lower vs new/upper. Mobile nutrients (N, K, Mg, P) show on OLD leaves first. Immobile nutrients (Fe, Mn, Zn, Ca, S, B) show on NEW leaves first.
+- Note the PATTERN: uniform yellowing, interveinal chlorosis, blotchy, leaf curl, spots, drop, or shrivelling (e.g. in succulents).
+- Yellow leaves are AMBIGUOUS. Consider overwatering, root rot, pH lockout, pest damage, cold stress, and light conditions before assuming nutrient deficiency.
+- For "whole_plant": read vigor, canopy density, dieback, leaning or structural problems, and the overall pattern across the plant rather than a single lesion.
+
+When the subject is "cut", apply this pruning expertise and let health_score rate the cut/wound, not the tree:
 1. Evaluate the CUT ANATOMY: Is it cut cleanly? Is the branch collar preserved? Is there a long stub remaining, or is it a dangerous flush cut?
    - Branch-collar preservation: A correct cut is just outside the branch collar at a 45-degree angle.
    - Flush cut: Too close to the trunk (destructive to collar tissue, bad).
    - Long stub: Leftover branch portion (prevents natural healing, bad).
 2. Assess wound health: Look for signs of decay, pests, wood-borer entry, disease infection, or successful callous formation (healing bark rolled over the edges).
 3. Recommend specific aftercare actions (e.g., applying specialized breathable waterproof wound sealant/paste, cleaning tools, re-pruning to a correct collar cut if a stub remains).
-4. Cap recommendations at 3. Order by priority (1 = most important).
-5. Be concrete (amount, frequency) and concise: summary <= 250 characters; at most 3 symptoms, 3 causes, 3 recommendations; keep rationales under 120 characters each.
+
+When the subject is "not_a_plant", still return the JSON: set health_score 0, say plainly in the summary what you see instead, and leave symptoms, causes and recommendations empty.
 
 Output rules:
-- Respond with VALID JSON ONLY. No prose, no markdown fences.
-- Conform exactly to this shape:
-{
-  "health_score": <integer 0..100 representing cut quality/wound health>,
-  "summary": "<<=250 chars plain English>",
-  "symptoms": [{"label": "...", "severity": "low|medium|high", "notes": "?"}],
-  "causes":   [{"label": "...", "likelihood": "low|medium|high", "rationale": "why this fits the photo"}],
-  "recommendations": [{"priority": 1|2|3, "action": "...", "detail": "..."}],
-  "comparison": {"delta": "better|same|worse|unknown", "notes": "..."}   // OMIT entirely if no previous assessment was provided
-}`;
-  }
-
-  return `You are a plant care expert. You diagnose problems from a single photo and prescribe prioritized care actions for home growers.
-
-Diagnostic rules — apply these BEFORE recommending anything:
-1. Consider the plant type (e.g. tree, shrub, flower, succulent, vegetable, herb, vine, other) and species. Nutrient and watering requirements vary wildly.
-2. Note WHICH leaves show the symptom if applicable: old/lower vs new/upper. Mobile nutrients (N, K, Mg, P) show on OLD leaves first. Immobile nutrients (Fe, Mn, Zn, Ca, S, B) show on NEW leaves first.
-3. Note the PATTERN: uniform yellowing, interveinal chlorosis, blotchy, leaf curl, spots, drop, or shrivelling (e.g. in succulents).
-4. Yellow leaves are AMBIGUOUS. Consider overwatering, root rot, pH lockout, pest damage, cold stress, and light conditions before assuming nutrient deficiency.
-5. If the photo is low quality, dark, blurry, or shows non-plant material, set health_score conservatively and say so in the summary.
-6. Cap recommendations at 3. Order by priority (1 = most important). Be concrete (amount, frequency).
-7. Be concise: summary <= 250 characters; at most 3 symptoms, 3 causes, 3 recommendations; keep rationales under 120 characters each.
-
-Output rules:
+- Cap recommendations at 3. Order by priority (1 = most important). Be concrete (amount, frequency).
+- Be concise: summary <= 250 characters; at most 3 symptoms, 3 causes, 3 recommendations; keep rationales under 120 characters each.
 - Respond with VALID JSON ONLY. No prose, no markdown fences.
 - Conform exactly to this shape:
 {
   "health_score": <integer 0..100>,
   "summary": "<<=250 chars plain English>",
+  "subject": "leaf|whole_plant|cut|not_a_plant",
+  "subject_note": "<<=150 chars, why you read the photo that way>",
   "symptoms": [{"label": "...", "severity": "low|medium|high", "notes": "?"}],
   "causes":   [{"label": "...", "likelihood": "low|medium|high", "rationale": "why this fits the photo"}],
   "recommendations": [{"priority": 1|2|3, "action": "...", "detail": "..."}],
@@ -62,7 +62,6 @@ export function buildUserMessageText(args: {
     location: string | null;
     zip_code?: string | null;
   };
-  isCutCare?: boolean;
   previous: Pick<Assessment, "health_score" | "diagnosis" | "created_at"> | null;
 }): string {
   const lines: string[] = [];
@@ -72,7 +71,8 @@ export function buildUserMessageText(args: {
   if (args.plant.cultivar) lines.push(`Cultivar: ${args.plant.cultivar}`);
   if (args.plant.location) lines.push(`Location: ${args.plant.location}`);
   if (args.plant.zip_code) lines.push(`ZIP Code: ${args.plant.zip_code}`);
-  if (args.isCutCare) lines.push("Assessment Mode: Pruning Cut or Branch Wound healing");
+  // No mode line: telling the model what to expect is what produced the false
+  // "poor quality" verdicts (F21). It reports what it sees instead.
 
   if (args.previous) {
     const d = args.previous.diagnosis;
@@ -179,11 +179,20 @@ function stripJsonFences(s: string): string {
 
 const MODEL = "gemini-2.5-flash";
 
+// Mirrors assessmentDiagnosisSchema (packages/shared) — a drift here silently
+// breaks structured output. `subject` is REQUIRED of the model even though the
+// Zod schema tolerates its absence: old stored rows may lack it, fresh Gemini
+// output never may.
 const responseSchema = {
   type: Type.OBJECT,
   properties: {
     health_score: { type: Type.INTEGER, minimum: 0, maximum: 100 },
     summary: { type: Type.STRING },
+    subject: {
+      type: Type.STRING,
+      enum: ["leaf", "whole_plant", "cut", "not_a_plant"],
+    },
+    subject_note: { type: Type.STRING },
     symptoms: {
       type: Type.ARRAY,
       items: {
@@ -229,7 +238,7 @@ const responseSchema = {
       required: ["delta", "notes"],
     },
   },
-  required: ["health_score", "summary", "symptoms", "causes", "recommendations"],
+  required: ["health_score", "summary", "subject", "symptoms", "causes", "recommendations"],
 };
 
 export async function callGeminiVision(args: {

@@ -6,7 +6,6 @@ import {
   localEngineState,
   localEngineStatusLabel,
   localEngineSubtitle,
-  localSystemPrompt,
   needsDownloadWarning,
   parseLocalEngineSettings,
   serializeLocalEngineSettings,
@@ -116,17 +115,9 @@ describe("row copy (honest about what disabling does)", () => {
   });
 });
 
-describe("localSystemPrompt", () => {
-  it("asks for JSON only in both modes", () => {
-    expect(localSystemPrompt(false)).toMatch(/VALID JSON ONLY/);
-    expect(localSystemPrompt(true)).toMatch(/VALID JSON ONLY/);
-  });
-
-  it("switches to pruning-cut framing for cut care", () => {
-    expect(localSystemPrompt(true)).toMatch(/pruning cut/i);
-    expect(localSystemPrompt(false)).not.toMatch(/pruning cut/i);
-  });
-});
+// F21 removed localSystemPrompt: with one unified prompt there is no mode to
+// specialize on, so the local session uses SPIKE_SYSTEM_PROMPT directly and
+// the cut framing lives inside it (spike-vlm.test.ts covers the wording).
 
 const DIAGNOSIS: AssessmentDiagnosis = {
   health_score: 64,
@@ -146,7 +137,6 @@ describe("buildLocalAssessmentRow (mirrors the /assess insert)", () => {
         userId: "user-7",
         diagnosis: DIAGNOSIS,
         raw: '{"health_score":64}',
-        isCutCare: false,
         previousAssessmentId: "assessment-3",
       }),
     ).toEqual({
@@ -164,17 +154,32 @@ describe("buildLocalAssessmentRow (mirrors the /assess insert)", () => {
     });
   });
 
-  it("carries the score into cut_health_score for cut care (server parity)", () => {
+  // F21: the cut split is the model's call, not a toggle the user flipped —
+  // and the server derives it the same way, or timelines diverge by engine.
+  it("derives the cut split from the diagnosis's own subject (server parity)", () => {
     const row = buildLocalAssessmentRow({
       plantId: "plant-1",
       userId: "user-7",
-      diagnosis: DIAGNOSIS,
+      diagnosis: { ...DIAGNOSIS, subject: "cut" },
       raw: "{}",
-      isCutCare: true,
       previousAssessmentId: null,
     });
     expect(row.is_cut_care).toBe(true);
     expect(row.cut_health_score).toBe(64);
     expect(row.compared_to_assessment_id).toBeNull();
+  });
+
+  it("leaves the cut split off for every other subject", () => {
+    for (const subject of ["leaf", "whole_plant", "not_a_plant"] as const) {
+      const row = buildLocalAssessmentRow({
+        plantId: "plant-1",
+        userId: "user-7",
+        diagnosis: { ...DIAGNOSIS, subject },
+        raw: "{}",
+        previousAssessmentId: null,
+      });
+      expect(row.is_cut_care).toBe(false);
+      expect(row.cut_health_score).toBeNull();
+    }
   });
 });

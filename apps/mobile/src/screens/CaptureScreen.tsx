@@ -2,14 +2,10 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from "react-native";
-import { GuideOverlay, ModeHint, ModePill, RoundButton } from "../components/CaptureOverlay";
+import { CaptureHint, GuideOverlay, RoundButton } from "../components/CaptureOverlay";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
-import type { AssessResult } from "../lib/assess";
-import {
-  DEFAULT_CAPTURE_MODE,
-  preselectedPlantId,
-  type CaptureModeKey,
-} from "../lib/capture-modes";
+import type { AssessedResult } from "../lib/assess";
+import { preselectedPlantId } from "../lib/capture-modes";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { fetchPlants, type PlantListItem } from "../lib/plants";
 import { supabase } from "../lib/supabase";
@@ -18,10 +14,12 @@ import { DiagnosisScreen } from "./DiagnosisScreen";
 import { ReviewScreen } from "./ReviewScreen";
 
 // Full-screen capture flow (design doc §3/§6), opened from the tab-bar FAB:
-// camera with the three-mode guide, gallery import at equal prominence, plant
+// camera with one neutral guide, gallery import at equal prominence, plant
 // target selection, then review (ReviewScreen) → analyze → diagnosis
 // (DiagnosisScreen). onAssessed fires as soon as /assess persists a result so
 // the Plants tab behind the modal can refresh its scores.
+// F21: there is one shutter and no mode selector — the model reports what it
+// saw, and a rejected (non-plant) photo never reaches DiagnosisScreen.
 
 const GENERIC_PHOTO_ERROR = "Couldn't process that photo. Please try again.";
 const GENERIC_PLANTS_ERROR = "Could not load your plants. Close and try again.";
@@ -43,9 +41,8 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const [plantsError, setPlantsError] = useState(false);
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [mode, setMode] = useState<CaptureModeKey>(DEFAULT_CAPTURE_MODE);
   const [photo, setPhoto] = useState<PreparedPhoto | null>(null);
-  const [result, setResult] = useState<AssessResult | null>(null);
+  const [result, setResult] = useState<AssessedResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,7 +140,6 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         diagnosis={result.diagnosis}
         plantId={selectedPlant.id}
         plantName={selectedPlant.name}
-        mode={mode}
         engine={result.engine}
         onDone={onClose}
       />
@@ -156,7 +152,6 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         photo={photo}
         plantId={selectedPlant.id}
         plantName={selectedPlant.name}
-        mode={mode}
         onRetake={() => setPhoto(null)}
         onClose={onClose}
         onAssessed={(r) => {
@@ -178,7 +173,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         />
       )}
 
-      {permission?.granted ? <GuideOverlay mode={mode} /> : null}
+      {permission?.granted ? <GuideOverlay /> : null}
 
       <View style={styles.topBar}>
         <RoundButton label="Close" glyph="✕" onPress={onClose} />
@@ -202,8 +197,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         {plants && plants.length === 0 ? (
           <Text style={styles.error}>Add a plant first — the photo needs a plant to belong to.</Text>
         ) : null}
-        <ModeHint mode={mode} />
-        <ModePill mode={mode} onSelect={setMode} />
+        <CaptureHint />
         <View style={styles.controls}>
           <View style={styles.sideControl}>
             <RoundButton

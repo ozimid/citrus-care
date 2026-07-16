@@ -322,6 +322,98 @@ describe("POST /assess (direct-image contract, D-16)", () => {
   });
 });
 
+// F21: the phone no longer tells the server what the photo is — the model
+// says, and the server derives everything downstream from diagnosis.subject.
+describe("POST /assess subject auto-detection (F21)", () => {
+  function insertSpy(id = "assess-1") {
+    return vi.fn().mockReturnValue({
+      select: () => ({ single: () => Promise.resolve({ data: { id }, error: null }) }),
+    });
+  }
+
+  it("derives is_cut_care from subject === 'cut', with no client flag involved", async () => {
+    assessPhotoWithGeminiMock.mockResolvedValue(
+      geminiOk({ ...DIAGNOSIS_OK, subject: "cut", subject_note: "Sawn branch end." }),
+    );
+    const insert = insertSpy();
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertSpy: insert }),
+    );
+
+    const res = await app.request(req(body()));
+    expect(res.status).toBe(200);
+    const row = insert.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.is_cut_care).toBe(true);
+    expect(row.cut_health_score).toBe(DIAGNOSIS_OK.health_score);
+  });
+
+  it("writes is_cut_care false for a whole-plant shot even if the phone sent isCutCare: true", async () => {
+    // An un-reloaded phone still posts the old flag; it must not win over the
+    // model's own reading of the photo.
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk({ ...DIAGNOSIS_OK, subject: "whole_plant" }));
+    const insert = insertSpy();
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertSpy: insert }),
+    );
+
+    const res = await app.request(req(body({ isCutCare: true })));
+    expect(res.status).toBe(200);
+    const row = insert.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.is_cut_care).toBe(false);
+    expect(row.cut_health_score).toBeNull();
+  });
+
+  it("accepts (and ignores) a legacy isCutCare body — an un-reloaded phone keeps working", async () => {
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk({ ...DIAGNOSIS_OK, subject: "leaf" }));
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertedId: "assess-1" }),
+    );
+    const res = await app.request(req(body({ isCutCare: false })));
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects a non-plant photo WITHOUT inserting, returning the diagnosis for the client", async () => {
+    const rejected = {
+      ...DIAGNOSIS_OK,
+      subject: "not_a_plant",
+      subject_note: "This is a coffee mug on a desk.",
+    };
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk(rejected));
+    const insert = insertSpy();
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertSpy: insert }),
+    );
+
+    const res = await app.request(req(body()));
+    expect(res.status).toBe(200);
+    const resBody = (await res.json()) as { rejected?: boolean; diagnosis?: { subject?: string }; id?: string };
+    expect(resBody.rejected).toBe(true);
+    expect(resBody.diagnosis?.subject).toBe("not_a_plant");
+    expect(resBody.id).toBeUndefined();
+    // The timeline stays clean: nothing was written.
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("inserts a non-plant photo anyway when the client forces it (save-anyway escape hatch)", async () => {
+    assessPhotoWithGeminiMock.mockResolvedValue(
+      geminiOk({ ...DIAGNOSIS_OK, subject: "not_a_plant" }),
+    );
+    const insert = insertSpy("assess-forced");
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertSpy: insert }),
+    );
+
+    const res = await app.request(req(body({ force: true })));
+    expect(res.status).toBe(200);
+    const resBody = (await res.json()) as { id?: string; rejected?: boolean };
+    expect(resBody.id).toBe("assess-forced");
+    expect(resBody.rejected).toBeUndefined();
+    expect(insert).toHaveBeenCalledOnce();
+    const row = insert.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.is_cut_care).toBe(false);
+  });
+});
+
 describe("removed photo-storage surface (D-16)", () => {
   it("no longer serves /photos or /cleanup-orphans", async () => {
     const photosRes = await app.request(

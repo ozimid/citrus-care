@@ -10,9 +10,19 @@ import {
   runAssess,
   type AssessDeps,
   type AssessPhase,
+  type AssessResult,
+  type AssessedResult,
   type LocalAssessDeps,
 } from "./assess";
 import type { PhotoIndexEntry } from "./photo-store";
+
+/** Narrow to the persisted branch — fails loudly rather than typing around it. */
+function assessed(result: AssessResult): AssessedResult {
+  if (result.status !== "assessed") {
+    throw new Error(`expected an assessed result, got "${result.status}"`);
+  }
+  return result;
+}
 
 // D-16 flow: local save FIRST (the photo persists on the phone even if the
 // analysis fails) → POST /assess with the base64 image directly → link the
@@ -54,7 +64,7 @@ function makeDeps(overrides: Partial<AssessDeps> = {}) {
   return { deps, apiCalls, saved, linked };
 }
 
-const INPUT = { plantId: "plant-1", photoUri: "file:///tmp/photo.jpg", isCutCare: false };
+const INPUT = { plantId: "plant-1", photoUri: "file:///tmp/photo.jpg" };
 
 describe("runAssess (local-first, direct-image escalation)", () => {
   it("saves locally first, posts the base64 image to /assess, links the photo, returns the diagnosis", async () => {
@@ -68,6 +78,7 @@ describe("runAssess (local-first, direct-image escalation)", () => {
     });
 
     expect(result).toEqual({
+      status: "assessed",
       assessmentId: "assessment-9",
       diagnosis: DIAGNOSIS,
       localUri: "file:///docs/photos/plant-1/saved.jpg",
@@ -84,7 +95,6 @@ describe("runAssess (local-first, direct-image escalation)", () => {
       plantId: "plant-1",
       imageBase64: "QkFTRTY0",
       mime: "image/jpeg",
-      isCutCare: false,
     });
 
     // Local uri ↔ assessment id link, with the engine recorded (D-15 seam).
@@ -114,10 +124,13 @@ describe("runAssess (local-first, direct-image escalation)", () => {
     expect(result.localUri).toBe("file:///docs/photos/plant-1/kept.jpg");
   });
 
-  it("sends isCutCare: true for cut mode", async () => {
+  // F21: the capture screen has no modes, so the request carries no mode.
+  it("sends no capture-mode field at all — the model detects the subject", async () => {
     const { deps, apiCalls } = makeDeps();
-    await runAssess(deps, { ...INPUT, isCutCare: true });
-    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({ isCutCare: true });
+    await runAssess(deps, INPUT);
+    const sent = JSON.parse(apiCalls[0].init?.body as string) as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("isCutCare");
+    expect(sent).not.toHaveProperty("mode");
   });
 
   it("fails with the save error (and never calls the API) when the local save fails", async () => {
@@ -158,7 +171,7 @@ describe("runAssess (local-first, direct-image escalation)", () => {
       },
     });
     const result = await runAssess(deps, INPUT);
-    expect(result.assessmentId).toBe("assessment-9");
+    expect(assessed(result).assessmentId).toBe("assessment-9");
   });
 
   it("rejects a diagnosis row that fails the shared Zod schema", async () => {
@@ -179,7 +192,7 @@ const LOCAL_JSON = JSON.stringify({
 });
 
 function makeLocal(overrides: Partial<LocalAssessDeps> = {}) {
-  const generated: { imageUri: string; isCutCare: boolean }[] = [];
+  const generated: { imageUri: string }[] = [];
   const persisted: unknown[] = [];
   const prepared: string[] = [];
   const local: LocalAssessDeps = {
@@ -216,7 +229,7 @@ describe("runAssess engine router (D-15 Stage 2)", () => {
     const result = await runAssess(deps, INPUT);
 
     expect(result.engine).toBe("on-device");
-    expect(result.assessmentId).toBe("assessment-local-1");
+    expect(assessed(result).assessmentId).toBe("assessment-local-1");
     expect(result.diagnosis.health_score).toBe(81);
     expect(result.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
 
@@ -225,13 +238,12 @@ describe("runAssess engine router (D-15 Stage 2)", () => {
 
     // 512px downscale before inference (research doc: full-res = minutes).
     expect(prepared).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
-    expect(generated).toEqual([
-      { imageUri: "file:///docs/photos/plant-1/saved.jpg#512", isCutCare: false },
-    ]);
+    expect(generated).toEqual([{ imageUri: "file:///docs/photos/plant-1/saved.jpg#512" }]);
 
-    // Persisted directly (that endpoint runs Gemini), raw output kept.
+    // Persisted directly (that endpoint runs Gemini), raw output kept. No
+    // cut flag: the row derives it from the diagnosis's own subject (F21).
     expect(persisted).toEqual([
-      { plantId: "plant-1", diagnosis: result.diagnosis, raw: LOCAL_JSON, isCutCare: false },
+      { plantId: "plant-1", diagnosis: result.diagnosis, raw: LOCAL_JSON },
     ]);
 
     // The index records the engine that actually produced the row.
@@ -257,12 +269,16 @@ describe("runAssess engine router (D-15 Stage 2)", () => {
     expect(order).toEqual(["save", "generate"]);
   });
 
-  it("passes cut mode through to the local prompt and the persisted row", async () => {
-    const { local, generated, persisted } = makeLocal();
-    const { deps } = makeDeps({ local });
-    await runAssess(deps, { ...INPUT, isCutCare: true });
-    expect(generated[0].isCutCare).toBe(true);
-    expect(persisted[0]).toMatchObject({ isCutCare: true });
+  it("keeps a cut detected by the local model — no mode was ever needed", async () => {
+    const { local, persisted } = makeLocal({
+      generate: async () => JSON.stringify({ ...JSON.parse(LOCAL_JSON), subject: "cut" }),
+    });
+    const { deps, apiCalls } = makeDeps({ local });
+    const result = await runAssess(deps, INPUT);
+    expect(result.engine).toBe("on-device");
+    expect(result.diagnosis.subject).toBe("cut");
+    expect(persisted).toHaveLength(1);
+    expect(apiCalls).toEqual([]);
   });
 
   it("escalates to Gemini when the user has the local engine disabled or unready", async () => {
@@ -272,7 +288,7 @@ describe("runAssess engine router (D-15 Stage 2)", () => {
     const result = await runAssess(deps, INPUT);
 
     expect(result.engine).toBe("gemini");
-    expect(result.assessmentId).toBe("assessment-9");
+    expect(assessed(result).assessmentId).toBe("assessment-9");
     expect(generated).toEqual([]);
     expect(apiCalls).toHaveLength(1);
   });
@@ -343,6 +359,101 @@ describe("runAssess engine router (D-15 Stage 2)", () => {
     await expect(runAssess(deps, INPUT)).resolves.toMatchObject({ diagnosis: DIAGNOSIS });
     // The reason is logged for us, never surfaced (generic-message rule).
     expect(console.error).toHaveBeenCalled();
+  });
+});
+
+// F21: a non-plant photo must not land in a plant's timeline. Both engines
+// reach the same verdict through the same field, and "save anyway" is the
+// user's override — never the model's.
+describe("runAssess not_a_plant rejection (F21)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const NOT_A_PLANT = {
+    health_score: 0,
+    summary: "This is a coffee mug, not a plant.",
+    subject: "not_a_plant",
+    subject_note: "Ceramic mug on a desk.",
+    symptoms: [],
+    causes: [],
+    recommendations: [],
+  };
+
+  it("surfaces the server's rejection without an assessment id (Gemini engine)", async () => {
+    const { deps, apiCalls, linked } = makeDeps({
+      api: async (path, init) => {
+        apiCalls.push({ url: path, init });
+        return { ok: true, status: 200, json: async () => ({ rejected: true, diagnosis: NOT_A_PLANT }) };
+      },
+    });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnosis.subject).toBe("not_a_plant");
+    expect(result.engine).toBe("gemini");
+    // The photo is still saved on the phone — only the timeline row isn't.
+    expect(result.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
+    // Nothing to link: there is no assessment to link a photo to.
+    expect(linked).toEqual([]);
+  });
+
+  it("re-posts with force: true when the user saves anyway, and returns the saved id", async () => {
+    const posted: Record<string, unknown>[] = [];
+    const { deps, linked } = makeDeps({
+      api: async (_path, init) => {
+        posted.push(JSON.parse(init?.body as string));
+        return { ok: true, status: 200, json: async () => ({ id: "assessment-9" }) };
+      },
+      loadDiagnosis: async () => NOT_A_PLANT,
+    });
+
+    const result = await runAssess(deps, { ...INPUT, force: true });
+
+    expect(posted[0]).toMatchObject({ force: true });
+    expect(result.status).toBe("assessed");
+    expect(assessed(result).assessmentId).toBe("assessment-9");
+    expect(linked).toHaveLength(1);
+  });
+
+  it("does NOT persist a local not_a_plant result, and does not escalate to Gemini either", async () => {
+    const { local, persisted } = makeLocal({ generate: async () => JSON.stringify(NOT_A_PLANT) });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.status).toBe("rejected");
+    expect(result.engine).toBe("on-device");
+    expect(persisted).toEqual([]);
+    // A rejection is an answer, not a local failure: escalating would just
+    // spend a Gemini call to be told the same thing.
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("persists a local not_a_plant result when the user forces it", async () => {
+    const { local, persisted } = makeLocal({ generate: async () => JSON.stringify(NOT_A_PLANT) });
+    const { deps } = makeDeps({ local });
+
+    const result = await runAssess(deps, { ...INPUT, force: true });
+
+    expect(result.status).toBe("assessed");
+    expect(persisted).toHaveLength(1);
+    expect(assessed(result).assessmentId).toBe("assessment-local-1");
+  });
+
+  it("treats a rejection as a normal result — no error string reaches the caller", async () => {
+    const { deps } = makeDeps({
+      api: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ rejected: true, diagnosis: NOT_A_PLANT }),
+      }),
+    });
+    await expect(runAssess(deps, INPUT)).resolves.toMatchObject({ status: "rejected" });
   });
 });
 

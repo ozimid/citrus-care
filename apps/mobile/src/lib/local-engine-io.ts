@@ -34,7 +34,6 @@ export interface PersistLocalAssessmentInput {
   plantId: string;
   diagnosis: AssessmentDiagnosis;
   raw: string;
-  isCutCare: boolean;
 }
 
 /** Insert an on-device diagnosis straight into `assessments` (RLS scopes it to
@@ -68,7 +67,6 @@ export async function persistLocalAssessment(
         userId,
         diagnosis: input.diagnosis,
         raw: input.raw,
-        isCutCare: input.isCutCare,
         previousAssessmentId: (prevRow as { id: string } | null)?.id ?? null,
       }),
     )
