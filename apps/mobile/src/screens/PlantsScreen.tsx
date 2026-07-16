@@ -12,9 +12,14 @@ import {
 } from "react-native";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { bandColor, healthBand } from "../lib/health";
-import { fetchPlants, type PlantListItem } from "../lib/plants";
-import { supabase } from "../lib/supabase";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { type PlantListItem } from "../lib/plants";
+import { fetchPlants } from "../lib/plants-io";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
+import { distinctZips, wateringPlansFor, type WateringPlan } from "../lib/watering";
+import { getWateringLog } from "../lib/watering-io";
+import { loadWeatherFor } from "../lib/weather-io";
+import type { WeatherSummary } from "../lib/weather";
 import { PlantDetailScreen } from "./PlantDetailScreen";
 
 // Plants tab per the native design doc §3/§4: card rows with name, species
@@ -28,22 +33,43 @@ const GENERIC_LOAD_ERROR = "Could not load your plants. Pull to retry.";
 export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const { t, scheme } = useTheme();
   const [items, setItems] = useState<PlantListItem[] | null>(null);
+  const [plans, setPlans] = useState<Record<string, WateringPlan>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
 
+  /**
+   * F20 chips, computed for the whole list in one pass AFTER the plants render.
+   * The cost is bounded by distinct ZIPs, not cards — twenty plants at one
+   * address is one forecast (and usually zero, from the 6h cache). Weather
+   * failures are silent by construction: loadWeatherFor returns null and those
+   * plants simply fall back to their base schedule.
+   */
+  const loadPlans = useCallback(async (plants: PlantListItem[]) => {
+    const now = new Date();
+    const zips = distinctZips(plants);
+    const resolved = await Promise.all(zips.map((zip) => loadWeatherFor(zip, now)));
+    const weatherByZip: Record<string, WeatherSummary | null> = {};
+    zips.forEach((zip, i) => {
+      weatherByZip[zip] = resolved[i]?.summary ?? null;
+    });
+    setPlans(wateringPlansFor(plants, weatherByZip, await getWateringLog(), now));
+  }, []);
+
   const load = useCallback(async () => {
     try {
-      const plants = await fetchPlants(supabase);
+      const plants = await fetchPlants();
       setItems(plants);
       setError(null);
+      // Don't block the list on weather — the chips arrive a beat later.
+      void loadPlans(plants);
     } catch {
       // fetchPlants already logged the details; show only a generic message.
       setError(GENERIC_LOAD_ERROR);
       setItems((prev) => prev ?? []);
     }
-  }, []);
+  }, [loadPlans]);
 
   // refreshToken bumps when a new assessment lands (App.tsx) so the fresh
   // score is already on screen when the capture modal closes.
@@ -87,7 +113,13 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
             error ? null : <EmptyState t={t} onAdd={() => setAdding(true)} />
           }
           renderItem={({ item }) => (
-            <PlantCard item={item} t={t} scheme={scheme} onPress={() => setDetailId(item.id)} />
+            <PlantCard
+              item={item}
+              needsWater={plans[item.id]?.isDue === true}
+              t={t}
+              scheme={scheme}
+              onPress={() => setDetailId(item.id)}
+            />
           )}
         />
       )}
@@ -119,11 +151,15 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
 
 function PlantCard({
   item,
+  needsWater,
   t,
   scheme,
   onPress,
 }: {
   item: PlantListItem;
+  /** F20: this plant's watering plan says it's due (chip appears once the
+   * list's weather pass lands — never blocks the card). */
+  needsWater: boolean;
   t: Tokens;
   scheme: "light" | "dark";
   onPress: () => void;
@@ -131,7 +167,7 @@ function PlantCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${item.name}`}
+      accessibilityLabel={`Open ${item.name}${needsWater ? ", needs water" : ""}`}
       onPress={onPress}
       style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}
     >
@@ -144,7 +180,14 @@ function PlantCard({
             {item.subLabel}
           </Text>
         ) : null}
-        {item.trend ? <TrendChip trend={item.trend} t={t} scheme={scheme} /> : null}
+        <View style={styles.chipRow}>
+          {item.trend ? <TrendChip trend={item.trend} t={t} scheme={scheme} /> : null}
+          {needsWater ? (
+            <View style={[styles.trendChip, { backgroundColor: t.green + "22" }]}>
+              <Text style={[styles.trendChipText, { color: t.green }]}>💧 Needs water</Text>
+            </View>
+          ) : null}
+        </View>
       </View>
       <HealthRing score={item.latestScore} t={t} scheme={scheme} />
     </Pressable>
@@ -256,6 +299,7 @@ const styles = StyleSheet.create({
   cardText: { flex: 1, gap: 2, alignItems: "flex-start" },
   cardName: { fontSize: 16, fontWeight: "600" },
   cardSub: { fontSize: 13 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   trendChip: {
     borderRadius: 999,
     paddingHorizontal: 8,

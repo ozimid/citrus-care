@@ -1,11 +1,16 @@
-// Plant detail data: the plant row (incl. zip_code for the quarantine check)
-// plus the full assessment timeline, mapped into render-ready entries. Pure
-// mapping half is tested (plant-detail.test.ts); the queries are thin.
+// Plant detail row + timeline mapping (pure, tested). D-17: the plant row and
+// its assessments are reconstructed from the on-device stores by store-adapters
+// and fed to these mappers; the thin read is fetchPlantDetail in plants-io.ts.
 // Photos are local-only (D-16): entries join to on-phone uris through the
 // photo-store index; entries without a local photo render a placeholder.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { assessmentDiagnosisSchema, type AssessmentDiagnosis, type Plant } from "@citrus/shared";
+import {
+  assessmentDiagnosisSchema,
+  assessmentSubjectSchema,
+  type AssessmentDiagnosis,
+  type AssessmentSubject,
+  type Plant,
+} from "@citrus/shared";
 import { photoForAssessment, type PhotoIndex } from "./photo-store";
 
 export const PLANT_DETAIL_LOAD_ERROR = "Could not load this plant.";
@@ -13,14 +18,10 @@ export const PLANT_DETAIL_LOAD_ERROR = "Could not load this plant.";
 export type PlantDetailRow = Pick<
   Plant,
   "id" | "name" | "plant_type" | "species" | "cultivar" | "location" | "zip_code" | "created_at"
->;
-
-export const PLANT_DETAIL_SELECT =
-  "id,name,plant_type,species,cultivar,location,zip_code,created_at";
-
-/** Timeline columns; photo_path is gone (D-16 — photos never reach the
- * server), is_cut_care lets a row tap restore the assessment's capture mode. */
-export const TIMELINE_SELECT = "id,created_at,health_score,diagnosis,is_cut_care";
+> & {
+  /** F20 jsonb — untrusted until parseStoredCareProfile validates it. */
+  care_profile?: unknown;
+};
 
 export interface TimelineRow {
   id: string;
@@ -40,8 +41,14 @@ export interface TimelineEntry {
   score: number;
   delta: TimelineDelta | null;
   /** Chip text mirroring the web badge wording; "First" marks the plant's
-   * earliest assessment (nothing prior to compare against). */
+   * earliest assessment (nothing prior to compare against). Carries the
+   * "· different framing" suffix when deltaAdvisory is set. */
   deltaLabel: string | null;
+  /** F21 §5 — this row and the one before it show different subjects, so the
+   * delta compares a leaf to a whole plant (or similar) and is advisory
+   * rather than a like-for-like trend. Automatic and honest, which is more
+   * than the capture-mode system it replaces ever managed. */
+  deltaAdvisory: boolean;
   summary: string;
   /** On-phone photo uri from the local index; null (placeholder) when this
    * device has no photo for the assessment (old rows, other devices). */
@@ -71,6 +78,27 @@ export function comparisonDelta(diagnosis: unknown): TimelineDelta | null {
   return typeof delta === "string" && DELTAS.has(delta) ? (delta as TimelineDelta) : null;
 }
 
+/** Safely pull the F21 subject out of the untrusted diagnosis jsonb. Null for
+ * anything unrecognized AND for every pre-F21 row — those simply predate
+ * detection, which is not the same as "the framing changed". */
+export function subjectOf(diagnosis: unknown): AssessmentSubject | null {
+  if (typeof diagnosis !== "object" || diagnosis === null) return null;
+  const parsed = assessmentSubjectSchema.safeParse((diagnosis as { subject?: unknown }).subject);
+  return parsed.success ? parsed.data : null;
+}
+
+const SUBJECT_LABELS: Record<AssessmentSubject, string> = {
+  leaf: "leaf",
+  whole_plant: "whole plant",
+  cut: "pruning cut",
+  not_a_plant: "not a plant",
+};
+
+/** Plain-English name for the "Detected: …" chip. */
+export function subjectLabel(subject: AssessmentSubject): string {
+  return SUBJECT_LABELS[subject];
+}
+
 function summaryOf(diagnosis: unknown): string {
   if (typeof diagnosis !== "object" || diagnosis === null) return "";
   const summary = (diagnosis as { summary?: unknown }).summary;
@@ -88,13 +116,21 @@ export function mapTimelineRows(rows: TimelineRow[] | null | undefined): Timelin
   return list.map((row, i) => {
     const delta = comparisonDelta(row.diagnosis);
     const isEarliest = i === list.length - 1;
+    // The next row is the previous assessment (rows are newest-first).
+    const subject = subjectOf(row.diagnosis);
+    const previousSubject = isEarliest ? null : subjectOf(list[i + 1].diagnosis);
+    // Both must be known: an unknown subject is a pre-F21 row, not a change.
+    const deltaAdvisory =
+      delta !== null && subject !== null && previousSubject !== null && subject !== previousSubject;
+    const label = delta ? capitalize(delta) : isEarliest ? "First" : null;
     return {
       id: row.id,
       createdAt: row.created_at,
       dateLabel: formatTimelineDate(row.created_at),
       score: row.health_score,
       delta,
-      deltaLabel: delta ? capitalize(delta) : isEarliest ? "First" : null,
+      deltaLabel: label && deltaAdvisory ? `${label} · different framing` : label,
+      deltaAdvisory,
       summary: summaryOf(row.diagnosis),
       localUri: null,
       isCutCare: row.is_cut_care === true,
@@ -145,36 +181,4 @@ export function parseTimelineDiagnosis(raw: unknown): AssessmentDiagnosis | null
 export interface PlantDetailData {
   plant: PlantDetailRow;
   timeline: TimelineEntry[];
-}
-
-/** Thin two-query fetch (plant row + all assessments, newest first). Generic
- * client-facing message; details stay in the console (web parity rule). */
-export async function fetchPlantDetail(
-  client: SupabaseClient,
-  plantId: string,
-): Promise<PlantDetailData> {
-  const { data: plant, error: plantError } = await client
-    .from("plants")
-    .select(PLANT_DETAIL_SELECT)
-    .eq("id", plantId)
-    .maybeSingle();
-  if (plantError || !plant) {
-    console.error("[fetchPlantDetail] plant query failed:", plantError?.message ?? "not found");
-    throw new Error(PLANT_DETAIL_LOAD_ERROR);
-  }
-
-  const { data: rows, error: rowsError } = await client
-    .from("assessments")
-    .select(TIMELINE_SELECT)
-    .eq("plant_id", plantId)
-    .order("created_at", { ascending: false });
-  if (rowsError) {
-    console.error("[fetchPlantDetail] timeline query failed:", rowsError.message);
-    throw new Error(PLANT_DETAIL_LOAD_ERROR);
-  }
-
-  return {
-    plant: plant as unknown as PlantDetailRow,
-    timeline: mapTimelineRows(rows as unknown as TimelineRow[]),
-  };
 }

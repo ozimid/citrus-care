@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,15 +15,15 @@ import {
   emptyNewPlantForm,
   formFromPlant,
   GENERIC_CREATE_PLANT_ERROR,
-  insertPlant,
   showsCitrusCultivarPicker,
   validateNewPlant,
   type NewPlantFieldErrors,
   type NewPlantForm,
 } from "../lib/new-plant";
-import { GENERIC_UPDATE_PLANT_ERROR, updatePlant } from "../lib/plant-mutations";
-import { supabase } from "../lib/supabase";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { GENERIC_UPDATE_PLANT_ERROR } from "../lib/plant-mutations";
+import { insertPlant, updatePlant } from "../lib/plants-io";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // New/edit plant bottom sheet per the native design doc §4 (#5/#7): same
 // fields and validation as the web form (apps/web/app/plants/new/
@@ -94,9 +93,12 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
     setBusy(true);
     try {
       if (plant) {
-        await updatePlant(supabase, plant.id, result.data);
+        await updatePlant(plant.id, result.data);
       } else {
-        await insertPlant(supabase, result.data);
+        await insertPlant(result.data);
+        // F20: the plant is created without a care profile. It is generated
+        // on-device, opportunistically, when the detail screen's watering card
+        // finds the model ready — so adding a plant never waits on the model.
         setForm(emptyNewPlantForm);
       }
       setCultivarOpen(false);
@@ -115,7 +117,10 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
       <View style={styles.backdrop}>
         <Pressable accessibilityLabel="Close" style={styles.backdropTouch} onPress={close} />
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {/* "padding" on BOTH platforms: inside an RN Modal Android never gets
+            the window's adjustResize, so an undefined behavior left the lower
+            fields (ZIP code) hidden under the keyboard (feedback 2026-07-16). */}
+        <KeyboardAvoidingView behavior="padding">
           <View style={[styles.sheet, { backgroundColor: t.card }]}>
             <View style={styles.header}>
               <Text style={[styles.title, { color: t.text }]}>

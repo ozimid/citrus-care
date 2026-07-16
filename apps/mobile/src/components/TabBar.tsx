@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useTheme } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // Bottom tab bar with a center camera FAB per the native design doc §3:
 // Plants · Assess (FAB → full-screen capture) · Profile.

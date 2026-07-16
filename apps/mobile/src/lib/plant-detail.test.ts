@@ -5,9 +5,9 @@ import {
   formatTimelineDate,
   mapTimelineRows,
   parseTimelineDiagnosis,
-  PLANT_DETAIL_SELECT,
   sliderPair,
-  TIMELINE_SELECT,
+  subjectLabel,
+  subjectOf,
   trendChipLabel,
   type TimelineRow,
 } from "./plant-detail";
@@ -53,19 +53,6 @@ function indexFor(ids: Record<string, string>): PhotoIndex {
   }
   return index;
 }
-
-describe("select constants", () => {
-  it("pulls zip_code for the quarantine check", () => {
-    expect(PLANT_DETAIL_SELECT).toContain("zip_code");
-  });
-
-  it("pulls the timeline columns, WITHOUT photo_path (photos are local-only, D-16)", () => {
-    for (const col of ["id", "created_at", "health_score", "diagnosis", "is_cut_care"]) {
-      expect(TIMELINE_SELECT).toContain(col);
-    }
-    expect(TIMELINE_SELECT).not.toContain("photo_path");
-  });
-});
 
 describe("formatTimelineDate", () => {
   it("formats as 'Mon D, YYYY' (UTC, deterministic)", () => {
@@ -120,6 +107,55 @@ describe("mapTimelineRows", () => {
   it("returns [] for null/undefined data", () => {
     expect(mapTimelineRows(null)).toEqual([]);
     expect(mapTimelineRows(undefined)).toEqual([]);
+  });
+});
+
+// F21 §5: a score delta across two different subjects compares different
+// things. The mode system never knew this; detection does, automatically.
+describe("subject-change advisory", () => {
+  function subjectRows(subjects: (string | undefined)[]): TimelineRow[] {
+    return subjects.map((subject, i) => ({
+      id: `a${subjects.length - i}`,
+      created_at: `2026-0${7 - i}-10T09:00:00Z`,
+      health_score: 70,
+      is_cut_care: false,
+      diagnosis: {
+        summary: "s",
+        ...(subject ? { subject } : {}),
+        comparison: { delta: "same", notes: "n" },
+      },
+    }));
+  }
+
+  it("extracts a valid subject from the untrusted diagnosis jsonb", () => {
+    expect(subjectOf({ subject: "whole_plant" })).toBe("whole_plant");
+    expect(subjectOf({ subject: "bogus" })).toBeNull();
+    expect(subjectOf({})).toBeNull();
+    expect(subjectOf(null)).toBeNull();
+  });
+
+  it("marks the delta advisory when the previous assessment saw a different subject", () => {
+    const [latest] = mapTimelineRows(subjectRows(["whole_plant", "leaf"]));
+    expect(latest.deltaAdvisory).toBe(true);
+    expect(latest.deltaLabel).toBe("Same · different framing");
+  });
+
+  it("leaves the delta plain when both assessments saw the same subject", () => {
+    const [latest] = mapTimelineRows(subjectRows(["leaf", "leaf"]));
+    expect(latest.deltaAdvisory).toBe(false);
+    expect(latest.deltaLabel).toBe("Same");
+  });
+
+  // Silence is not evidence of a change: pre-F21 rows have no subject.
+  it("never claims a framing change when either subject is unknown", () => {
+    expect(mapTimelineRows(subjectRows(["leaf", undefined]))[0].deltaAdvisory).toBe(false);
+    expect(mapTimelineRows(subjectRows([undefined, "leaf"]))[0].deltaAdvisory).toBe(false);
+    expect(mapTimelineRows(subjectRows([undefined, undefined]))[0].deltaAdvisory).toBe(false);
+  });
+
+  it("never marks the earliest row advisory — it has nothing to compare against", () => {
+    const entries = mapTimelineRows(subjectRows(["whole_plant", "leaf"]));
+    expect(entries[entries.length - 1].deltaAdvisory).toBe(false);
   });
 });
 
@@ -186,6 +222,16 @@ describe("sliderPair (local photos only)", () => {
     expect(sliderPair(entries)).toBeNull();
     expect(sliderPair(attachLocalPhotos(mapTimelineRows(rows()), {}))).toBeNull();
     expect(sliderPair([])).toBeNull();
+  });
+});
+
+// The "Detected: …" chip on DiagnosisScreen reads these.
+describe("subjectLabel", () => {
+  it("names each subject in plain English", () => {
+    expect(subjectLabel("leaf")).toBe("leaf");
+    expect(subjectLabel("whole_plant")).toBe("whole plant");
+    expect(subjectLabel("cut")).toBe("pruning cut");
+    expect(subjectLabel("not_a_plant")).toBe("not a plant");
   });
 });
 

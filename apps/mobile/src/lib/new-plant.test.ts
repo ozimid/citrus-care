@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildPlantInsertRow,
+  buildStoredPlant,
   emptyNewPlantForm,
   formFromPlant,
   showsCitrusCultivarPicker,
@@ -110,21 +110,24 @@ describe("validateNewPlant", () => {
   });
 });
 
-describe("buildPlantInsertRow", () => {
-  it("builds the insert row with an explicit user_id and nulls for missing optionals (web createPlant parity)", () => {
+describe("buildStoredPlant", () => {
+  it("builds a local plant record (no user_id; null cover + care_profile until generated)", () => {
     const result = validateNewPlant(
       filled({ species: "", cultivar: "", location: "", zip_code: "" }),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(buildPlantInsertRow(result.data, "user-123")).toEqual({
-      user_id: "user-123",
+    expect(buildStoredPlant(result.data, "plant-1", "2026-07-15T00:00:00Z")).toEqual({
+      id: "plant-1",
       name: "Mr Lemon by the door",
       plant_type: "tree",
       species: null,
       cultivar: null,
       location: null,
       zip_code: null,
+      cover_assessment_id: null,
+      care_profile: null,
+      created_at: "2026-07-15T00:00:00Z",
     });
   });
 });

@@ -23,7 +23,11 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FDE68A"
+      }
     },
     "plugins": [
       "expo-web-browser",
@@ -40,30 +44,18 @@
         }
       ],
       "expo-notifications",
-      "@react-native-google-signin/google-signin",
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "usesCleartextTraffic": true
-          }
-        }
-      ],
-      "expo-asset"
+      "expo-asset",
+      "expo-sharing"
     ],
     "experiments": {
       "onDemandFilesystem": false
     },
     "extra": {
-      "supabaseUrl": "YOUR_SUPABASE_URL",
-      "supabaseAnonKey": "YOUR_SUPABASE_ANON_KEY",
-      "googleWebClientId": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com",
-      "googleIosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
-      "googleAndroidClientId": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com",
       "eas": {
         "projectId": "db82c83f-6bce-4302-890e-54d22876a148"
       }
     },
-    "owner": "ozimid"
+    "owner": "ozimid",
+    "icon": "./assets/icon.png"
   }
 }

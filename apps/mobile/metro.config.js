@@ -1,19 +1,27 @@
 // Mobile is deliberately NOT an npm workspace (React isolation — see README),
 // but it consumes @citrus/shared straight from source. Teach Metro where the
-// package and the monorepo-root node_modules (zod, hoisted for the web app)
-// live, since both sit outside this project root.
+// package lives, since it sits outside this project root.
+//
+// The monorepo-root node_modules exists only where the web workspace has been
+// installed (a dev Mac) — NOT on EAS builders, which install apps/mobile
+// alone. Metro stat()s every watchFolder at startup, so referencing it
+// unconditionally breaks the EAS bundle phase (ENOENT). Include it only when
+// present; zod (shared's one dependency) is a direct mobile dependency, so
+// nothing NEEDS the root install.
 
 const { getDefaultConfig } = require("expo/metro-config");
+const fs = require("fs");
 const path = require("path");
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, "../..");
+const rootNodeModules = path.join(workspaceRoot, "node_modules");
 
 const config = getDefaultConfig(projectRoot);
 
 config.watchFolders = [
   path.join(workspaceRoot, "packages/shared"),
-  path.join(workspaceRoot, "node_modules"),
+  ...(fs.existsSync(rootNodeModules) ? [rootNodeModules] : []),
 ];
 
 // Map @citrus/shared straight to its source entry (mirrors the tsconfig path
@@ -32,7 +40,7 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 
 config.resolver.nodeModulesPaths = [
   path.join(projectRoot, "node_modules"),
-  path.join(workspaceRoot, "node_modules"),
+  ...(fs.existsSync(rootNodeModules) ? [rootNodeModules] : []),
 ];
 
 // NOTE: `expo export` truncates watchFolders to the project root when Expo's

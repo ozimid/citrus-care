@@ -1,6 +1,7 @@
 import { FlatList, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import type { PlantListItem } from "../lib/plants";
-import { RADIUS, useTheme } from "../lib/theme";
+import { RADIUS } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // Simple picker sheet: the capture FAB needs a target plant when the user has
 // more than one (preselected automatically when there is exactly one — see

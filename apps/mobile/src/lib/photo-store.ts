@@ -5,9 +5,10 @@
 // is pure and tested; the filesystem/AsyncStorage wiring is the thin
 // photo-store-io.ts (same split as photo.ts vs photo-io.ts).
 
-/** Which engine produced the diagnosis. Only Gemini escalation exists today;
- * the on-device model (D-15 executorch spike) plugs in behind this seam. */
-export type AssessEngine = "gemini";
+/** Which engine produced the diagnosis. Since D-17 only "on-device" (Gemma 4
+ * E2B) is ever written — "gemini" stays in the union so index entries recorded
+ * before the pivot still parse instead of being dropped by the sanitizer. */
+export type AssessEngine = "gemini" | "on-device";
 
 export interface PhotoIndexEntry {
   /** Durable file uri under the app documents directory. */
@@ -60,7 +61,7 @@ function isValidEntry(value: unknown): value is PhotoIndexEntry {
   return (
     typeof e.localUri === "string" &&
     typeof e.plantId === "string" &&
-    e.engine === "gemini" &&
+    (e.engine === "gemini" || e.engine === "on-device") &&
     typeof e.createdAt === "string"
   );
 }

@@ -14,10 +14,10 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
+import { WateringCard } from "../components/WateringCard";
 import { bandColor, healthBand } from "../lib/health";
 import {
   attachLocalPhotos,
-  fetchPlantDetail,
   parseTimelineDiagnosis,
   PLANT_DETAIL_LOAD_ERROR,
   sliderPair,
@@ -26,11 +26,12 @@ import {
   type TimelineDelta,
   type TimelineEntry,
 } from "../lib/plant-detail";
-import { deletePlantWithPhotos, GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
-import { deleteLocalPlantPhotos, loadPhotoIndex } from "../lib/photo-store-io";
+import { GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
+import { deletePlantWithPhotos, fetchPlantDetail } from "../lib/plants-io";
+import { loadPhotoIndex } from "../lib/photo-store-io";
 import { plantSubLabel } from "../lib/plants";
-import { supabase } from "../lib/supabase";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 import { CaptureScreen } from "./CaptureScreen";
 import { DiagnosisScreen } from "./DiagnosisScreen";
 
@@ -63,7 +64,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const detail = await fetchPlantDetail(supabase, plantId);
+      const detail = await fetchPlantDetail(plantId);
       // Join the synced assessments to their on-phone photos (D-16).
       const index = await loadPhotoIndex();
       setData({ ...detail, timeline: attachLocalPhotos(detail.timeline, index) });
@@ -101,10 +102,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           onPress: async () => {
             setDeleting(true);
             try {
-              await deletePlantWithPhotos(
-                { client: supabase, deleteLocalPhotos: deleteLocalPlantPhotos },
-                plantId,
-              );
+              await deletePlantWithPhotos(plantId);
               onChanged();
               onClose();
             } catch {
@@ -167,6 +165,16 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           ) : null}
 
           <QuarantineCard plant={plant} t={t} scheme={scheme} />
+
+          {/* F20 — weather-aware watering. Renders from the plant row's care
+              profile + the ZIP's cached forecast; degrades to a hint (no ZIP)
+              or a retry (no profile) rather than an error. */}
+          <WateringCard
+            plant={plant}
+            lastAssessedAt={latest?.createdAt ?? null}
+            t={t}
+            onProfileGenerated={load}
+          />
 
           <Pressable
             accessibilityRole="button"
@@ -266,7 +274,6 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
             diagnosis={viewing.diagnosis}
             plantId={plant.id}
             plantName={plant.name}
-            mode={viewing.entry.isCutCare ? "cut" : "leaf"}
             onDone={() => setViewing(null)}
           />
         ) : null}
@@ -436,7 +443,7 @@ const styles = StyleSheet.create({
   },
   rowDate: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   rowScore: { fontSize: 15, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  rowMeta: { flexDirection: "row" },
+  rowMeta: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   deltaChip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   deltaChipText: { fontSize: 11, fontWeight: "700" },
   rowSummary: { fontSize: 13, lineHeight: 18 },

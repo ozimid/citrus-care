@@ -1,35 +1,35 @@
 # CLAUDE.md — Citrus Care v1
 
 ## What this is
-Photo-driven plant care, native-app-first (D-16). User snaps a leaf/tree photo in the Android app, Gemini 2.5 Flash returns a structured diagnosis (health score, symptoms, causes, ranked actions); each plant has a timeline; re-assessment shows better/same/worse vs the prior. **Photos live only on the phone** — a photo travels the network exactly once, inside the `/assess` request body, and is never stored server-side. The web app is a static marketing landing.
+Photo-driven plant care, **fully on-device (D-17)**. User snaps a leaf / whole-plant / pruning-cut photo in the Android app; **Gemma 4 E2B, running on the phone**, returns a structured diagnosis (health score, subject, symptoms, causes, ranked actions); each plant has a timeline; re-assessment shows better/same/worse vs the prior (computed deterministically from the health scores). **Nothing leaves the phone** — no accounts, no server, no cloud AI. The web app is a static marketing landing that hands out the APK.
 
 ## Tech Stack
-- **Product:** Expo/React Native Android app (`apps/mobile`)
-- **Backend:** standalone Hono service (`apps/api`) for the AI pipeline (`/assess`)
+- **Product:** Expo/React Native Android app (`apps/mobile`) — THE product, fully local
+- **Backend:** **none.** No server, no database, no auth, no secrets.
+- **On-device AI:** `react-native-executorch` + Gemma 4 E2B multimodal (~1.3 GB, Apache-2.0). Diagnosis (image) + care profile (text-only) on one session (FIFO mutex). No cloud fallback.
+- **Storage:** on-device only — AsyncStorage keyed stores (`plant-store` / `assessment-store` / watering log / photo index) + photo files under app documents.
 - **Web:** Next.js 16 (App Router), React 19, Tailwind CSS 4 — static landing only
-- **AI:** Google Gemini API (`@google/genai`, model `gemini-2.5-flash`, structured output via `responseSchema`)
-- **Database:** Supabase (Postgres + Auth + RLS on every user-visible table; no Storage use since D-16)
-- **Auth:** Google sign-in via Supabase (native Google SDK in the mobile app)
-- **Testing:** Vitest (unit), Playwright (e2e, landing only)
+- **Testing:** Vitest (unit, pure modules), Playwright (e2e, landing only)
 - **CI:** GitHub Actions (typecheck + lint + vitest on push/PR)
-- **Deploy:** Fly.io (`fly.toml` in repo root)
+- **Deploy:** Fly.io deploys the static landing only
 
-## Repo structure (monorepo — strict separation, decision D-12)
-- `apps/mobile/` — THE product: Expo/React Native app (D-11). **Not an npm workspace** — own `npm install` inside the folder (React version isolation). Local-first photo store: `src/lib/photo-store.ts` (pure, tested) + `photo-store-io.ts` (expo-file-system/AsyncStorage wiring)
-- `apps/api/` — standalone Hono backend service (D-13): AI pipeline (`/assess`, Bearer or cookie auth). Dev port 3003
-- `apps/web/` — static marketing landing; keeps the `/api/assess` rewrite to apps/api (the phone reaches the API through port 3002 in dev) and `/api/health`
+## Repo structure (monorepo — D-17)
+- `apps/mobile/` — THE product: Expo/React Native app. **Not an npm workspace** — own `npm install` (React version isolation). Local data layer: pure stores + `*-io.ts` AsyncStorage wiring; `plants-io.ts` orchestrates reads/writes and feeds the *unchanged* list/detail mappers via `store-adapters.ts`.
+- `apps/web/` — **fully static** marketing landing (+ `/privacy`, `/api/health`). No API routes, no rewrites.
 - `packages/shared/` — types + Zod schemas (`@citrus/shared`), consumed by mobile + web tests
-- `supabase/` — database: migrations, RLS (0005 made `assessments.photo_path` nullable — new rows write null)
+- `supabase/` — migrations kept as HISTORY only; the hosted project is dormant and unused. (**There is no live database.**)
 - Root `Dockerfile` + `fly.toml` deploy `apps/web`
+- **`apps/api/` is DELETED** (the whole backend is gone).
 
-## Commands (run from repo root — proxies to apps/web)
+## Commands (repo root — web only; mobile has its own)
 ```bash
-npm run dev               # web (3002) + api (3003) via concurrently
-npm run build             # Production build — note: build script does `unset NODE_ENV` before next build
-npm run lint              # ESLint
-npm test                  # Vitest (run mode)
-npm run e2e               # Playwright e2e
-npm run typecheck         # tsc --noEmit
+npm run dev               # web landing (3002)
+npm run build             # web production build
+npm run lint              # ESLint (web)
+npm test                  # Vitest (web)
+npm run e2e               # Playwright e2e (landing)
+npm run typecheck         # tsc --noEmit (web)
+# Mobile: cd apps/mobile && npm start | npx tsc --noEmit | npx vitest run | npx expo export --platform android
 ```
 
 ## Path Aliases
@@ -37,17 +37,17 @@ npm run typecheck         # tsc --noEmit
 - `@citrus/shared` → `packages/shared/src`
 
 ## Key Files
-- `apps/api/src/gemini.ts` — Gemini vision call + expert prompt (Zod schema in `packages/shared`)
-- `apps/api/src/rate-limit.ts` — Postgres `rate_limits` table helper (`tryConsume`)
-- `apps/api/src/routes/assess.ts` — main AI endpoint. Body `{plantId, imageBase64, mime: "image/jpeg", isCutCare?}`; order: parse (incl. 3MB decoded-size cap) · auth · rate limit · plant RLS lookup · Gemini · Zod · insert (photo_path null) · cover update
-- `apps/api/src/auth.ts` — Bearer-or-cookie auth → RLS-scoped Supabase client
-- `apps/mobile/src/lib/assess.ts` — mobile assess flow: local save FIRST, then direct-image escalation, then photo-index link (engine seam for D-15)
-- `apps/mobile/src/lib/photo-store.ts` + `photo-store-io.ts` — on-phone photo files (`photos/{plantId}/…`) + AsyncStorage index (assessmentId → localUri)
-- `apps/web/app/page.tsx` + `components/landing/` — the landing (all that's left of the web surface)
-- `supabase/migrations/*.sql` — schema, RLS, rate_limits, photo_path nullable (0005)
-- `apps/api/tests/*.test.ts` — assess contract (size cap, generic errors), prompts, rate limit
-- `apps/mobile/src/lib/*.test.ts` — photo store/index, assess flow, timelines, mutations
-- `apps/web/tests/e2e/landing.spec.ts` — landing renders; `/plants` 404s
+- `apps/mobile/src/lib/assess.ts` — the assess flow: local save FIRST → run Gemma → persist locally. No cloud fallback; failures are terminal + retryable. 25s slow-hint / 120s interrupt ceiling.
+- `apps/mobile/src/lib/spike-vlm.ts` — the on-device diagnosis prompt + tolerant JSON extractor + shared-schema parse.
+- `apps/mobile/src/lib/care-profile-local.ts` + `care-profile-io.ts` — F20 care profile generated on-device (text-only Gemma), stored on the plant.
+- `apps/mobile/src/lib/plant-store.ts` / `assessment-store.ts` (pure) + `plants-io.ts` — the local data layer; `store-adapters.ts` feeds the unchanged list/detail mappers (`plants.ts` / `plant-detail.ts`).
+- `apps/mobile/src/lib/assessment-store.ts` `withComputedComparison` — the deterministic better/same/worse trend (replaces Gemini's `comparison`).
+- `apps/mobile/src/lib/backup.ts` + `backup-io.ts` — manual JSON export/import (data-only; photos stay on the phone).
+- `apps/mobile/src/components/LocalEngine{Provider,Session}.tsx` — the executorch session, FIFO mutex, interrupt.
+- `apps/mobile/src/lib/photo-store.ts` + `photo-store-io.ts` — on-phone photo files + AsyncStorage index.
+- `apps/web/app/_content/landing.ts` + `components/landing/LandingPage.tsx` + `app/privacy/page.tsx` — the static landing.
+- `apps/mobile/src/lib/*.test.ts` — pure modules only (stores, adapters, assess, care-profile, backup, watering, timelines).
+- `apps/web/tests/e2e/landing.spec.ts` — landing + privacy render; `/plants` 404s.
 
 ## AI-agent workflow (which skill, when)
 
@@ -69,25 +69,27 @@ Two rules from the Vibe Coding template that apply to ALL builds, including suba
 
 ## Required reads before any code change
 1. Obsidian PRD **§0** — `.../Citrus Care/Citrus Care PRD v1.md` — current focus, next steps, feature status. **Read first.**
-2. Obsidian Architecture — only if touching auth, RLS, storage, or pipeline boundaries.
-3. Obsidian Feature Spec — `Feature - AI Assess Pipeline.md` — only if touching assess/Gemini.
+2. Obsidian Architecture §"Locked decisions" — **D-17 is current** (zero-backend, Gemma-only); only if touching the AI/data/engine boundaries.
 
 Do not create separate handoff/backlog/shipped docs — update PRD §0/§6/§9 instead.
 
 If your change conflicts with Architecture or the PRD, stop and surface it before coding.
 
-## Hard rules (do not break)
+## Hard rules (do not break) — D-17
 
-- **One AI model, one provider.** Gemini 2.5 Flash via `@google/genai`. Swap the constant at top of `gemini.ts` if needed; don't add Anthropic / OpenAI fallbacks.
-- **All response parsing is Zod-validated.** Never trust raw model JSON.
-- **RLS on every user-visible table** (`plants`, `assessments`, `rate_limits`). No service-role key in user-facing routes.
-- **Photos never reach a server-side store (D-16).** `/assess` takes the image in the request body (3MB decoded cap, jpeg only) and inserts `photo_path: null`; the phone's photo-store is the only copy.
-- **All error responses are generic strings.** Log details server-side via `console.error`, never leak to clients.
-- **Rate limit /api/assess at 5/user/hour.** Constant `ASSESS_LIMIT_PER_HOUR`.
-- **Build script must `unset NODE_ENV`** before `next build`. Don't remove it.
-- **Trunk-based.** Commit directly to `main`. CI gates push.
+- **One AI, and it runs on the phone.** Gemma 4 E2B via `react-native-executorch`. **No cloud AI** — do not add Gemini/OpenAI/Anthropic or any server model. (Supersedes the old "Gemini only" rule.)
+- **No backend, no accounts, no secrets.** There is no server, no Supabase, no auth. Do not reintroduce a database, a login, or an API key. All data is on-device (AsyncStorage + app-documents files).
+- **All model output is Zod-validated** with the shared schema, via the tolerant extractor (the local model has no `responseSchema`). Never trust raw JSON.
+- **No cloud fallback.** An on-device failure (not-ready / OOM / unreadable / timeout) is a terminal, honest, retryable error — never a silent escalation. Keep the 25s slow-hint / 120s interrupt ceiling.
+- **The single model session runs one request at a time** (FIFO mutex in `LocalEngineProvider`) — a diagnosis and a care-profile call must not overlap.
+- **Nothing leaves the phone.** The only network calls are the model download and anonymous Open-Meteo weather. Do not add analytics, uploads, or telemetry.
+- **User-facing errors are generic/honest strings.** Log details via `console.error`, never surface raw model/runtime text.
+- **Backup is data-only.** Export/import carries plants/assessments/watering/photo-index; photo binaries stay on the phone. Import must never overwrite existing local data.
+- **Trunk-based.** CI gates push. (Currently on branch `feat/on-device-router-and-weather-foundation`, PR #1.)
 - **No new files just because.** Edit existing files first. Files >250 lines → consider splitting.
 - **No `tags:` field in any new Obsidian doc.** Frontmatter is `date / last_updated / purpose / parent / related / status / sources`.
+- **Pure/`-io` split for anything touching AsyncStorage or expo.** The pure `<name>.ts` (logic, tested with vitest) never imports react-native/expo; the thin `<name>-io.ts` holds all the wiring and is untested by policy (exercised via `expo export`). Reads degrade to empty/default; writes throw.
+- **`supabase/migrations/*` are frozen history.** The DB is dormant — do not add migrations or write SQL. (The old "apply migrations to the live DB" rule is retired with the backend.)
 
 ## Session-end maintenance
 
@@ -111,8 +113,4 @@ Don't pick for the user.
 
 ## Environment
 
-Required env vars (set in `apps/web/.env.local`, read by apps/api in dev — see `Project RESOURCES/Citrus Care v1/Citrus Care Secrets (DO NOT SHARE).md`):
-- `GEMINI_API_KEY`
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- Google sign-in configured in Supabase Dashboard + Google Cloud Console (native SDK client for the app)
+**No secrets.** The product needs no API keys, no Supabase URL/anon key, no Google client IDs — all of that was deleted with the backend (D-17). The mobile app is self-contained; the web landing is static. The only runtime network dependencies are the Gemma model download (in-app, over Wi-Fi) and anonymous Open-Meteo weather lookups.

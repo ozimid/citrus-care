@@ -35,3 +35,6 @@ pnpm-debug.log*
 
 next-env.d.ts
 *.tsbuildinfo
+
+# eas-cli debris when invoked from repo root (the real app.json is apps/mobile/app.json)
+/app.json

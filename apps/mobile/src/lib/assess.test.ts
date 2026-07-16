@@ -1,62 +1,106 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
-import { ApiError } from "./api";
 import {
-  ANALYSIS_OFFLINE_ERROR,
+  ANALYSIS_FAILED_ERROR,
+  ANALYSIS_TIMEOUT_ERROR,
+  ANALYSIS_UNREADABLE_ERROR,
+  LOCAL_HARD_CEILING_MS,
+  LOCAL_SLOW_THRESHOLD_MS,
+  LOCAL_UNAVAILABLE_ERROR,
+  PERSIST_FAILED_ERROR,
   PHOTO_SAVE_FAILED_ERROR,
-  RESULT_LOAD_ERROR,
   friendlyAssessError,
   runAssess,
   type AssessDeps,
   type AssessPhase,
+  type AssessResult,
+  type AssessedResult,
+  type LocalAssessDeps,
 } from "./assess";
 import type { PhotoIndexEntry } from "./photo-store";
 
-// D-16 flow: local save FIRST (the photo persists on the phone even if the
-// analysis fails) → POST /assess with the base64 image directly → link the
-// local uri to the persisted assessment id in the photo index.
+/** Narrow to the persisted branch — fails loudly rather than typing around it. */
+function assessed(result: AssessResult): AssessedResult {
+  if (result.status !== "assessed") {
+    throw new Error(`expected an assessed result, got "${result.status}"`);
+  }
+  return result;
+}
 
-const DIAGNOSIS: AssessmentDiagnosis = {
-  health_score: 72,
-  summary: "Mostly healthy with minor chlorosis.",
-  symptoms: [{ label: "Interveinal yellowing", severity: "low" }],
-  causes: [{ label: "Nitrogen deficiency", likelihood: "medium", rationale: "Older leaves affected first." }],
-  recommendations: [{ priority: 1, action: "Feed with citrus fertilizer", detail: "Apply a balanced citrus feed." }],
-};
+// D-17: Gemma is the only engine. The flow saves the photo on the phone FIRST
+// (it persists even if analysis fails), runs the on-device model, and persists
+// the diagnosis locally. There is no cloud fallback: a phone that can't run the
+// model gets an honest, retryable error, not a silent escalation.
 
-interface ApiCall {
-  url: string;
-  init?: { method?: string; headers?: Record<string, string>; body?: unknown };
+const LOCAL_JSON = JSON.stringify({
+  health_score: 81,
+  summary: "Healthy foliage, no visible pests.",
+  subject: "leaf",
+  symptoms: [],
+  causes: [],
+  recommendations: [{ priority: 1, action: "Keep watering weekly", detail: "Same schedule." }],
+});
+
+const LOCAL_DIAGNOSIS: AssessmentDiagnosis = JSON.parse(LOCAL_JSON);
+
+function makeLocal(overrides: Partial<LocalAssessDeps> = {}) {
+  const generated: { imageUri: string }[] = [];
+  const persisted: unknown[] = [];
+  const prepared: string[] = [];
+  const interrupted: number[] = [];
+  const local: LocalAssessDeps = {
+    isReady: () => true,
+    prepare: async (uri) => {
+      prepared.push(uri);
+      return `${uri}#512`;
+    },
+    generate: async (args) => {
+      generated.push(args);
+      return LOCAL_JSON;
+    },
+    persist: async (args) => {
+      persisted.push(args);
+      return "assessment-local-1";
+    },
+    interrupt: () => {
+      interrupted.push(Date.now());
+    },
+    ...overrides,
+  };
+  return { local, generated, persisted, prepared, interrupted };
 }
 
 function makeDeps(overrides: Partial<AssessDeps> = {}) {
-  const apiCalls: ApiCall[] = [];
   const saved: { plantId: string; sourceUri: string }[] = [];
   const linked: { assessmentId: string; entry: PhotoIndexEntry }[] = [];
+  const { local } = makeLocal();
   const deps: AssessDeps = {
-    api: async (path, init) => {
-      apiCalls.push({ url: path, init });
-      return { ok: true, status: 200, json: async () => ({ id: "assessment-9" }) };
-    },
     savePhoto: async (plantId, sourceUri) => {
       saved.push({ plantId, sourceUri });
       return "file:///docs/photos/plant-1/saved.jpg";
     },
-    readPhotoBase64: async () => "QkFTRTY0",
     linkPhoto: async (assessmentId, entry) => {
       linked.push({ assessmentId, entry });
     },
-    loadDiagnosis: async () => DIAGNOSIS,
+    local,
     ...overrides,
   };
-  return { deps, apiCalls, saved, linked };
+  return { deps, saved, linked };
 }
 
-const INPUT = { plantId: "plant-1", photoUri: "file:///tmp/photo.jpg", isCutCare: false };
+const INPUT = { plantId: "plant-1", photoUri: "file:///tmp/photo.jpg" };
 
-describe("runAssess (local-first, direct-image escalation)", () => {
-  it("saves locally first, posts the base64 image to /assess, links the photo, returns the diagnosis", async () => {
-    const { deps, apiCalls, saved, linked } = makeDeps();
+describe("runAssess (Gemma-only)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("saves locally first, runs the on-device model, persists, links, returns the diagnosis", async () => {
+    const { local, prepared, generated, persisted } = makeLocal();
+    const { deps, saved, linked } = makeDeps({ local });
     const phases: AssessPhase[] = [];
     const savedUris: string[] = [];
 
@@ -66,37 +110,38 @@ describe("runAssess (local-first, direct-image escalation)", () => {
     });
 
     expect(result).toEqual({
-      assessmentId: "assessment-9",
-      diagnosis: DIAGNOSIS,
+      status: "assessed",
+      assessmentId: "assessment-local-1",
+      diagnosis: LOCAL_DIAGNOSIS,
       localUri: "file:///docs/photos/plant-1/saved.jpg",
     });
     expect(phases).toEqual(["saving", "analyzing"]);
     expect(saved).toEqual([{ plantId: "plant-1", sourceUri: "file:///tmp/photo.jpg" }]);
     expect(savedUris).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
 
-    // The escalation request carries the image itself — no upload, no photoPath.
-    expect(apiCalls).toHaveLength(1);
-    expect(apiCalls[0].url).toBe("/assess");
-    expect(JSON.parse(apiCalls[0].init?.body as string)).toEqual({
-      plantId: "plant-1",
-      imageBase64: "QkFTRTY0",
-      mime: "image/jpeg",
-      isCutCare: false,
-    });
+    // 512px downscale before inference (research doc: full-res = minutes).
+    expect(prepared).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
+    expect(generated).toEqual([{ imageUri: "file:///docs/photos/plant-1/saved.jpg#512" }]);
 
-    // Local uri ↔ assessment id link, with the engine recorded (D-15 seam).
+    // Persisted directly on the phone, raw output kept. No cut flag: the row
+    // derives it from the diagnosis's own subject (F21).
+    expect(persisted).toEqual([
+      { plantId: "plant-1", diagnosis: LOCAL_DIAGNOSIS, raw: LOCAL_JSON },
+    ]);
+
+    // The index records the engine that produced the row.
     expect(linked).toHaveLength(1);
-    expect(linked[0].assessmentId).toBe("assessment-9");
+    expect(linked[0].assessmentId).toBe("assessment-local-1");
     expect(linked[0].entry).toMatchObject({
       localUri: "file:///docs/photos/plant-1/saved.jpg",
       plantId: "plant-1",
-      engine: "gemini",
+      engine: "on-device",
     });
     expect(typeof linked[0].entry.createdAt).toBe("string");
   });
 
   it("skips the local save when a savedUri from a previous attempt is supplied", async () => {
-    const { deps, saved, apiCalls } = makeDeps();
+    const { deps, saved } = makeDeps();
     const phases: AssessPhase[] = [];
 
     const result = await runAssess(
@@ -107,45 +152,29 @@ describe("runAssess (local-first, direct-image escalation)", () => {
 
     expect(phases).toEqual(["analyzing"]);
     expect(saved).toEqual([]);
-    expect(apiCalls).toHaveLength(1);
     expect(result.localUri).toBe("file:///docs/photos/plant-1/kept.jpg");
   });
 
-  it("sends isCutCare: true for cut mode", async () => {
-    const { deps, apiCalls } = makeDeps();
-    await runAssess(deps, { ...INPUT, isCutCare: true });
-    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({ isCutCare: true });
+  it("keeps a cut detected by the local model — no mode was ever needed (F21)", async () => {
+    const { local, persisted } = makeLocal({
+      generate: async () => JSON.stringify({ ...LOCAL_DIAGNOSIS, subject: "cut" }),
+    });
+    const { deps } = makeDeps({ local });
+    const result = await runAssess(deps, INPUT);
+    expect(result.diagnosis.subject).toBe("cut");
+    expect(persisted).toHaveLength(1);
   });
 
-  it("fails with the save error (and never calls the API) when the local save fails", async () => {
-    const { deps, apiCalls } = makeDeps({
+  it("fails with the save error (and never runs the model) when the local save fails", async () => {
+    const { local, generated } = makeLocal();
+    const { deps } = makeDeps({
+      local,
       savePhoto: async () => {
         throw new Error("disk full: /data/user/0/...");
       },
     });
     await expect(runAssess(deps, INPUT)).rejects.toThrow(PHOTO_SAVE_FAILED_ERROR);
-    expect(apiCalls).toHaveLength(0);
-  });
-
-  it("maps a network failure AFTER the local save to the offline string (photo is safe)", async () => {
-    const { deps, saved } = makeDeps({
-      api: async () => {
-        throw new TypeError("Network request failed");
-      },
-    });
-    await expect(runAssess(deps, INPUT)).rejects.toThrow(ANALYSIS_OFFLINE_ERROR);
-    expect(saved).toHaveLength(1);
-  });
-
-  it("rethrows ApiError statuses untouched (server reached — not an offline case)", async () => {
-    const { deps } = makeDeps({
-      api: async () => ({
-        ok: false,
-        status: 429,
-        json: async () => ({ error: "Too many assessments. Please try again later.", retryAfter: 1800 }),
-      }),
-    });
-    await expect(runAssess(deps, INPUT)).rejects.toMatchObject({ status: 429, retryAfter: 1800 });
+    expect(generated).toEqual([]);
   });
 
   it("still returns the result when linking the photo index fails (best-effort)", async () => {
@@ -155,49 +184,184 @@ describe("runAssess (local-first, direct-image escalation)", () => {
       },
     });
     const result = await runAssess(deps, INPUT);
-    expect(result.assessmentId).toBe("assessment-9");
+    expect(assessed(result).assessmentId).toBe("assessment-local-1");
+  });
+});
+
+// D-17: there is no cloud fallback, so every on-device failure is terminal and
+// user-visible. Each one is a distinct, honest, retryable message — never a
+// silent escalation, never a raw model/runtime string.
+describe("runAssess on-device failures are terminal (no fallback)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("rejects a diagnosis row that fails the shared Zod schema", async () => {
-    const { deps } = makeDeps({ loadDiagnosis: async () => ({ health_score: "not-a-number" }) });
-    await expect(runAssess(deps, INPUT)).rejects.toThrow(RESULT_LOAD_ERROR);
+  it("errors honestly when the on-device model isn't set up / ready", async () => {
+    const { local } = makeLocal({ isReady: () => false });
+    const { deps } = makeDeps({ local });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(LOCAL_UNAVAILABLE_ERROR);
+  });
+
+  it("errors when the model throws (e.g. OOM), photo already saved", async () => {
+    const { local } = makeLocal({
+      generate: async () => {
+        throw new Error("ExecuTorch: failed to allocate 400MB");
+      },
+    });
+    const { deps, saved } = makeDeps({ local });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(ANALYSIS_FAILED_ERROR);
+    expect(saved).toHaveLength(1);
+  });
+
+  it("errors when the model output can't be parsed to the shared schema", async () => {
+    const { local, persisted } = makeLocal({
+      generate: async () => 'Sure! Here you go: {"health_score": "very bad"}',
+    });
+    const { deps } = makeDeps({ local });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(ANALYSIS_UNREADABLE_ERROR);
+    // Never persist output that didn't validate.
+    expect(persisted).toEqual([]);
+  });
+
+  it("errors when the model output contains no JSON at all", async () => {
+    const { local } = makeLocal({ generate: async () => "I cannot see a plant in this image." });
+    const { deps } = makeDeps({ local });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(ANALYSIS_UNREADABLE_ERROR);
+  });
+
+  it("errors when the local persist fails", async () => {
+    const { local } = makeLocal({
+      persist: async () => {
+        throw new Error("AsyncStorage write failed");
+      },
+    });
+    const { deps } = makeDeps({ local });
+    await expect(runAssess(deps, INPUT)).rejects.toThrow(PERSIST_FAILED_ERROR);
+  });
+});
+
+// F21: a non-plant photo must not land in a plant's timeline. "Save anyway" is
+// the user's override — never the model's.
+describe("runAssess not_a_plant rejection (F21)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const NOT_A_PLANT = {
+    health_score: 0,
+    summary: "This is a coffee mug, not a plant.",
+    subject: "not_a_plant",
+    subject_note: "Ceramic mug on a desk.",
+    symptoms: [],
+    causes: [],
+    recommendations: [],
+  };
+
+  it("returns a rejection without persisting, photo still on the phone", async () => {
+    const { local, persisted } = makeLocal({ generate: async () => JSON.stringify(NOT_A_PLANT) });
+    const { deps, linked } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnosis.subject).toBe("not_a_plant");
+    expect(result.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
+    expect(persisted).toEqual([]);
+    // Nothing to link: there is no assessment to link a photo to.
+    expect(linked).toEqual([]);
+  });
+
+  it("persists a local not_a_plant result when the user forces it", async () => {
+    const { local, persisted } = makeLocal({ generate: async () => JSON.stringify(NOT_A_PLANT) });
+    const { deps } = makeDeps({ local });
+
+    const result = await runAssess(deps, { ...INPUT, force: true });
+
+    expect(result.status).toBe("assessed");
+    expect(persisted).toHaveLength(1);
+    expect(assessed(result).assessmentId).toBe("assessment-local-1");
+  });
+});
+
+describe("runAssess local inference budget (slow hint + hard ceiling)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("fires the slow hint but keeps waiting for a result past the slow threshold", async () => {
+    const { local } = makeLocal({
+      generate: () =>
+        new Promise<string>((resolve) => setTimeout(() => resolve(LOCAL_JSON), LOCAL_SLOW_THRESHOLD_MS + 5_000)),
+    });
+    const { deps } = makeDeps({ local });
+    const slow: number[] = [];
+
+    const pending = runAssess(deps, INPUT, { onSlow: () => slow.push(Date.now()) });
+    await vi.advanceTimersByTimeAsync(LOCAL_SLOW_THRESHOLD_MS + 5_000);
+
+    const result = await pending;
+    expect(slow).toHaveLength(1);
+    expect(result.status).toBe("assessed");
+  });
+
+  it("interrupts the session and errors at the hard ceiling", async () => {
+    const { local, interrupted } = makeLocal({ generate: () => new Promise<string>(() => {}) });
+    const { deps } = makeDeps({ local });
+
+    const pending = runAssess(deps, INPUT);
+    const assertion = expect(pending).rejects.toThrow(ANALYSIS_TIMEOUT_ERROR);
+    await vi.advanceTimersByTimeAsync(LOCAL_HARD_CEILING_MS + 1);
+    await assertion;
+    // interrupt() frees the single native session so the next attempt isn't blocked.
+    expect(interrupted).toHaveLength(1);
+  });
+
+  it("keeps a result that lands just inside the hard ceiling", async () => {
+    const { local } = makeLocal({
+      generate: () =>
+        new Promise<string>((resolve) => setTimeout(() => resolve(LOCAL_JSON), LOCAL_HARD_CEILING_MS - 1)),
+    });
+    const { deps } = makeDeps({ local });
+
+    const pending = runAssess(deps, INPUT);
+    await vi.advanceTimersByTimeAsync(LOCAL_HARD_CEILING_MS);
+    expect((await pending).status).toBe("assessed");
+  });
+
+  it("gives the slow hint room before the hard ceiling", () => {
+    expect(LOCAL_SLOW_THRESHOLD_MS).toBeLessThan(LOCAL_HARD_CEILING_MS);
   });
 });
 
 describe("friendlyAssessError (generic-message rule)", () => {
-  it("shows minutes remaining on 429 with retryAfter", () => {
-    expect(friendlyAssessError(new ApiError(429, "raw server text", 1800))).toBe(
-      "Too many assessments. Try again in 30 min.",
-    );
-    expect(friendlyAssessError(new ApiError(429, undefined, 61))).toBe(
-      "Too many assessments. Try again in 2 min.",
-    );
-  });
-
-  it("falls back to the waitless 429 string without retryAfter", () => {
-    expect(friendlyAssessError(new ApiError(429))).toBe("Too many assessments. Please wait and try again.");
-  });
-
-  it("maps auth, missing-plant, AI, and server failures", () => {
-    expect(friendlyAssessError(new ApiError(401))).toBe("Session expired — please sign in again.");
-    expect(friendlyAssessError(new ApiError(403))).toBe("Permission denied. Please sign in again.");
-    expect(friendlyAssessError(new ApiError(404))).toBe("Plant not found. Please close and try again.");
-    expect(friendlyAssessError(new ApiError(502))).toBe(
-      "The AI service returned an error. Please try again in a moment.",
-    );
-    expect(friendlyAssessError(new ApiError(500))).toBe("Server error — please try again.");
+  it("passes through the flow's own honest, retryable strings", () => {
+    for (const msg of [
+      PHOTO_SAVE_FAILED_ERROR,
+      LOCAL_UNAVAILABLE_ERROR,
+      ANALYSIS_FAILED_ERROR,
+      ANALYSIS_UNREADABLE_ERROR,
+      ANALYSIS_TIMEOUT_ERROR,
+      PERSIST_FAILED_ERROR,
+    ]) {
+      expect(friendlyAssessError(new Error(msg))).toBe(msg);
+    }
   });
 
   it("never leaks raw messages for unknown failures", () => {
-    expect(friendlyAssessError(new TypeError("Network request failed"))).toBe(
-      "Something went wrong. Please check your connection and try again.",
+    expect(friendlyAssessError(new TypeError("Vulkan device lost @0xdeadbeef"))).toBe(
+      "Something went wrong. Please try again.",
     );
-    expect(friendlyAssessError("weird")).toBe("Something went wrong. Please check your connection and try again.");
-  });
-
-  it("passes through the flow's own friendly strings", () => {
-    expect(friendlyAssessError(new Error(PHOTO_SAVE_FAILED_ERROR))).toBe(PHOTO_SAVE_FAILED_ERROR);
-    expect(friendlyAssessError(new Error(ANALYSIS_OFFLINE_ERROR))).toBe(ANALYSIS_OFFLINE_ERROR);
-    expect(friendlyAssessError(new Error(RESULT_LOAD_ERROR))).toBe(RESULT_LOAD_ERROR);
+    expect(friendlyAssessError("weird")).toBe("Something went wrong. Please try again.");
   });
 });

@@ -1,18 +1,20 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
-import { captureMode, type CaptureModeKey } from "../lib/capture-modes";
 import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
+import { subjectLabel } from "../lib/plant-detail";
 import { formatReminderDate, scheduleReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
-import { RADIUS, useTheme, type Tokens } from "../lib/theme";
+import { RADIUS, type Tokens } from "../lib/theme";
+import { useTheme } from "../lib/theme-io";
 
 // Diagnosis result screen (design doc §4 row 9, mirroring the web
 // AssessmentCard): score ring in the shared band colors, band label, summary,
 // symptom chips, likely causes, ranked care-plan cards (first emphasized), a
 // contextual "remind me" CTA (permission asked at tap — design doc open
 // question 2), and a primary CTA back to Plants. The assessment is already
-// persisted server-side by /assess, so "save to timeline" is implicit.
+// persisted in the on-device store by the assess flow, so "save to timeline"
+// is implicit.
 
 const REMINDER_DENIED_NOTE =
   "Notifications are off for Citrus Care. Enable them in your device settings to get reminders.";
@@ -36,11 +38,10 @@ interface Props {
   diagnosis: AssessmentDiagnosis;
   plantId: string;
   plantName: string;
-  mode: CaptureModeKey;
   onDone: () => void;
 }
 
-export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, onDone }: Props) {
+export function DiagnosisScreen({ diagnosis, plantId, plantName, onDone }: Props) {
   const { t, scheme } = useTheme();
   const [reminder, setReminder] = useState<ReminderState>({ kind: "idle" });
 
@@ -73,7 +74,7 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, onDone }:
         <Text style={[styles.heading, { color: t.text }]}>Diagnosis</Text>
         <View style={[styles.contextChip, { backgroundColor: t.card, borderColor: t.border }]}>
           <Text style={[styles.contextChipText, { color: t.sub }]} numberOfLines={1}>
-            🪴 {plantName} · {captureMode(mode).label}
+            🪴 {plantName}
           </Text>
         </View>
       </View>
@@ -85,12 +86,26 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, mode, onDone }:
             <Text style={[styles.scoreOutOf, { color: t.sub }]}>/ 100</Text>
           </View>
           <Text style={[styles.scoreKind, { color: t.sub }]}>
-            {mode === "cut" ? "PRUNING CUT HEALTH" : "HEALTH"}
+            {diagnosis.subject === "cut" ? "PRUNING CUT HEALTH" : "HEALTH"}
           </Text>
           <View style={[styles.bandBadge, { backgroundColor: color + "22" }]}>
             <Text style={[styles.bandBadgeText, { color }]}>{band.label}</Text>
           </View>
           <Text style={[styles.summary, { color: t.text }]}>{diagnosis.summary}</Text>
+          {/* F21: what the model says it saw — the answer to a question the
+              user used to have to answer first. Absent on pre-F21 rows. */}
+          <View style={styles.badgeRow}>
+            {diagnosis.subject ? (
+              <View
+                accessibilityLabel={`Detected: ${subjectLabel(diagnosis.subject)}`}
+                style={[styles.subjectChip, { borderColor: t.border }]}
+              >
+                <Text style={[styles.subjectChipText, { color: t.sub }]}>
+                  Detected: {subjectLabel(diagnosis.subject)}
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
         {diagnosis.comparison ? (
@@ -264,6 +279,14 @@ const styles = StyleSheet.create({
   scoreKind: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
   bandBadge: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   bandBadgeText: { fontSize: 13, fontWeight: "700" },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
+  subjectChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  subjectChipText: { fontSize: 11, fontWeight: "600", letterSpacing: 0.2 },
   summary: { fontSize: 14, lineHeight: 21, textAlign: "center" },
   body: { fontSize: 13, lineHeight: 19 },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
