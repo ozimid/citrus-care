@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
+import { EngineBadge } from "../components/EngineBadge";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
 import { WateringCard } from "../components/WateringCard";
@@ -277,6 +278,9 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
             diagnosis={viewing.diagnosis}
             plantId={plant.id}
             plantName={plant.name}
+            // F22: a reopened row can finally say which engine produced it —
+            // before the column existed this badge was lost with the session.
+            engine={viewing.entry.engine}
             onDone={() => setViewing(null)}
           />
         ) : null}
@@ -329,6 +333,9 @@ function TimelineRowCard({
               <Text style={[styles.deltaChipText, { color: chipColor }]}>{entry.deltaLabel}</Text>
             </View>
           ) : null}
+          {/* F22: which engine produced this row. Renders nothing for a
+              pre-F22 row — the badge used to vanish for every row. */}
+          <EngineBadge t={t} engine={entry.engine} />
         </View>
         {entry.summary ? (
           <Text style={[styles.rowSummary, { color: t.sub }]} numberOfLines={2}>
@@ -446,7 +453,7 @@ const styles = StyleSheet.create({
   },
   rowDate: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   rowScore: { fontSize: 15, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  rowMeta: { flexDirection: "row" },
+  rowMeta: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   deltaChip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   deltaChipText: { fontSize: 11, fontWeight: "700" },
   rowSummary: { fontSize: 13, lineHeight: 18 },

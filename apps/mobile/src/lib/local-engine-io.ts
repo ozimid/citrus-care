@@ -5,10 +5,12 @@
 // local-engine.ts / local-engine.test.ts.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Paths } from "expo-file-system";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
   DEFAULT_LOCAL_ENGINE_SETTINGS,
+  ENGINE_STATS_LIMIT,
   LOCAL_ENGINE_STORAGE_KEY,
   buildLocalAssessmentRow,
   parseLocalEngineSettings,
@@ -28,6 +30,36 @@ export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
 
 export async function saveLocalEngineSettings(settings: LocalEngineSettings): Promise<void> {
   await AsyncStorage.setItem(LOCAL_ENGINE_STORAGE_KEY, serializeLocalEngineSettings(settings));
+}
+
+/** F22 — free bytes on internal storage, for the pre-download precheck
+ * (expo-file-system SDK 57; a sync native getter). Null when the platform
+ * won't say: hasRoomForLocalModel treats that as "don't block". */
+export function availableDiskSpaceBytes(): number | null {
+  try {
+    const bytes = Paths.availableDiskSpace;
+    return typeof bytes === "number" && !Number.isNaN(bytes) ? bytes : null;
+  } catch (e) {
+    console.error("[local-engine-io] free space read failed:", (e as Error).message);
+    return null;
+  }
+}
+
+/** F22 — the engines behind this user's most recent assessments, newest first
+ * (RLS scopes it to their own rows; the tally is pure, in local-engine.ts).
+ * Returns [] on any failure — a stat line is never worth an error on Profile,
+ * and before migration 0007 is applied this column simply doesn't exist. */
+export async function fetchRecentEngines(client: SupabaseClient): Promise<(string | null)[]> {
+  const { data, error } = await client
+    .from("assessments")
+    .select("engine")
+    .order("created_at", { ascending: false })
+    .limit(ENGINE_STATS_LIMIT);
+  if (error || !data) {
+    console.error("[local-engine-io] engine stats query failed:", error?.message);
+    return [];
+  }
+  return (data as { engine: string | null }[]).map((row) => row.engine);
 }
 
 export interface PersistLocalAssessmentInput {

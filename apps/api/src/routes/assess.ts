@@ -7,7 +7,12 @@ import {
   assessPhotoWithGemini,
 } from "../gemini";
 import { tryConsume } from "../rate-limit";
-import type { Assessment, Plant } from "@citrus/shared";
+import {
+  clientAssessmentEngineSchema,
+  type Assessment,
+  type AssessmentEngine,
+  type Plant,
+} from "@citrus/shared";
 
 const ASSESS_LIMIT_PER_HOUR = 5;
 const ASSESS_WINDOW_SEC = 3600;
@@ -27,7 +32,24 @@ const assessBodySchema = z.object({
   isCutCare: z.boolean().optional(),
   /** "Save anyway" — persist even when the model says it is not a plant. */
   force: z.boolean().optional(),
+  /** F22 provenance. The phone is the only side that knows whether the
+   * on-device model was tried first and why it was dropped, so it reports it
+   * here. Loose on the way in (z.unknown, never a 400 — an un-updated phone
+   * sending nothing, or a future one sending something new, must keep
+   * working); narrowed by clientEngine below. */
+  engine: z.unknown().optional(),
 });
+
+/** Untrusted client metadata → the value written to assessments.engine.
+ * Anything that isn't a known escalation reason becomes plain "gemini", which
+ * is the one thing this route KNOWS to be true: it just ran Gemini. That makes
+ * a lying client able to do exactly one thing — mislabel the reason on its own
+ * RLS-scoped row. Nothing in this route, or downstream of it, branches on this
+ * column; it is a metadata field for the D-15 go/no-go dataset and nothing more. */
+export function clientEngine(value: unknown): AssessmentEngine {
+  const parsed = clientAssessmentEngineSchema.safeParse(value);
+  return parsed.success ? parsed.data : "gemini";
+}
 
 /** Decoded byte size of a base64 string, without decoding it. */
 export function base64DecodedBytes(base64: string): number {
@@ -148,6 +170,7 @@ assess.post("/", async (c) => {
       raw_output: raw,
       is_cut_care: isCut,
       cut_health_score: isCut ? diagnosis.health_score : null,
+      engine: clientEngine(parsed.data.engine),
     })
     .select("id")
     .single();

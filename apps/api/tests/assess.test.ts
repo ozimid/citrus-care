@@ -414,6 +414,59 @@ describe("POST /assess subject auto-detection (F21)", () => {
   });
 });
 
+// F22: the phone knows something the server can't — whether the on-device
+// model was tried first, and why it was dropped. It travels in the body and
+// lands in assessments.engine. It is metadata ONLY: nothing in this route
+// branches on it, so a lying client can only mislabel its own row.
+describe("POST /assess engine provenance (F22)", () => {
+  function insertSpy(id = "assess-1") {
+    return vi.fn().mockReturnValue({
+      select: () => ({ single: () => Promise.resolve({ data: { id }, error: null }) }),
+    });
+  }
+
+  async function insertedRow(payload: object) {
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk(DIAGNOSIS_OK));
+    const insert = insertSpy();
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertSpy: insert }),
+    );
+    const res = await app.request(req(payload));
+    expect(res.status).toBe(200);
+    return insert.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it("defaults to gemini when the phone sends no engine (this route IS Gemini)", async () => {
+    expect((await insertedRow(body())).engine).toBe("gemini");
+  });
+
+  it("persists the escalation reason the phone reports", async () => {
+    for (const engine of ["gemini:local_timeout", "gemini:local_invalid", "gemini:local_error"]) {
+      expect((await insertedRow(body({ engine }))).engine).toBe(engine);
+    }
+  });
+
+  it("refuses to record an on-device claim — this route just ran Gemini", async () => {
+    expect((await insertedRow(body({ engine: "on-device" }))).engine).toBe("gemini");
+  });
+
+  it("falls back to gemini for junk instead of writing it to the column", async () => {
+    expect((await insertedRow(body({ engine: "'; drop table assessments--" }))).engine).toBe("gemini");
+    expect((await insertedRow(body({ engine: "gemini:whatever" }))).engine).toBe("gemini");
+    expect((await insertedRow(body({ engine: 42 }))).engine).toBe("gemini");
+    expect((await insertedRow(body({ engine: "x".repeat(500) }))).engine).toBe("gemini");
+  });
+
+  it("never 400s on a bad engine — an un-updated phone keeps working", async () => {
+    assessPhotoWithGeminiMock.mockResolvedValue(geminiOk(DIAGNOSIS_OK));
+    createClientMock.mockResolvedValue(
+      buildSupabaseStub({ user: { id: "u1" }, plant: PLANT, insertedId: "assess-1" }),
+    );
+    const res = await app.request(req(body({ engine: { nested: "object" } })));
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("removed photo-storage surface (D-16)", () => {
   it("no longer serves /photos or /cleanup-orphans", async () => {
     const photosRes = await app.request(

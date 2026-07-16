@@ -14,6 +14,7 @@
 import { assessmentDiagnosisSchema, type AssessmentDiagnosis } from "@citrus/shared";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, apiErrorFrom, type AuthorizedFetch } from "./api";
+import { escalationEngine, type LocalFailureReason } from "./local-engine";
 import type { AssessEngine, PhotoIndexEntry } from "./photo-store";
 import { parseDiagnosisOutput } from "./spike-vlm";
 
@@ -32,7 +33,15 @@ const FLOW_ERRORS = new Set([PHOTO_SAVE_FAILED_ERROR, ANALYSIS_OFFLINE_ERROR, RE
  * thrashing and the user is better served by Gemini than by waiting. */
 export const LOCAL_INFERENCE_TIMEOUT_MS = 20_000;
 
-const LOCAL_TIMEOUT_REASON = `on-device inference exceeded ${LOCAL_INFERENCE_TIMEOUT_MS}ms`;
+/** The timeout is its own escalation reason (F22), so it needs its own error
+ * type — a message string would be indistinguishable from a model that threw
+ * with unlucky wording. */
+class LocalTimeoutError extends Error {
+  constructor() {
+    super(`on-device inference exceeded ${LOCAL_INFERENCE_TIMEOUT_MS}ms`);
+    this.name = "LocalTimeoutError";
+  }
+}
 
 export type AssessPhase = "saving" | "analyzing";
 
@@ -135,18 +144,28 @@ export async function runAssess(
 
   // On-device first. Any failure at all — disabled, unready, timeout, throw,
   // unparseable output, failed insert — falls through to Gemini without a word
-  // to the user; the reason is logged for us instead.
+  // to the user; the reason is logged for us instead, and (F22) recorded on
+  // the row so "how often does the phone actually handle this?" has an answer.
+  // Null reason = never tried, which is not an escalation.
+  let reason: LocalFailureReason | null = null;
   if (deps.local?.isReady()) {
     const local = await tryLocalAssess(deps.local, input, localUri);
-    if (local) {
-      // A rejection is an answer, not a local failure: escalating would spend
-      // a Gemini call to be told the same thing, and there is no row to link.
-      if (local.status === "rejected") {
-        return { status: "rejected", diagnosis: local.diagnosis, localUri, engine: "on-device" };
-      }
-      await linkPhotoBestEffort(deps, local.assessmentId, localUri, input.plantId, "on-device");
-      return { ...local, localUri, engine: "on-device" };
+    // A rejection is an answer, not a local failure: escalating would spend
+    // a Gemini call to be told the same thing, and there is no row to link.
+    if (local.status === "rejected") {
+      return { status: "rejected", diagnosis: local.diagnosis, localUri, engine: "on-device" };
     }
+    if (local.status === "assessed") {
+      await linkPhotoBestEffort(deps, local.assessmentId, localUri, input.plantId, "on-device");
+      return {
+        status: "assessed",
+        assessmentId: local.assessmentId,
+        diagnosis: local.diagnosis,
+        localUri,
+        engine: "on-device",
+      };
+    }
+    reason = local.reason;
   }
 
   const imageBase64 = await deps.readPhotoBase64(localUri);
@@ -161,6 +180,10 @@ export async function runAssess(
         imageBase64,
         mime: "image/jpeg",
         // No mode field: the model detects the subject (F21).
+        // F22: the phone is the only side that knows whether a local attempt
+        // happened and how it failed, so it reports it for the engine column.
+        // Metadata only — the server never branches on it.
+        engine: escalationEngine(reason),
         ...(input.force ? { force: true } : {}),
       }),
     });
@@ -228,9 +251,10 @@ async function linkPhotoBestEffort(
   }
 }
 
-/** The whole on-device attempt, bounded and swallowed: returns null for every
- * failure mode so the caller's only job is "null → escalate". A rejection is
- * NOT a failure — it comes back as a real outcome. */
+/** The whole on-device attempt, bounded and swallowed: every failure mode comes
+ * back as `{ status: "failed", reason }` so the caller's only job is "failed →
+ * escalate", and F22 gets to record WHICH failure it was. A rejection is NOT a
+ * failure — it comes back as a real outcome. */
 async function tryLocalAssess(
   local: LocalAssessDeps,
   input: AssessInput,
@@ -238,7 +262,7 @@ async function tryLocalAssess(
 ): Promise<
   | { status: "assessed"; assessmentId: string; diagnosis: AssessmentDiagnosis }
   | { status: "rejected"; diagnosis: AssessmentDiagnosis }
-  | null
+  | { status: "failed"; reason: LocalFailureReason }
 > {
   try {
     const inference = await withTimeout(
@@ -246,7 +270,7 @@ async function tryLocalAssess(
       LOCAL_INFERENCE_TIMEOUT_MS,
     );
     // Unparseable output — already logged with its reason.
-    if (!inference) return null;
+    if (!inference) return { status: "failed", reason: "invalid" };
 
     // Same rule the server applies (F21): don't put a non-plant in a plant's
     // timeline unless the user explicitly said to.
@@ -262,7 +286,12 @@ async function tryLocalAssess(
     return { status: "assessed", assessmentId, diagnosis: inference.diagnosis };
   } catch (e) {
     console.error("[runAssess] on-device attempt failed, escalating:", (e as Error).message);
-    return null;
+    // "The phone was too slow" and "the phone broke" are different findings —
+    // a timeout says the model works but not in budget (F22).
+    return {
+      status: "failed",
+      reason: e instanceof LocalTimeoutError ? "timeout" : "error",
+    };
   }
 }
 
@@ -286,7 +315,7 @@ async function localDiagnose(
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const expiry = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(LOCAL_TIMEOUT_REASON)), ms);
+    timer = setTimeout(() => reject(new LocalTimeoutError()), ms);
   });
   // The abandoned inference keeps running to completion in the native runtime;
   // we simply stop waiting on it. clearTimeout keeps the timer from pinning

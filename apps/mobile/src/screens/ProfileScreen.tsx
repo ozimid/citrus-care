@@ -6,12 +6,19 @@ import { apiOrigin } from "../lib/api-io";
 import { signOut } from "../lib/auth";
 import {
   LOCAL_MODEL_DOWNLOAD_WARNING,
+  LOCAL_MODEL_REQUIREMENTS,
+  engineStatsLabel,
+  hasRoomForLocalModel,
+  insufficientStorageMessage,
   localEngineStatusLabel,
   localEngineSubtitle,
   needsDownloadWarning,
+  tallyEngines,
 } from "../lib/local-engine";
+import { availableDiskSpaceBytes, fetchRecentEngines } from "../lib/local-engine-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
+import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme } from "../lib/theme";
 
 // Profile tab per the native design doc §3 — account, scheduled re-assessment
@@ -158,15 +165,39 @@ export function ProfileScreen({ email }: { email: string | null }) {
 }
 
 /** D-15 Stage 2: the on-device engine is opt-in and reversible. The toggle
- * asks before the 1.3 GB download (once), then reports the session state; a
- * failed session is honest about Gemini covering for it and retries on tap. */
+ * states the requirements and checks free space BEFORE the 1.3 GB download
+ * (once), then reports the session state; a failed session is honest about
+ * Gemini covering for it and retries on tap. F22 adds the read-only split of
+ * what the engines have actually been doing — the go/no-go dataset, in the one
+ * place where a user might wonder whether this is worth 1.3 GB. */
 function LocalEngineCard() {
   const { t } = useTheme();
   const { state, settings, setEnabled, retry } = useLocalEngine();
+  const [stats, setStats] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Best-effort: fetchRecentEngines already swallows (and logs) query
+    // failures, and no line at all is the honest answer before the first
+    // assessment. The catch covers a client-level throw — a stat line is
+    // never worth an unhandled rejection on Profile.
+    fetchRecentEngines(supabase)
+      .then((engines) => setStats(engineStatsLabel(tallyEngines(engines))))
+      .catch((e) => console.error("[ProfileScreen] engine stats failed:", (e as Error).message));
+  }, []);
 
   function toggle(next: boolean) {
     if (!next || !needsDownloadWarning(settings)) {
       setEnabled(next);
+      return;
+    }
+    // A phone with no room downloads 1.3 GB and then fails — check first. Not
+    // an error: a full phone is a fact about the phone, so it is said once, in
+    // the Alert, with the user's actual number, and never logged.
+    const available = availableDiskSpaceBytes();
+    if (available !== null && !hasRoomForLocalModel(available)) {
+      Alert.alert("Not enough space", insufficientStorageMessage(available), [
+        { text: "OK", style: "cancel" },
+      ]);
       return;
     }
     Alert.alert("Download the on-device model?", LOCAL_MODEL_DOWNLOAD_WARNING, [
@@ -193,6 +224,13 @@ function LocalEngineCard() {
       <Text style={[styles.engineSubtitle, { color: t.sub }]}>
         {localEngineSubtitle(state, settings)}
       </Text>
+      {/* Stated up front, not after a 1.3 GB download. */}
+      <Text style={[styles.engineRequirements, { color: t.sub }]}>{LOCAL_MODEL_REQUIREMENTS}</Text>
+      {stats ? (
+        <Text style={[styles.engineStats, { color: t.sub }]} accessibilityLabel={stats}>
+          {stats}
+        </Text>
+      ) : null}
       {failed ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Retry on-device model setup" onPress={retry} hitSlop={8}>
           <Text style={[styles.devRow, { color: t.green }]}>Try again</Text>
@@ -241,6 +279,8 @@ const styles = StyleSheet.create({
   },
   engineStatus: { fontSize: 15, fontWeight: "600", flexShrink: 1 },
   engineSubtitle: { fontSize: 12, lineHeight: 17 },
+  engineRequirements: { fontSize: 11, lineHeight: 16, marginTop: 4 },
+  engineStats: { fontSize: 12, fontWeight: "600", marginTop: 6, fontVariant: ["tabular-nums"] },
   devRow: { fontSize: 13, fontWeight: "600", paddingVertical: 6 },
   spikeFallback: { flex: 1, alignItems: "center", justifyContent: "center" },
   signOut: {

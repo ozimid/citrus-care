@@ -24,6 +24,29 @@ export const recommendationSchema = z.object({
  * value is model output we refuse rather than guess at. */
 export const assessmentSubjectSchema = z.enum(["leaf", "whole_plant", "cut", "not_a_plant"]);
 
+/**
+ * F22 — the value space of `assessments.engine` (migration 0007): which engine
+ * produced a diagnosis, plus the reason the on-device model was dropped when
+ * one was tried and escalated. Closed on purpose: this column is the D-15
+ * go/no-go dataset, so a value nobody can count is worse than no value.
+ */
+export const assessmentEngineSchema = z.enum([
+  "on-device",
+  "gemini",
+  "gemini:local_timeout",
+  "gemini:local_invalid",
+  "gemini:local_error",
+]);
+
+export type AssessmentEngine = z.infer<typeof assessmentEngineSchema>;
+
+/**
+ * What /assess may legitimately be told by a phone. That route always runs
+ * Gemini, so an "on-device" claim is false by construction — the phone is only
+ * ever the source of the *reason* it escalated, never of the engine identity.
+ */
+export const clientAssessmentEngineSchema = assessmentEngineSchema.exclude(["on-device"]);
+
 export const assessmentDiagnosisSchema: z.ZodType<AssessmentDiagnosis> = z.object({
   health_score: z.number().int().min(0).max(100),
   summary: z.string().min(1).max(300),

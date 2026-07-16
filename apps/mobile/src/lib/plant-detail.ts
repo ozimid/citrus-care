@@ -30,8 +30,9 @@ export const PLANT_DETAIL_SELECT =
 /** Timeline columns; photo_path is gone (D-16 — photos never reach the
  * server). is_cut_care is the cut split, since F21 derived from the model's
  * own diagnosis.subject rather than a toggle the user flipped; `diagnosis`
- * carries that subject, which the delta advisory compares row-to-row. */
-export const TIMELINE_SELECT = "id,created_at,health_score,diagnosis,is_cut_care";
+ * carries that subject, which the delta advisory compares row-to-row. `engine`
+ * is F22 provenance (migration 0007 — the whole query 42703s without it). */
+export const TIMELINE_SELECT = "id,created_at,health_score,diagnosis,is_cut_care,engine";
 
 export interface TimelineRow {
   id: string;
@@ -40,6 +41,9 @@ export interface TimelineRow {
   /** jsonb straight from Postgres — untrusted until Zod-parsed. */
   diagnosis: unknown;
   is_cut_care: boolean | null;
+  /** F22 — null on every pre-F22 row; optional because a row read before the
+   * column existed simply has no field. engineKind treats both as unknown. */
+  engine?: string | null;
 }
 
 export type TimelineDelta = "better" | "same" | "worse" | "unknown";
@@ -66,6 +70,9 @@ export interface TimelineEntry {
   isCutCare: boolean;
   /** Raw jsonb, parsed on tap via parseTimelineDiagnosis. */
   diagnosis: unknown;
+  /** F22 — which engine produced this row ("on-device" | "gemini" |
+   * "gemini:<reason>"); null on pre-F22 rows, which render no badge. */
+  engine: string | null;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -145,6 +152,7 @@ export function mapTimelineRows(rows: TimelineRow[] | null | undefined): Timelin
       localUri: null,
       isCutCare: row.is_cut_care === true,
       diagnosis: row.diagnosis,
+      engine: row.engine ?? null,
     };
   });
 }

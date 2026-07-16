@@ -6,7 +6,7 @@
 // Supabase wiring is the thin local-engine-io.ts; the executorch session
 // itself lives in components/LocalEngineSession.tsx (native, dev-build only).
 
-import type { AssessmentDiagnosis } from "@citrus/shared";
+import type { AssessmentDiagnosis, AssessmentEngine } from "@citrus/shared";
 import { SPIKE_USER_PROMPT } from "./spike-vlm";
 
 export const LOCAL_ENGINE_STORAGE_KEY = "citrus.local-engine.v1";
@@ -14,10 +14,126 @@ export const LOCAL_ENGINE_STORAGE_KEY = "citrus.local-engine.v1";
 /** Quantized Gemma 4 E2B, per the research doc's model choice. */
 export const LOCAL_MODEL_SIZE_LABEL = "1.3 GB";
 
+/** F22 — free space the precheck demands before starting the download: the
+ * 1.3 GB payload plus room to unpack/cache it without wedging the phone.
+ * Deliberately storage-only. There is NO RAM gate: expo-device's totalMemory
+ * reports total, not available (false precision), it would cost a new native
+ * build, and the router already degrades safely — an OOM escalates to Gemini. */
+export const LOCAL_MODEL_REQUIRED_FREE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** Everything a user should know BEFORE a 1.3 GB download. Size and the 512px
+ * latency discipline come from docs/research/on-device-vlm-native.md; the free
+ * space is LOCAL_MODEL_REQUIRED_FREE_BYTES. The RAM/OS line is a rule of thumb
+ * (the doc's only device data point is a Galaxy Z Fold-class flagship), which
+ * is exactly why the last clause is a promise and not a warning. */
+export const LOCAL_MODEL_REQUIREMENTS =
+  `~${LOCAL_MODEL_SIZE_LABEL} download · needs ~2 GB free · works best on 8 GB+ RAM, Android 10+ · ` +
+  `falls back to the cloud automatically if your phone can't keep up`;
+
 /** Shown before the first download so the size/network cost is a choice. */
 export const LOCAL_MODEL_DOWNLOAD_WARNING =
   `Downloads a ${LOCAL_MODEL_SIZE_LABEL} model over WiFi (once). After that your photos are analyzed ` +
-  `on this phone — nothing is sent anywhere. Anything the local model can't handle still goes to Gemini.`;
+  `on this phone — nothing is sent anywhere. Anything the local model can't handle still goes to Gemini.` +
+  `\n\n${LOCAL_MODEL_REQUIREMENTS}`;
+
+/** "1.4 GB" — GB as everyone's storage settings mean it. */
+export function formatGigabytes(bytes: number): string {
+  const gb = bytes / 1024 ** 3;
+  return `${Number(gb.toFixed(1))} GB`;
+}
+
+/** F22 precheck: is there room for the model? `null`/NaN means the free-space
+ * read failed — never block on that. A precheck that can't read the disk must
+ * not become a second failure mode; the download itself is the backstop. */
+export function hasRoomForLocalModel(availableBytes: number | null): boolean {
+  if (availableBytes === null || Number.isNaN(availableBytes)) return true;
+  return availableBytes >= LOCAL_MODEL_REQUIRED_FREE_BYTES;
+}
+
+/** Said once, in the Alert, with the user's actual number. Not an error — a
+ * phone that is full is a fact about the phone, not a fault to log. */
+export function insufficientStorageMessage(availableBytes: number): string {
+  return (
+    `The on-device model needs about 2 GB free — you have ${formatGigabytes(availableBytes)}. ` +
+    `Free some space and try again. Gemini keeps analyzing your photos meanwhile.`
+  );
+}
+
+// ---- F22 provenance: which engine answered, and why we escalated ----
+
+/** Why an on-device attempt was abandoned. Each one is a different go/no-go
+ * signal: "too slow" is not the same finding as "got it wrong". */
+export type LocalFailureReason = "timeout" | "invalid" | "error";
+
+const ESCALATION_ENGINE: Record<LocalFailureReason, AssessmentEngine> = {
+  timeout: "gemini:local_timeout",
+  invalid: "gemini:local_invalid",
+  error: "gemini:local_error",
+};
+
+/** Router failure → the string persisted in assessments.engine. `null` means
+ * the local engine was never tried (off, unready, or not wired at all), which
+ * is plain "gemini" — no attempt happened, so there is nothing to explain. */
+export function escalationEngine(reason: LocalFailureReason | null): AssessmentEngine {
+  return reason ? ESCALATION_ENGINE[reason] : "gemini";
+}
+
+export type EngineKind = "on-device" | "gemini" | "unknown";
+
+/** Stored column value → what the badge and the tally count. Every escalation
+ * reason collapses to "gemini" (Gemini did answer). Anything unrecognized —
+ * including the null on every pre-F22 row — is "unknown", never a guess:
+ * guessing "gemini" would silently poison the ratio we built this for. */
+export function engineKind(engine: string | null | undefined): EngineKind {
+  if (engine === "on-device") return "on-device";
+  if (engine === "gemini" || engine?.startsWith("gemini:")) return "gemini";
+  return "unknown";
+}
+
+/** Badge text, or null for "render no badge". An escalation says nothing extra
+ * — that a local attempt was made and dropped is our problem, not the user's —
+ * and "Unknown" on every historical row is noise, not information. */
+export function engineBadgeLabel(engine: string | null | undefined): string | null {
+  switch (engineKind(engine)) {
+    case "on-device":
+      return "⬤ On-device";
+    case "gemini":
+      return "Gemini";
+    case "unknown":
+      return null;
+  }
+}
+
+/** How many assessments the Profile stat line looks back over. */
+export const ENGINE_STATS_LIMIT = 20;
+
+export interface EngineTally {
+  onDevice: number;
+  gemini: number;
+  /** Pre-F22 rows. Counted, but never in the ratio. */
+  unknown: number;
+}
+
+export function tallyEngines(engines: (string | null | undefined)[]): EngineTally {
+  const tally: EngineTally = { onDevice: 0, gemini: 0, unknown: 0 };
+  for (const engine of engines) {
+    const kind = engineKind(engine);
+    if (kind === "on-device") tally.onDevice += 1;
+    else if (kind === "gemini") tally.gemini += 1;
+    else tally.unknown += 1;
+  }
+  return tally;
+}
+
+/** The F22 payoff, read-only: "Last 20 assessments: 14 on-device · 6 Gemini".
+ * The count is of rows that actually carry provenance — pre-F22 rows are
+ * excluded rather than guessed at, so the number can be smaller than the
+ * window. Null when there is nothing countable: no line beats a line of zeros. */
+export function engineStatsLabel(tally: EngineTally): string | null {
+  const counted = tally.onDevice + tally.gemini;
+  if (counted === 0) return null;
+  return `Last ${counted} assessment${counted === 1 ? "" : "s"}: ${tally.onDevice} on-device · ${tally.gemini} Gemini`;
+}
 
 export interface LocalEngineSettings {
   /** The user's opt-in. Off means the router never touches the local model. */
@@ -166,6 +282,10 @@ export interface LocalAssessmentRow {
   raw_output: string;
   is_cut_care: boolean;
   cut_health_score: number | null;
+  /** F22 — always "on-device": this row exists BECAUSE the local model
+   * produced the diagnosis. The Gemini side of the column is written by
+   * /assess (migration 0007). */
+  engine: AssessmentEngine;
 }
 
 /** An on-device diagnosis is persisted by the phone itself — /assess runs
@@ -187,5 +307,6 @@ export function buildLocalAssessmentRow(input: LocalAssessmentRowInput): LocalAs
     raw_output: input.raw,
     is_cut_care: isCut,
     cut_health_score: isCut ? input.diagnosis.health_score : null,
+    engine: "on-device",
   };
 }

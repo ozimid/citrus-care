@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
   DEFAULT_LOCAL_ENGINE_SETTINGS,
+  ENGINE_STATS_LIMIT,
+  LOCAL_MODEL_DOWNLOAD_WARNING,
+  LOCAL_MODEL_REQUIRED_FREE_BYTES,
+  LOCAL_MODEL_REQUIREMENTS,
   buildLocalAssessmentRow,
+  engineBadgeLabel,
+  engineKind,
+  engineStatsLabel,
+  escalationEngine,
+  formatGigabytes,
+  hasRoomForLocalModel,
+  insufficientStorageMessage,
   localEngineState,
   localEngineStatusLabel,
   localEngineSubtitle,
@@ -10,6 +21,7 @@ import {
   parseLocalEngineSettings,
   serializeLocalEngineSettings,
   shouldRouteLocal,
+  tallyEngines,
   type LocalEngineRuntime,
   type LocalEngineSettings,
 } from "./local-engine";
@@ -151,6 +163,7 @@ describe("buildLocalAssessmentRow (mirrors the /assess insert)", () => {
       raw_output: '{"health_score":64}',
       is_cut_care: false,
       cut_health_score: null,
+      engine: "on-device",
     });
   });
 
@@ -181,5 +194,152 @@ describe("buildLocalAssessmentRow (mirrors the /assess insert)", () => {
       expect(row.is_cut_care).toBe(false);
       expect(row.cut_health_score).toBeNull();
     }
+  });
+
+  // F22: the row this builder writes is BY DEFINITION an on-device one — it
+  // only exists because the local model produced the diagnosis.
+  it("stamps the row with the on-device engine (F22 provenance)", () => {
+    expect(
+      buildLocalAssessmentRow({
+        plantId: "plant-1",
+        userId: "user-7",
+        diagnosis: DIAGNOSIS,
+        raw: "{}",
+        previousAssessmentId: null,
+      }).engine,
+    ).toBe("on-device");
+  });
+});
+
+// F22 — the engine badge is ephemeral no longer: `assessments.engine` records
+// which engine answered and, for escalations, WHY the local one was dropped.
+// That column is the go/no-go dataset, so its value space is closed and the
+// mapping from a router failure to a stored string is pure.
+
+describe("escalationEngine (F22 — which engine, and why we escalated)", () => {
+  it("is plain gemini when the local engine was never tried", () => {
+    // Off, unready, or not wired at all: no local attempt happened, so there
+    // is no failure to record — this is not an escalation.
+    expect(escalationEngine(null)).toBe("gemini");
+  });
+
+  it("records the specific reason the local attempt was abandoned", () => {
+    expect(escalationEngine("timeout")).toBe("gemini:local_timeout");
+    expect(escalationEngine("invalid")).toBe("gemini:local_invalid");
+    expect(escalationEngine("error")).toBe("gemini:local_error");
+  });
+});
+
+describe("engineKind (stored string → what the UI and the tally count)", () => {
+  it("reads the two engines, with every escalation reason still counting as Gemini", () => {
+    expect(engineKind("on-device")).toBe("on-device");
+    expect(engineKind("gemini")).toBe("gemini");
+    expect(engineKind("gemini:local_timeout")).toBe("gemini");
+    expect(engineKind("gemini:local_invalid")).toBe("gemini");
+    expect(engineKind("gemini:local_error")).toBe("gemini");
+  });
+
+  it("treats a pre-F22 row (no column value) as unknown, never as Gemini", () => {
+    // Guessing "gemini" here would silently poison the go/no-go ratio with
+    // rows written before the column existed.
+    expect(engineKind(null)).toBe("unknown");
+    expect(engineKind(undefined)).toBe("unknown");
+    expect(engineKind("")).toBe("unknown");
+    expect(engineKind("geminiish")).toBe("unknown");
+  });
+});
+
+describe("engineBadgeLabel (subtle marker, or nothing)", () => {
+  it("labels the two engines exactly as the fresh-diagnosis badge does", () => {
+    expect(engineBadgeLabel("on-device")).toBe("⬤ On-device");
+    expect(engineBadgeLabel("gemini")).toBe("Gemini");
+  });
+
+  it("says Gemini for an escalated row — the reason is ours, not the user's", () => {
+    expect(engineBadgeLabel("gemini:local_timeout")).toBe("Gemini");
+  });
+
+  it("renders no badge at all for a pre-F22 row", () => {
+    // "Unknown" on every historical row is noise, not information.
+    expect(engineBadgeLabel(null)).toBeNull();
+  });
+});
+
+describe("tallyEngines / engineStatsLabel (the F22 payoff — the real dataset)", () => {
+  it("counts the last-N engines by kind", () => {
+    expect(
+      tallyEngines(["on-device", "gemini", "gemini:local_timeout", "on-device", null]),
+    ).toEqual({ onDevice: 2, gemini: 2, unknown: 1 });
+  });
+
+  it("reads the last 20 assessments", () => {
+    expect(ENGINE_STATS_LIMIT).toBe(20);
+  });
+
+  it("states the split in plain words", () => {
+    expect(engineStatsLabel({ onDevice: 14, gemini: 6, unknown: 0 })).toBe(
+      "Last 20 assessments: 14 on-device · 6 Gemini",
+    );
+  });
+
+  it("excludes pre-F22 rows from the ratio instead of guessing at them", () => {
+    expect(engineStatsLabel({ onDevice: 10, gemini: 5, unknown: 5 })).toBe(
+      "Last 15 assessments: 10 on-device · 5 Gemini",
+    );
+  });
+
+  it("says nothing when there is nothing countable yet", () => {
+    expect(engineStatsLabel({ onDevice: 0, gemini: 0, unknown: 0 })).toBeNull();
+    expect(engineStatsLabel({ onDevice: 0, gemini: 0, unknown: 12 })).toBeNull();
+  });
+});
+
+// F22 Part 2 — the honest precheck before a 1.3 GB download. Deliberately
+// storage only: no RAM gate (expo-device's totalMemory reports total, not
+// available — false precision for a new native build), because the router
+// already degrades safely (OOM → escalate to Gemini).
+
+describe("hasRoomForLocalModel (free-storage precheck)", () => {
+  it("asks for ~2 GB — the 1.3 GB model plus unpacking headroom", () => {
+    expect(LOCAL_MODEL_REQUIRED_FREE_BYTES).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  it("blocks the download when the phone is short on space", () => {
+    expect(hasRoomForLocalModel(1.4 * 1024 * 1024 * 1024)).toBe(false);
+    expect(hasRoomForLocalModel(0)).toBe(false);
+  });
+
+  it("allows it at exactly the requirement and above", () => {
+    expect(hasRoomForLocalModel(LOCAL_MODEL_REQUIRED_FREE_BYTES)).toBe(true);
+    expect(hasRoomForLocalModel(64 * 1024 * 1024 * 1024)).toBe(true);
+  });
+
+  it("does not block on an unreadable free-space number", () => {
+    // A precheck that can't read the disk must not become a second failure
+    // mode: the download itself is the backstop.
+    expect(hasRoomForLocalModel(null)).toBe(true);
+    expect(hasRoomForLocalModel(NaN)).toBe(true);
+  });
+
+  it("tells the user the number they actually have", () => {
+    expect(formatGigabytes(1.4 * 1024 * 1024 * 1024)).toBe("1.4 GB");
+    expect(formatGigabytes(0)).toBe("0 GB");
+    const message = insufficientStorageMessage(1.4 * 1024 * 1024 * 1024);
+    expect(message).toContain("2 GB free");
+    expect(message).toContain("1.4 GB");
+  });
+});
+
+describe("stated requirements (numbers come from the research doc)", () => {
+  it("states size, free space, the device rule of thumb, and the fallback", () => {
+    expect(LOCAL_MODEL_REQUIREMENTS).toContain("1.3 GB");
+    expect(LOCAL_MODEL_REQUIREMENTS).toContain("2 GB free");
+    expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/8 GB\+ RAM/);
+    expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/Android 10\+/);
+    expect(LOCAL_MODEL_REQUIREMENTS).toMatch(/falls back to the cloud/i);
+  });
+
+  it("repeats them in the pre-download warning — before the 1.3 GB, not after", () => {
+    expect(LOCAL_MODEL_DOWNLOAD_WARNING).toContain(LOCAL_MODEL_REQUIREMENTS);
   });
 });

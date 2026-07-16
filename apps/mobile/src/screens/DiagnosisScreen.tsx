@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
+import { EngineBadge } from "../components/EngineBadge";
 import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
-import type { AssessEngine } from "../lib/photo-store";
 import { subjectLabel } from "../lib/plant-detail";
 import { formatReminderDate, scheduleReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
@@ -38,9 +38,10 @@ interface Props {
   plantId: string;
   plantName: string;
   /** Which engine produced this diagnosis (D-15 Stage 2 provenance badge).
-   * Omitted when reopening a stored timeline row — the engine isn't a column,
-   * only fresh results know it. */
-  engine?: AssessEngine;
+   * Fresh results pass their own engine; a reopened timeline row passes the
+   * stored assessments.engine (F22, migration 0007), which is null — and so
+   * renders no badge — only for rows written before that column existed. */
+  engine?: string | null;
   onDone: () => void;
 }
 
@@ -108,7 +109,7 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, engine, onDone 
                 </Text>
               </View>
             ) : null}
-            {engine ? <EngineBadge t={t} engine={engine} /> : null}
+            <EngineBadge t={t} engine={engine} />
           </View>
         </View>
 
@@ -219,24 +220,6 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, engine, onDone 
           <Text style={[styles.doneText, { color: t.onGreen }]}>Back to plants</Text>
         </Pressable>
       </ScrollView>
-    </View>
-  );
-}
-
-/** Provenance, stated plainly: emerald when the phone did it, neutral when
- * Gemini did. An escalation says nothing extra — that a local attempt was made
- * and dropped is our problem, not the user's. */
-function EngineBadge({ t, engine }: { t: Tokens; engine: AssessEngine }) {
-  const onDevice = engine === "on-device";
-  const color = onDevice ? t.green : t.sub;
-  return (
-    <View
-      accessibilityLabel={onDevice ? "Analyzed on this device" : "Analyzed by Gemini"}
-      style={[styles.engineBadge, { borderColor: color + "55" }]}
-    >
-      <Text style={[styles.engineBadgeText, { color }]}>
-        {onDevice ? "⬤ On-device" : "Gemini"}
-      </Text>
     </View>
   );
 }

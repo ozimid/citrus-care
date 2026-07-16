@@ -73,6 +73,12 @@ describe("select constants", () => {
     }
     expect(TIMELINE_SELECT).not.toContain("photo_path");
   });
+
+  // F22: without this column a reopened timeline row can't answer "which
+  // model produced this?" — the badge was ephemeral before.
+  it("pulls the engine column (F22 provenance — migration 0007)", () => {
+    expect(TIMELINE_SELECT).toContain("engine");
+  });
 });
 
 describe("formatTimelineDate", () => {
@@ -123,6 +129,25 @@ describe("mapTimelineRows", () => {
     const entries = mapTimelineRows([{ ...rows()[0], diagnosis: null, is_cut_care: null }]);
     expect(entries[0].summary).toBe("");
     expect(entries[0].isCutCare).toBe(false);
+  });
+
+  // F22: the stored provenance rides along untouched — the badge decision
+  // (including "no badge") is engineBadgeLabel's, tested in local-engine.
+  it("carries the engine through to the entry, null for a pre-F22 row", () => {
+    const [a3, a2, a1] = mapTimelineRows([
+      { ...rows()[0], engine: "on-device" },
+      { ...rows()[1], engine: "gemini:local_timeout" },
+      { ...rows()[2], engine: null },
+    ]);
+    expect(a3.engine).toBe("on-device");
+    expect(a2.engine).toBe("gemini:local_timeout");
+    expect(a1.engine).toBeNull();
+  });
+
+  it("treats a missing engine field as null (rows read before the column landed)", () => {
+    const row = rows()[0];
+    delete (row as { engine?: unknown }).engine;
+    expect(mapTimelineRows([row])[0].engine).toBeNull();
   });
 
   it("returns [] for null/undefined data", () => {

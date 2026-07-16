@@ -89,12 +89,14 @@ describe("runAssess (local-first, direct-image escalation)", () => {
     expect(savedUris).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
 
     // The escalation request carries the image itself — no upload, no photoPath.
+    // F22: plus the engine provenance the server writes to assessments.engine.
     expect(apiCalls).toHaveLength(1);
     expect(apiCalls[0].url).toBe("/assess");
     expect(JSON.parse(apiCalls[0].init?.body as string)).toEqual({
       plantId: "plant-1",
       imageBase64: "QkFTRTY0",
       mime: "image/jpeg",
+      engine: "gemini",
     });
 
     // Local uri ↔ assessment id link, with the engine recorded (D-15 seam).
@@ -348,6 +350,69 @@ describe("runAssess engine router (D-15 Stage 2)", () => {
     expect(apiCalls).toHaveLength(1);
   });
 
+  // F22: the escalation reason is the whole go/no-go dataset. It reaches the
+  // server as body.engine and lands in assessments.engine — the ONLY thing it
+  // is ever used for. The user still sees nothing but "Gemini".
+  it("posts plain engine: gemini when the local engine was never tried", async () => {
+    const { local } = makeLocal({ isReady: () => false });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    const result = await runAssess(deps, INPUT);
+
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({ engine: "gemini" });
+    // The badge never says "we tried and failed" — that's our problem.
+    expect(result.engine).toBe("gemini");
+  });
+
+  it("posts engine: gemini:local_invalid when the local output failed the schema", async () => {
+    const { local } = makeLocal({ generate: async () => "not json at all" });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    await runAssess(deps, INPUT);
+
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({
+      engine: "gemini:local_invalid",
+    });
+  });
+
+  it("posts engine: gemini:local_error when the local model threw", async () => {
+    const { local } = makeLocal({
+      generate: async () => {
+        throw new Error("ExecuTorch: failed to allocate 400MB");
+      },
+    });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    await runAssess(deps, INPUT);
+
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({
+      engine: "gemini:local_error",
+    });
+  });
+
+  it("posts engine: gemini:local_error when the local insert failed", async () => {
+    const { local } = makeLocal({
+      persist: async () => {
+        throw new Error("RLS: new row violates row-level security policy");
+      },
+    });
+    const { deps, apiCalls } = makeDeps({ local });
+
+    await runAssess(deps, INPUT);
+
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({
+      engine: "gemini:local_error",
+    });
+  });
+
+  it("never claims the on-device engine to /assess — that route runs Gemini", async () => {
+    const { local } = makeLocal({ generate: async () => "not json at all" });
+    const { deps, apiCalls } = makeDeps({ local });
+    await runAssess(deps, INPUT);
+    const sent = JSON.parse(apiCalls[0].init?.body as string) as { engine: string };
+    expect(sent.engine.startsWith("gemini")).toBe(true);
+  });
+
   it("never leaks the local failure to the user — the escalated result comes back clean", async () => {
     const { local } = makeLocal({
       generate: async () => {
@@ -477,6 +542,11 @@ describe("runAssess local inference hard timeout", () => {
     const result = await pending;
     expect(result.engine).toBe("gemini");
     expect(apiCalls).toHaveLength(1);
+    // F22: a timeout is its own escalation reason — "the phone was too slow"
+    // is a different go/no-go signal from "the phone got it wrong".
+    expect(JSON.parse(apiCalls[0].init?.body as string)).toMatchObject({
+      engine: "gemini:local_timeout",
+    });
   });
 
   it("keeps a local result that lands just inside the timeout", async () => {

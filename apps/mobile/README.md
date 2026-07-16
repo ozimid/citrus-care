@@ -89,6 +89,18 @@ Tests target **pure logic modules only** (`src/lib/*.test.ts`): auth session red
 
 "🔔 Remind me in 2 weeks" on the diagnosis screen schedules a **local** `expo-notifications` notification (design doc §9 open question 6 resolved pragmatically: local first, server-driven push later). Notification permission is requested at that tap — contextual opt-in, never at launch. Scheduled reminders are listed and cancellable on the Profile tab. Known limitations of local scheduling: **deleting (or on iOS, offloading) the app silently loses all reminders**, they don't sync across devices, and they fire in the device's local timezone as scheduled — a future server-push upgrade (EAS + a scheduler table) would fix all three. Capture modes leaf/whole-plant remain client-side framing guidance only; the server's `/assess` accepts just `isCutCare` (Cut mode), so no unsupported fields are sent.
 
+## On-device AI requirements (D-15 Stage 2 / F22)
+
+The on-device engine is **opt-in and off by default** — the model is never fetched unasked. Before you turn it on in Profile → On-device AI:
+
+- **~1.3 GB download**, once, over WiFi (quantized Gemma 4 E2B, Apache 2.0 — `docs/research/on-device-vlm-native.md`). Cached on the phone; disabling the toggle keeps the files, and only deleting the app removes them.
+- **~2 GB free storage.** Checked before the download starts (`hasRoomForLocalModel` + `expo-file-system`'s `Paths.availableDiskSpace`): the payload plus unpacking headroom. Short on space → the toggle explains and does nothing, rather than downloading 1.3 GB and then failing.
+- **Works best on 8 GB+ RAM, Android 10+.** A rule of thumb, *not* a measurement — the research doc's only device data point is a Galaxy Z Fold-class flagship (~3–10 s/photo at 512px input). There is deliberately **no RAM gate**: `expo-device`'s `totalMemory` reports total rather than available memory (false precision), it would cost a new native build, and the fallback below already covers the failure.
+- **A weak device silently falls back to Gemini rather than failing.** This is the honest part: the router tries the local model, and on *any* problem — OOM, a 20 s timeout, output that fails the shared Zod schema — it escalates to the cloud without a word to the user. You do not get an error; you get a slightly slower diagnosis and a "Gemini" badge. So a phone that can't keep up doesn't break the app, but it also doesn't get the privacy benefit it opted in for.
+- **Needs a dev/EAS build** (native runtime): `react-native-executorch` does not exist in Expo Go.
+
+**Which engine actually answered** is recorded per assessment (`assessments.engine`, migration 0007): `on-device`, `gemini`, or `gemini:<reason>` when a local attempt was dropped (`local_timeout` / `local_invalid` / `local_error`). The badge on a diagnosis and on each timeline row reads that column; Profile shows the last-20 split ("Last 20 assessments: 14 on-device · 6 Gemini"), which is the D-15 go/no-go dataset. Rows written before F22 have no engine and render no badge.
+
 ## Testing on a phone (never done mobile testing?)
 
 Full from-zero walkthrough (Expo Go preview → credentials → installable EAS dev build → feature checklist) lives in Obsidian: `Project RESOURCES/Citrus Care v1/Testing - Android for Web Developers.md`.
