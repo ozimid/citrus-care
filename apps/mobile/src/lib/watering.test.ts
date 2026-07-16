@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CareProfile } from "@citrus/shared";
 import type { WeatherSummary } from "./weather";
 import {
@@ -9,7 +9,6 @@ import {
   markWatered,
   parseStoredCareProfile,
   parseWateringLog,
-  requestCareProfile,
   serializeWateringLog,
   wateringPlan,
   wateringPlansFor,
@@ -415,48 +414,5 @@ describe("wateringPlansFor", () => {
       NOW,
     );
     expect(plans["plant-1"].isDue).toBe(false);
-  });
-});
-
-// The care-profile call is fire-and-forget at plant creation: a plant with no
-// profile just has no watering guidance yet, so every failure is silent and
-// retryable later. Deps-injected (AuthorizedFetch) so it tests in Node.
-
-describe("requestCareProfile", () => {
-  function makeApi(res: { ok: boolean; status: number; body: unknown }) {
-    return vi.fn().mockResolvedValue({
-      ok: res.ok,
-      status: res.status,
-      json: async () => res.body,
-    });
-  }
-
-  it("POSTs the plant id and returns the validated profile", async () => {
-    const api = makeApi({ ok: true, status: 200, body: { careProfile: PROFILE } });
-    expect(await requestCareProfile(api, "plant-1")).toEqual(PROFILE);
-    expect(api).toHaveBeenCalledWith("/care-profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plantId: "plant-1" }),
-    });
-  });
-
-  it("returns null on an API error rather than throwing at the caller", async () => {
-    const api = makeApi({ ok: false, status: 429, body: { error: "Too many" } });
-    expect(await requestCareProfile(api, "plant-1")).toBeNull();
-  });
-
-  it("returns null when the network is unreachable", async () => {
-    const api = vi.fn().mockRejectedValue(new Error("Network request failed"));
-    expect(await requestCareProfile(api, "plant-1")).toBeNull();
-  });
-
-  it("returns null when the server sends a profile that fails the schema", async () => {
-    const api = makeApi({
-      ok: true,
-      status: 200,
-      body: { careProfile: { ...PROFILE, drought_tolerance: "extreme" } },
-    });
-    expect(await requestCareProfile(api, "plant-1")).toBeNull();
   });
 });

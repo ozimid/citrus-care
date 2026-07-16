@@ -2,29 +2,23 @@ import * as Application from "expo-application";
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { useLocalEngine } from "../components/LocalEngineProvider";
-import { apiOrigin } from "../lib/api-io";
-import { signOut } from "../lib/auth";
 import {
   LOCAL_MODEL_DOWNLOAD_WARNING,
   LOCAL_MODEL_REQUIREMENTS,
-  engineStatsLabel,
   hasRoomForLocalModel,
   insufficientStorageMessage,
   localEngineStatusLabel,
   localEngineSubtitle,
   needsDownloadWarning,
-  tallyEngines,
 } from "../lib/local-engine";
-import { availableDiskSpaceBytes, fetchRecentEngines } from "../lib/local-engine-io";
+import { availableDiskSpaceBytes } from "../lib/local-engine-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
-import { supabase } from "../lib/supabase";
 import { RADIUS, useTheme } from "../lib/theme";
 
-// Profile tab per the native design doc §3 — account, scheduled re-assessment
-// reminders (local notifications; listed + cancellable), read-only About rows
-// (app version + resolved API origin, for debuggability), sign out. Units and
-// storage & privacy land with later features.
+// Profile tab (D-17): no account — data lives on the phone. Scheduled
+// re-assessment reminders (local notifications; listed + cancellable), the
+// on-device AI control, and read-only About rows.
 
 // Lazily loaded on purpose: importing VlmSpikeScreen installs the
 // react-native-executorch native runtime, which only exists in dev builds —
@@ -33,9 +27,8 @@ const VlmSpikeScreen = lazy(() =>
   import("./VlmSpikeScreen").then((m) => ({ default: m.VlmSpikeScreen })),
 );
 
-export function ProfileScreen({ email }: { email: string | null }) {
+export function ProfileScreen() {
   const { t } = useTheme();
-  const [busy, setBusy] = useState(false);
   const [reminders, setReminders] = useState<ReminderListItem[] | null>(null);
   const [spikeOpen, setSpikeOpen] = useState(false);
 
@@ -65,10 +58,6 @@ export function ProfileScreen({ email }: { email: string | null }) {
   return (
     <View style={[styles.container, { backgroundColor: t.canvas }]}>
       <Text style={[styles.heading, { color: t.text }]}>Profile</Text>
-      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
-        <Text style={[styles.label, { color: t.sub }]}>Signed in as</Text>
-        <Text style={[styles.email, { color: t.text }]}>{email ?? "—"}</Text>
-      </View>
 
       <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
         <Text style={[styles.label, { color: t.sub }]}>Reminders</Text>
@@ -107,12 +96,6 @@ export function ProfileScreen({ email }: { email: string | null }) {
             {Application.nativeApplicationVersion ?? "—"}
           </Text>
         </View>
-        <View style={styles.aboutRow}>
-          <Text style={[styles.aboutKey, { color: t.sub }]}>API origin</Text>
-          <Text style={[styles.aboutValue, { color: t.text }]} numberOfLines={1}>
-            {apiOrigin}
-          </Text>
-        </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Open the on-device model spike"
@@ -139,51 +122,19 @@ export function ProfileScreen({ email }: { email: string | null }) {
         </Modal>
       )}
 
-      <Pressable
-        accessibilityRole="button"
-        disabled={busy}
-        onPress={async () => {
-          setBusy(true);
-          await signOut();
-          // On success the auth listener flips the app back to Welcome and
-          // unmounts this screen; no local state to reset.
-          setBusy(false);
-        }}
-        style={[styles.signOut, { borderColor: t.danger, opacity: busy ? 0.6 : 1 }]}
-      >
-        {busy ? (
-          <ActivityIndicator color={t.danger} />
-        ) : (
-          <Text style={[styles.signOutText, { color: t.danger }]}>Sign out</Text>
-        )}
-      </Pressable>
       <Text style={[styles.foot, { color: t.sub }]}>
-        Reminders are on-device notifications; units and privacy settings are coming soon.
+        Your plants, photos and history live only on this phone — nothing is sent to a server.
       </Text>
     </View>
   );
 }
 
-/** D-15 Stage 2: the on-device engine is opt-in and reversible. The toggle
- * states the requirements and checks free space BEFORE the 1.3 GB download
- * (once), then reports the session state; a failed session is honest about
- * Gemini covering for it and retries on tap. F22 adds the read-only split of
- * what the engines have actually been doing — the go/no-go dataset, in the one
- * place where a user might wonder whether this is worth 1.3 GB. */
+/** D-17: the on-device engine is opt-in and reversible. The toggle states the
+ * requirements and checks free space BEFORE the 1.3 GB download (once), then
+ * reports the session state; a failed session is honest and retries on tap. */
 function LocalEngineCard() {
   const { t } = useTheme();
   const { state, settings, setEnabled, retry } = useLocalEngine();
-  const [stats, setStats] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Best-effort: fetchRecentEngines already swallows (and logs) query
-    // failures, and no line at all is the honest answer before the first
-    // assessment. The catch covers a client-level throw — a stat line is
-    // never worth an unhandled rejection on Profile.
-    fetchRecentEngines(supabase)
-      .then((engines) => setStats(engineStatsLabel(tallyEngines(engines))))
-      .catch((e) => console.error("[ProfileScreen] engine stats failed:", (e as Error).message));
-  }, []);
 
   function toggle(next: boolean) {
     if (!next || !needsDownloadWarning(settings)) {
@@ -209,7 +160,7 @@ function LocalEngineCard() {
   const failed = state.kind === "failed";
   return (
     <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
-      <Text style={[styles.label, { color: t.sub }]}>On-device AI (beta)</Text>
+      <Text style={[styles.label, { color: t.sub }]}>On-device AI</Text>
       <View style={styles.engineRow}>
         <Text style={[styles.engineStatus, { color: failed ? t.danger : t.text }]}>
           {localEngineStatusLabel(state)}
@@ -226,11 +177,6 @@ function LocalEngineCard() {
       </Text>
       {/* Stated up front, not after a 1.3 GB download. */}
       <Text style={[styles.engineRequirements, { color: t.sub }]}>{LOCAL_MODEL_REQUIREMENTS}</Text>
-      {stats ? (
-        <Text style={[styles.engineStats, { color: t.sub }]} accessibilityLabel={stats}>
-          {stats}
-        </Text>
-      ) : null}
       {failed ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Retry on-device model setup" onPress={retry} hitSlop={8}>
           <Text style={[styles.devRow, { color: t.green }]}>Try again</Text>
@@ -250,7 +196,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   label: { fontSize: 12 },
-  email: { fontSize: 15, fontWeight: "500" },
   remindersEmpty: { fontSize: 13, lineHeight: 19 },
   reminderRow: {
     flexDirection: "row",
@@ -280,17 +225,7 @@ const styles = StyleSheet.create({
   engineStatus: { fontSize: 15, fontWeight: "600", flexShrink: 1 },
   engineSubtitle: { fontSize: 12, lineHeight: 17 },
   engineRequirements: { fontSize: 11, lineHeight: 16, marginTop: 4 },
-  engineStats: { fontSize: 12, fontWeight: "600", marginTop: 6, fontVariant: ["tabular-nums"] },
   devRow: { fontSize: 13, fontWeight: "600", paddingVertical: 6 },
   spikeFallback: { flex: 1, alignItems: "center", justifyContent: "center" },
-  signOut: {
-    borderWidth: 1,
-    borderRadius: RADIUS,
-    paddingVertical: 13,
-    alignItems: "center",
-    minHeight: 48,
-    justifyContent: "center",
-  },
-  signOutText: { fontSize: 15, fontWeight: "600" },
   foot: { fontSize: 12, textAlign: "center", marginTop: 4 },
 });

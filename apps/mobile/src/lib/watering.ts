@@ -7,7 +7,6 @@
 // AsyncStorage wiring is the thin watering-io.ts.
 
 import { careProfileSchema, type CareProfile } from "@citrus/shared";
-import type { AuthorizedFetch } from "./api";
 import type { WeatherSummary } from "./weather";
 
 /** Above careProfile.temp_max_c the plant is heat-stressed: water sooner. */
@@ -241,36 +240,6 @@ export function parseStoredCareProfile(raw: unknown): CareProfile | null {
     return null;
   }
   return parsed.data;
-}
-
-/**
- * Ask the API to generate (or return) this plant's care profile — the one
- * Gemini call a plant ever makes for watering. Called fire-and-forget after
- * plant creation, so EVERY failure is silent and null: a plant without a
- * profile simply shows no watering guidance, and the next visit retries.
- */
-export async function requestCareProfile(
-  api: AuthorizedFetch,
-  plantId: string,
-): Promise<CareProfile | null> {
-  try {
-    const res = await api("/care-profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plantId }),
-    });
-    if (!res.ok) {
-      console.error("[requestCareProfile] request failed with status:", res.status);
-      return null;
-    }
-    const body = (await res.json()) as { careProfile?: unknown };
-    // The server Zod-validated Gemini's output before storing; this re-parse
-    // guards the round trip with the same shared schema (assess.ts precedent).
-    return parseStoredCareProfile(body.careProfile);
-  } catch (e) {
-    console.error("[requestCareProfile] request errored:", (e as Error).message);
-    return null;
-  }
 }
 
 /** plantId → ISO timestamp of the last "Watered today" tap. Local-only, like
