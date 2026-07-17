@@ -5,6 +5,8 @@
 // local-engine.test.ts.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Device from "expo-device";
+import { Platform } from "react-native";
 import { Paths } from "expo-file-system";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
@@ -23,6 +25,7 @@ import {
   serializeLocalEngineSettings,
   type LocalEngineSettings,
   LOAD_SENTINEL_STORAGE_KEY,
+  deviceCapability,
 } from "./local-engine";
 
 export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
@@ -33,6 +36,13 @@ export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
     console.error("[local-engine-io] settings load failed:", (e as Error).message);
     return DEFAULT_LOCAL_ENGINE_SETTINGS;
   }
+}
+
+/** F33: the live pre-flight verdict (expo-device + Platform feed the pure
+ * deviceCapability). Sync — both readings are constants. */
+export function deviceCapabilitySnapshot(): ReturnType<typeof deviceCapability> {
+  const api = Platform.OS === "android" && typeof Platform.Version === "number" ? Platform.Version : null;
+  return deviceCapability(Device.totalMemory, api);
 }
 
 /** P0 crash sentinel: present = the last model load never reported back (the

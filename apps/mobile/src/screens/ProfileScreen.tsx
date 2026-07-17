@@ -23,7 +23,7 @@ import {
   localEngineSubtitle,
   needsDownloadWarning,
 } from "../lib/local-engine";
-import { availableDiskSpaceBytes } from "../lib/local-engine-io";
+import { availableDiskSpaceBytes, deviceCapabilitySnapshot } from "../lib/local-engine-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
@@ -289,6 +289,14 @@ function LocalEngineCard() {
   const { state, settings, setEnabled, retry } = useLocalEngine();
 
   function toggle(next: boolean) {
+    // F33 pre-flight: incapable phones learn it here, not after 1.3 GB.
+    if (next) {
+      const capability = deviceCapabilitySnapshot();
+      if (capability.level === "block") {
+        Alert.alert("This phone can't run the AI", capability.reason ?? undefined);
+        return;
+      }
+    }
     if (!next || !needsDownloadWarning(settings)) {
       setEnabled(next);
       return;

@@ -11,7 +11,7 @@ import {
   insufficientStorageMessage,
   needsDownloadWarning,
 } from "../lib/local-engine";
-import { availableDiskSpaceBytes } from "../lib/local-engine-io";
+import { availableDiskSpaceBytes, deviceCapabilitySnapshot } from "../lib/local-engine-io";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
 import { useLocalEngine } from "./LocalEngineProvider";
@@ -25,7 +25,22 @@ export function LocalEngineSetupCard() {
   // Same guarded enable as Profile's LocalEngineCard: check free space before
   // a 1.3 GB download, and say the download warning once.
   function enable() {
+    // F33 pre-flight: phones that can't plausibly run the model find out in
+    // one second, not after a 1.3 GB download.
+    const capability = deviceCapabilitySnapshot();
+    if (capability.level === "block") {
+      Alert.alert("This phone can't run the AI", capability.reason ?? undefined);
+      return;
+    }
+    const warnPrefix = capability.level === "warn" && capability.reason ? capability.reason + "\n\n" : "";
     if (!needsDownloadWarning(settings)) {
+      if (warnPrefix) {
+        Alert.alert("Heads up", capability.reason ?? "", [
+          { text: "Not now", style: "cancel" },
+          { text: "Try anyway", onPress: () => setEnabled(true) },
+        ]);
+        return;
+      }
       setEnabled(true);
       return;
     }
@@ -34,7 +49,7 @@ export function LocalEngineSetupCard() {
       Alert.alert("Not enough space", insufficientStorageMessage(available));
       return;
     }
-    Alert.alert("One-time download", LOCAL_MODEL_DOWNLOAD_WARNING, [
+    Alert.alert("One-time download", warnPrefix + LOCAL_MODEL_DOWNLOAD_WARNING, [
       { text: "Not now", style: "cancel" },
       { text: "Download", onPress: () => setEnabled(true) },
     ]);

@@ -176,6 +176,41 @@ export function localEngineStatusLabel(state: LocalEngineState): string {
 /** Row subtitle. Honest about the two things a user can't see: disabling keeps
  * the downloaded files, and a failed/off engine means assessments don't run at
  * all — there is no fallback (D-17). */
+/** F33 pre-flight capability verdict, computed BEFORE the 1.3 GB download.
+ * Inputs injected (expo-device reads live in the io half) so this stays pure.
+ * Honest limits of the check: total RAM is a coarse gate — it catches phones
+ * that were never going to work, but a passing phone can still fail at load
+ * (runtime/driver class failures, e.g. the S23 report). That first load is
+ * crash-sentinel-protected, so trying is safe. Unknown readings never block. */
+export function deviceCapability(
+  totalMemoryBytes: number | null,
+  androidApiLevel: number | null,
+): { level: "ok" | "warn" | "block"; reason: string | null } {
+  const GB = 1024 ** 3;
+  if (totalMemoryBytes !== null && totalMemoryBytes < 6 * GB) {
+    return {
+      level: "block",
+      reason:
+        "This phone doesn't have enough memory (RAM) for the on-device AI — the download would only waste 1.3 GB. Everything else in the app still works.",
+    };
+  }
+  if (totalMemoryBytes !== null && totalMemoryBytes < 8 * GB) {
+    return {
+      level: "warn",
+      reason:
+        "This phone's memory is on the edge for the on-device AI. You can try — the app recovers safely if it doesn't work.",
+    };
+  }
+  if (androidApiLevel !== null && androidApiLevel < 29) {
+    return {
+      level: "warn",
+      reason:
+        "This Android version is older than the AI runtime is tested on. You can try — the app recovers safely if it doesn't work.",
+    };
+  }
+  return { level: "ok", reason: null };
+}
+
 /** F28 first-run guidance: the Plants screen offers the model download BEFORE
  * the user walks the add-plant → photo → analyze funnel into a not-ready
  * error (friend feedback 2026-07-16). Null once ready — the card vanishes. */

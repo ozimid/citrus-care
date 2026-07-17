@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deviceCapability,
   LOAD_SENTINEL_STORAGE_KEY,
   firstRunSetupCard,
   DEFAULT_LOCAL_ENGINE_SETTINGS,
@@ -274,5 +275,44 @@ describe("crash sentinel state", () => {
 
   it("sentinel key follows the store naming convention", () => {
     expect(LOAD_SENTINEL_STORAGE_KEY).toBe("citrus.engine-load-sentinel.v1");
+  });
+});
+
+// F33 pre-flight (user, 2026-07-16): know BEFORE the 1.3 GB download whether
+// this phone can plausibly run the model. Injected inputs keep it pure; a
+// missing reading must NEVER block a capable phone (permissive on unknown).
+describe("deviceCapability", () => {
+  const GB = 1073741824;
+
+  it("blocks below 6 GB RAM with an honest reason", () => {
+    const v = deviceCapability(4 * GB, 34);
+    expect(v.level).toBe("block");
+    expect(v.reason).toMatch(/memory|RAM/i);
+    expect(v.reason).not.toMatch(/gemini|cloud/i);
+  });
+
+  it("warns between 6 and 8 GB", () => {
+    expect(deviceCapability(6 * GB, 34).level).toBe("warn");
+    expect(deviceCapability(7.5 * GB, 34).level).toBe("warn");
+  });
+
+  it("passes 8 GB and above", () => {
+    expect(deviceCapability(8 * GB, 34)).toEqual({ level: "ok", reason: null });
+    expect(deviceCapability(12 * GB, 34).level).toBe("ok");
+  });
+
+  it("warns on Android older than 10 (API 29) even with plenty of RAM", () => {
+    const v = deviceCapability(12 * GB, 28);
+    expect(v.level).toBe("warn");
+    expect(v.reason).toMatch(/Android/i);
+  });
+
+  it("is permissive when readings are unavailable", () => {
+    expect(deviceCapability(null, null)).toEqual({ level: "ok", reason: null });
+    expect(deviceCapability(null, 34)).toEqual({ level: "ok", reason: null });
+  });
+
+  it("block beats warn when both apply", () => {
+    expect(deviceCapability(4 * GB, 28).level).toBe("block");
   });
 });
