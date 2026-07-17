@@ -22,6 +22,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import {
   DEFAULT_LOCAL_ENGINE_SETTINGS,
   localEngineState,
@@ -95,6 +96,18 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const state = localEngineState(settings, runtime);
+
+  // Screen-off suspends the app's network and kills the 1.3 GB model download
+  // (user report 2026-07-16) — hold the screen awake for the download only.
+  // Tagged so it can't fight other keep-awake users; best-effort on both ends.
+  useEffect(() => {
+    const TAG = "model-download";
+    if (state.kind !== "downloading") return;
+    activateKeepAwakeAsync(TAG).catch(() => {});
+    return () => {
+      deactivateKeepAwake(TAG).catch(() => {});
+    };
+  }, [state.kind]);
   // Read by the router's isReady() at tap time, not at render time.
   const stateRef = useRef(state);
   stateRef.current = state;

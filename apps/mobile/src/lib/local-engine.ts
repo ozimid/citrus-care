@@ -180,7 +180,7 @@ export function firstRunSetupCard(
     case "downloading":
       return {
         title: `Downloading the AI — ${state.percent}%`,
-        body: "Keep the app open. Assessments unlock the moment it finishes.",
+        body: "Keep the app open — the screen stays awake until it finishes. Assessments unlock the moment it does.",
         cta: null,
       };
     case "preparing":

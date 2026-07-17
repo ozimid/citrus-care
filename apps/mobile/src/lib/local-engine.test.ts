@@ -210,10 +210,12 @@ describe("firstRunSetupCard", () => {
     expect(card?.body).toMatch(/nothing leaves/i);
   });
 
-  it("shows live progress while downloading, with no CTA", () => {
+  it("shows live progress while downloading, with no CTA, and promises the screen stays awake", () => {
     const card = firstRunSetupCard({ kind: "downloading", percent: 42 });
     expect(card?.title).toContain("42%");
     expect(card?.cta).toBeNull();
+    // The keep-awake promise (user report: screen-off killed the download).
+    expect(card?.body).toMatch(/screen.*(stays|stay).*awake/i);
   });
 
   it("shows a busy state while preparing", () => {
