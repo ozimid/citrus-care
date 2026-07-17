@@ -24,6 +24,11 @@ import {
 } from "react";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import {
+  armLoadSentinel,
+  clearLoadSentinel,
+  loadLoadSentinel,
+} from "../lib/local-engine-io";
+import {
   DEFAULT_LOCAL_ENGINE_SETTINGS,
   localEngineState,
   shouldRouteLocal,
@@ -78,6 +83,9 @@ export function useLocalEngine(): LocalEngineContextValue {
 export function LocalEngineProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<LocalEngineSettings>(DEFAULT_LOCAL_ENGINE_SETTINGS);
   const [runtime, setRuntime] = useState<LocalEngineRuntime | null>(null);
+  // P0 (S23): true when the previous model load killed the process (stale
+  // sentinel). Blocks the auto-mount until the user explicitly retries.
+  const [crashedLastLoad, setCrashedLastLoad] = useState(false);
   // Bumping remounts the session, which re-runs useLLM's load (retry path).
   const [session, setSession] = useState(0);
   const generateRef = useRef<LocalGenerate | null>(null);
@@ -93,9 +101,11 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
       .catch((e) =>
         console.error("[LocalEngineProvider] settings load failed:", (e as Error).message),
       );
+    // Read BEFORE any mount decision: a stale sentinel = last load crashed.
+    loadLoadSentinel().then(setCrashedLastLoad);
   }, []);
 
-  const state = localEngineState(settings, runtime);
+  const state = localEngineState(settings, runtime, crashedLastLoad);
 
   // Screen-off suspends the app's network and kills the 1.3 GB model download
   // (user report 2026-07-16) — hold the screen awake for the download only.
@@ -129,6 +139,23 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
     }
   }, [state.kind, update]);
 
+  const mountAllowed = settings.enabled && !crashedLastLoad;
+
+  useEffect(() => {
+    if (!mountAllowed) return;
+    armLoadSentinel().catch((e) =>
+      console.error("[LocalEngineProvider] sentinel arm failed:", (e as Error).message),
+    );
+  }, [mountAllowed, session]);
+
+  useEffect(() => {
+    if (runtime?.isReady || runtime?.error) {
+      clearLoadSentinel().catch((e) =>
+        console.error("[LocalEngineProvider] sentinel clear failed:", (e as Error).message),
+      );
+    }
+  }, [runtime?.isReady, runtime?.error]);
+
   const clearSession = useCallback(() => {
     setRuntime(null);
     generateRef.current = null;
@@ -137,14 +164,20 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
   const setEnabled = useCallback(
     (enabled: boolean) => {
       // Disabling keeps the downloaded files — it only unmounts the session
-      // and stops the router from choosing it.
+      // and stops the router from choosing it. Any explicit toggle is consent
+      // to try again, so the crash block lifts.
       if (!enabled) clearSession();
+      setCrashedLastLoad(false);
+      if (!enabled) clearLoadSentinel().catch(() => {});
       update({ ...settingsRef.current, enabled });
     },
     [clearSession, update],
   );
 
   const retry = useCallback(() => {
+    // Explicit retry lifts the crash block; the mount effect re-arms the
+    // sentinel, so a second crash is caught the same way.
+    setCrashedLastLoad(false);
     clearSession();
     setSession((s) => s + 1);
   }, [clearSession]);
@@ -189,7 +222,7 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
   return (
     <LocalEngineContext.Provider value={value}>
       {children}
-      {settings.enabled && (
+      {mountAllowed && (
         // Headless and fallback-less: the session renders nothing, so there is
         // nothing to show while it loads — the Profile row reports progress.
         <SessionBoundary key={session} onError={onSessionCrash}>

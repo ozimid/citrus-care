@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  LOAD_SENTINEL_STORAGE_KEY,
   firstRunSetupCard,
   DEFAULT_LOCAL_ENGINE_SETTINGS,
   LOCAL_MODEL_DOWNLOAD_WARNING,
@@ -230,5 +231,48 @@ describe("firstRunSetupCard", () => {
 
   it("disappears once the engine is ready", () => {
     expect(firstRunSetupCard({ kind: "ready" })).toBeNull();
+  });
+});
+
+// P0 (S23 crash loop, 2026-07-16): a native crash during model load kills the
+// process before any JS error handling — the sentinel is how the NEXT launch
+// knows, and "crashed" is the honest state that stops the auto-mount loop.
+describe("crash sentinel state", () => {
+  const on = { enabled: true, downloaded: true };
+
+  it("enabled + crashed last load = crashed (no auto-mount), regardless of runtime", () => {
+    expect(localEngineState(on, null, true)).toEqual({ kind: "crashed" });
+  });
+
+  it("disabled wins over the crash flag", () => {
+    expect(localEngineState({ enabled: false, downloaded: true }, null, true)).toEqual({
+      kind: "off",
+    });
+  });
+
+  it("no crash flag behaves exactly as before", () => {
+    expect(localEngineState(on, null, false)).toEqual({ kind: "preparing" });
+  });
+
+  it("crashed status/subtitle are honest — memory hint, retry, no cloud talk", () => {
+    expect(localEngineStatusLabel({ kind: "crashed" })).toMatch(/crash/i);
+    const sub = localEngineSubtitle({ kind: "crashed" }, { enabled: true, downloaded: true });
+    expect(sub).toMatch(/memory/i);
+    expect(sub).toMatch(/rest of the app|works without/i);
+    expect(sub).not.toMatch(/gemini|cloud/i);
+  });
+
+  it("the setup card offers retry after a crash and says it plainly", () => {
+    const card = firstRunSetupCard({ kind: "crashed" });
+    expect(card?.cta).toBe("retry");
+    expect(card?.title).toMatch(/crash/i);
+  });
+
+  it("crashed never routes local", () => {
+    expect(shouldRouteLocal({ kind: "crashed" })).toBe(false);
+  });
+
+  it("sentinel key follows the store naming convention", () => {
+    expect(LOAD_SENTINEL_STORAGE_KEY).toBe("citrus.engine-load-sentinel.v1");
   });
 });

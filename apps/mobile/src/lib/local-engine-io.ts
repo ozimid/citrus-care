@@ -22,6 +22,7 @@ import {
   parseLocalEngineSettings,
   serializeLocalEngineSettings,
   type LocalEngineSettings,
+  LOAD_SENTINEL_STORAGE_KEY,
 } from "./local-engine";
 
 export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
@@ -32,6 +33,26 @@ export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
     console.error("[local-engine-io] settings load failed:", (e as Error).message);
     return DEFAULT_LOCAL_ENGINE_SETTINGS;
   }
+}
+
+/** P0 crash sentinel: present = the last model load never reported back (the
+ * process died mid-load). Read degrades to false; arm/clear are best-effort
+ * at the call site (a failed sentinel write must not block the engine). */
+export async function loadLoadSentinel(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(LOAD_SENTINEL_STORAGE_KEY)) !== null;
+  } catch (e) {
+    console.error("[local-engine] sentinel read failed:", (e as Error).message);
+    return false;
+  }
+}
+
+export async function armLoadSentinel(): Promise<void> {
+  await AsyncStorage.setItem(LOAD_SENTINEL_STORAGE_KEY, new Date().toISOString());
+}
+
+export async function clearLoadSentinel(): Promise<void> {
+  await AsyncStorage.removeItem(LOAD_SENTINEL_STORAGE_KEY);
 }
 
 export async function saveLocalEngineSettings(settings: LocalEngineSettings): Promise<void> {

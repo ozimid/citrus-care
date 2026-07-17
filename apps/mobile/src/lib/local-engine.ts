@@ -9,6 +9,11 @@ import { SPIKE_USER_PROMPT } from "./spike-vlm";
 
 export const LOCAL_ENGINE_STORAGE_KEY = "citrus.local-engine.v1";
 
+/** Present in AsyncStorage = the last model load never reported back — the
+ * process died mid-load (native OOM/driver crash bypasses all JS handling).
+ * The next launch sees it and refuses to auto-mount (P0: S23 crash loop). */
+export const LOAD_SENTINEL_STORAGE_KEY = "citrus.engine-load-sentinel.v1";
+
 /** Quantized Gemma 4 E2B, per the research doc's model choice. */
 export const LOCAL_MODEL_SIZE_LABEL = "1.3 GB";
 
@@ -116,6 +121,7 @@ export interface LocalEngineRuntime {
 export type LocalEngineState =
   | { kind: "off" }
   | { kind: "downloading"; percent: number }
+  | { kind: "crashed" }
   | { kind: "preparing" }
   | { kind: "ready" }
   | { kind: "failed" };
@@ -126,8 +132,12 @@ export type LocalEngineState =
 export function localEngineState(
   settings: LocalEngineSettings,
   runtime: LocalEngineRuntime | null,
+  crashedLastLoad = false,
 ): LocalEngineState {
   if (!settings.enabled) return { kind: "off" };
+  // A stale load sentinel means the previous mount crashed the whole process —
+  // stay unmounted and honest until the user explicitly retries.
+  if (crashedLastLoad) return { kind: "crashed" };
   if (!runtime) return { kind: "preparing" };
   // Error wins over isReady: a session that errored can't be trusted to infer.
   if (runtime.error) return { kind: "failed" };
@@ -156,6 +166,8 @@ export function localEngineStatusLabel(state: LocalEngineState): string {
       return "Preparing…";
     case "ready":
       return "Ready";
+    case "crashed":
+      return "Stopped after a crash";
     case "failed":
       return "Setup failed";
   }
@@ -191,6 +203,12 @@ export function firstRunSetupCard(
         body: "Check free space and your connection, then try again.",
         cta: "retry",
       };
+    case "crashed":
+      return {
+        title: "The AI crashed this phone last time",
+        body: "It may not have enough free memory. Close other apps and retry — or leave it off; the rest of the app works without it.",
+        cta: "retry",
+      };
     case "ready":
       return null;
   }
@@ -211,6 +229,8 @@ export function localEngineSubtitle(
       return "Starting the on-device model…";
     case "ready":
       return "Photos are analyzed on this phone — nothing is sent anywhere, ever.";
+    case "crashed":
+      return "Loading the model crashed the app last time — this phone may not have enough free memory. The rest of the app works without it. Tap to try again.";
     case "failed":
       return "Couldn't set up the on-device model — assessments can't run until this is fixed. Tap to try again.";
   }

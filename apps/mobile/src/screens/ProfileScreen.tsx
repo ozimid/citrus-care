@@ -309,7 +309,7 @@ function LocalEngineCard() {
     ]);
   }
 
-  const failed = state.kind === "failed";
+  const failed = state.kind === "failed" || state.kind === "crashed";
   return (
     <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
       <Text style={[styles.label, { color: t.sub }]}>On-device AI</Text>

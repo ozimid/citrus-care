@@ -2,7 +2,7 @@
   "expo": {
     "name": "Citrus Care",
     "slug": "citrus-care",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "scheme": "citruscare",
     "platforms": [
       "ios",
@@ -28,7 +28,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#059669"
       },
-      "versionCode": 3
+      "versionCode": 4
     },
     "plugins": [
       "expo-web-browser",
