@@ -164,6 +164,38 @@ export function localEngineStatusLabel(state: LocalEngineState): string {
 /** Row subtitle. Honest about the two things a user can't see: disabling keeps
  * the downloaded files, and a failed/off engine means assessments don't run at
  * all — there is no fallback (D-17). */
+/** F28 first-run guidance: the Plants screen offers the model download BEFORE
+ * the user walks the add-plant → photo → analyze funnel into a not-ready
+ * error (friend feedback 2026-07-16). Null once ready — the card vanishes. */
+export function firstRunSetupCard(
+  state: LocalEngineState,
+): { title: string; body: string; cta: "enable" | "retry" | null } | null {
+  switch (state.kind) {
+    case "off":
+      return {
+        title: "Set up the plant doctor",
+        body: "One-time download of the on-device AI (~1.3 GB, Wi-Fi recommended). After that, every diagnosis runs right on your phone — nothing leaves it.",
+        cta: "enable",
+      };
+    case "downloading":
+      return {
+        title: `Downloading the AI — ${state.percent}%`,
+        body: "Keep the app open. Assessments unlock the moment it finishes.",
+        cta: null,
+      };
+    case "preparing":
+      return { title: "Getting the AI ready…", body: "A few seconds.", cta: null };
+    case "failed":
+      return {
+        title: "AI setup didn't finish",
+        body: "Check free space and your connection, then try again.",
+        cta: "retry",
+      };
+    case "ready":
+      return null;
+  }
+}
+
 export function localEngineSubtitle(
   state: LocalEngineState,
   settings: LocalEngineSettings,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  firstRunSetupCard,
   DEFAULT_LOCAL_ENGINE_SETTINGS,
   LOCAL_MODEL_DOWNLOAD_WARNING,
   LOCAL_MODEL_REQUIRED_FREE_BYTES,
@@ -195,5 +196,37 @@ describe("stated requirements (numbers come from the research doc)", () => {
 
   it("repeats them in the pre-download warning — before the 1.3 GB, not after", () => {
     expect(LOCAL_MODEL_DOWNLOAD_WARNING).toContain(LOCAL_MODEL_REQUIREMENTS);
+  });
+});
+
+// F28: first-run setup guidance — the model download must be offered BEFORE
+// the user invests in add-plant → photo → analyze (friend feedback 2026-07-16:
+// hit the honest not-ready error at the END of the funnel).
+describe("firstRunSetupCard", () => {
+  it("offers the download when the engine is off", () => {
+    const card = firstRunSetupCard({ kind: "off" });
+    expect(card?.cta).toBe("enable");
+    expect(card?.body).toMatch(/1\.3 GB/);
+    expect(card?.body).toMatch(/nothing leaves/i);
+  });
+
+  it("shows live progress while downloading, with no CTA", () => {
+    const card = firstRunSetupCard({ kind: "downloading", percent: 42 });
+    expect(card?.title).toContain("42%");
+    expect(card?.cta).toBeNull();
+  });
+
+  it("shows a busy state while preparing", () => {
+    expect(firstRunSetupCard({ kind: "preparing" })?.cta).toBeNull();
+  });
+
+  it("offers retry after a failure, honestly", () => {
+    const card = firstRunSetupCard({ kind: "failed" });
+    expect(card?.cta).toBe("retry");
+    expect(card?.body).not.toMatch(/gemini|cloud/i);
+  });
+
+  it("disappears once the engine is ready", () => {
+    expect(firstRunSetupCard({ kind: "ready" })).toBeNull();
   });
 });

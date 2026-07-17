@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { bandColor, healthBand } from "../lib/health";
 import { type PlantListItem } from "../lib/plants";
@@ -109,6 +110,7 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.green} />
           }
+          ListHeaderComponent={<LocalEngineSetupCard />}
           ListEmptyComponent={
             error ? null : <EmptyState t={t} onAdd={() => setAdding(true)} />
           }

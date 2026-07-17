@@ -7,6 +7,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -70,7 +71,13 @@ export function ProfileScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: t.canvas }]}>
+    // Scrollable since the Support card joined (2026-07-16): five cards no
+    // longer fit one screen — About was clipped behind the tab bar.
+    <ScrollView
+      style={{ backgroundColor: t.canvas }}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={[styles.heading, { color: t.text }]}>Profile</Text>
 
       <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
@@ -143,7 +150,7 @@ export function ProfileScreen() {
       <Text style={[styles.foot, { color: t.sub }]}>
         Your plants, photos and history live only on this phone — nothing is sent to a server.
       </Text>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -256,9 +263,10 @@ function SupportCard() {
           accessibilityRole="button"
           accessibilityLabel="Buy me a coffee"
           onPress={openCoffee}
-          style={[styles.dataButton, { borderColor: t.border }]}
+          // Web parity (user feedback): the landing's BMC button is amber.
+          style={[styles.dataButton, { borderColor: "#fbbf24", backgroundColor: "#fbbf24" }]}
         >
-          <Text style={[styles.dataButtonText, { color: t.text }]}>☕ Buy me a coffee</Text>
+          <Text style={[styles.dataButtonText, { color: "#1c1917" }]}>☕ Buy me a coffee</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -331,7 +339,7 @@ function LocalEngineCard() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 68, paddingHorizontal: 20, gap: 14 },
+  container: { paddingTop: 68, paddingHorizontal: 20, paddingBottom: 110, gap: 14 },
   heading: { fontSize: 24, fontWeight: "600", letterSpacing: -0.4 },
   card: {
     borderWidth: StyleSheet.hairlineWidth,
