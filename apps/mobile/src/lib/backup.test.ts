@@ -3,6 +3,7 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import type { StoredAssessment } from "./assessment-store";
 import type { StoredPlant } from "./plant-store";
 import {
+  base64ToBytes,
   buildBackup,
   mergeBackup,
   parseBackup,
@@ -52,7 +53,7 @@ describe("buildBackup / serializeBackup / parseBackup", () => {
   it("round-trips the four stores through a JSON document", () => {
     const doc = buildBackup(stores(), "2026-07-15T12:00:00Z");
     expect(doc.exportedAt).toBe("2026-07-15T12:00:00Z");
-    expect(parseBackup(serializeBackup(doc))).toEqual(stores());
+    expect(parseBackup(serializeBackup(doc))).toEqual({ stores: stores(), photos: [] });
   });
 
   it("returns null for non-JSON, a non-object, or a foreign document", () => {
@@ -71,12 +72,12 @@ describe("buildBackup / serializeBackup / parseBackup", () => {
       wateringLog: {},
       photoIndex: {},
     };
-    const parsed = parseBackup(JSON.stringify(doc));
+    const parsed = parseBackup(JSON.stringify(doc))?.stores;
     expect(Object.keys(parsed!.plants)).toEqual(["good"]);
   });
 
   it("tolerates missing sections (empty stores)", () => {
-    const parsed = parseBackup(JSON.stringify({ app: "citrus-care", version: 1, exportedAt: "t" }));
+    const parsed = parseBackup(JSON.stringify({ app: "citrus-care", version: 1, exportedAt: "t" }))?.stores;
     expect(parsed).toEqual({ plants: {}, assessments: {}, wateringLog: {}, photoIndex: {} });
   });
 });
@@ -100,5 +101,46 @@ describe("mergeBackup", () => {
     const { added } = mergeBackup(current, incoming);
     expect(added.assessments).toBe(1);
     expect(Object.keys(current.assessments)).toEqual(["a1"]);
+  });
+});
+
+// F29: photos travel INSIDE the backup (base64) — a restore on a new phone
+// brings the pictures back, not just the index (user request 2026-07-16).
+describe("backup v2 photos", () => {
+  const photo = {
+    assessmentId: "a1",
+    plantId: "p1",
+    fileName: "x.jpg",
+    base64: "aGVsbG8=",
+  };
+
+  it("round-trips photos through the document", () => {
+    const doc = buildBackup(stores(), "2026-07-16T00:00:00Z", [photo]);
+    const parsed = parseBackup(serializeBackup(doc));
+    expect(parsed?.photos).toEqual([photo]);
+  });
+
+  it("a v1 backup (no photos field) parses with an empty photo list", () => {
+    const parsed = parseBackup(JSON.stringify({ app: "citrus-care", version: 1, exportedAt: "t" }));
+    expect(parsed?.photos).toEqual([]);
+  });
+
+  it("drops malformed photo entries without throwing", () => {
+    const doc = {
+      app: "citrus-care",
+      version: 2,
+      exportedAt: "t",
+      photos: [photo, { assessmentId: 5 }, "junk", { ...photo, base64: 7 }],
+    };
+    expect(parseBackup(JSON.stringify(doc))?.photos).toEqual([photo]);
+  });
+});
+
+describe("base64ToBytes", () => {
+  it("decodes standard base64", () => {
+    expect(Array.from(base64ToBytes("aGVsbG8="))).toEqual([104, 101, 108, 108, 111]);
+  });
+  it("handles padding-free input", () => {
+    expect(Array.from(base64ToBytes("aGk"))).toEqual([104, 105]);
   });
 });
