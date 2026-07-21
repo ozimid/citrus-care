@@ -4,3 +4,6 @@ dist/
 *.log
 .env
 .env.*
+
+# local eas builds land here (apps/mobile)
+build-local.apk
