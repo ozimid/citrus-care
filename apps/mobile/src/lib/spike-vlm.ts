@@ -27,6 +27,7 @@ Rules:
 - For a cut: a correct cut is just outside the branch collar; a flush cut (too close to the trunk) or a long stub both heal badly. Look for decay, borer holes, or callous forming over the edges.
 - For "not_a_plant": health_score 0, say what you see in the summary, leave the lists empty.
 - At most 3 symptoms, 3 causes, 3 recommendations (priority 1 = most important). Be concrete and concise; summary <= 250 characters.
+"plant_guess" (OPTIONAL: only if you are reasonably confident what plant this is): {"plant_type": one of tree|shrub|flower|succulent|vegetable|herb|vine|other, "species": common name in plain words}. Omit plant_guess entirely when unsure.
 
 Respond with VALID JSON ONLY — no prose, no markdown fences — exactly this shape:
 {

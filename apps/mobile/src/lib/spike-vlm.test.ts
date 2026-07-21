@@ -102,3 +102,35 @@ describe("parseDiagnosisOutput", () => {
     expect(parseDiagnosisOutput(bad)).toEqual({ ok: false, reason: "schema-mismatch" });
   });
 });
+
+// F35 snap-first: the model may also guess WHAT plant it sees; the guess must
+// survive the schema (strip-mode drops undeclared keys) and the prompt must
+// ask for it (optional, only-when-confident).
+describe("plant_guess (F35)", () => {
+  const base = {
+    health_score: 70,
+    summary: "Mild chlorosis.",
+    subject: "whole_plant",
+    symptoms: [],
+    causes: [],
+    recommendations: [],
+  };
+
+  it("survives parsing when present", () => {
+    const raw = JSON.stringify({ ...base, plant_guess: { plant_type: "tree", species: "Washington Navel Orange" } });
+    const parsed = parseDiagnosisOutput(raw);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.diagnosis.plant_guess?.species).toBe("Washington Navel Orange");
+  });
+
+  it("is optional — absent guess still parses", () => {
+    const parsed = parseDiagnosisOutput(JSON.stringify(base));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.diagnosis.plant_guess).toBeUndefined();
+  });
+
+  it("the prompt asks for it, framed as only-when-confident", () => {
+    expect(SPIKE_SYSTEM_PROMPT).toMatch(/plant_guess/);
+    expect(SPIKE_SYSTEM_PROMPT).toMatch(/confident|sure|omit/i);
+  });
+});

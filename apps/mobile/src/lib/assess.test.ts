@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
+  persistDeferredAssessment,
+  runDiagnoseOnly,
   ANALYSIS_FAILED_ERROR,
   ANALYSIS_TIMEOUT_ERROR,
   ANALYSIS_UNREADABLE_ERROR,
@@ -363,5 +365,92 @@ describe("friendlyAssessError (generic-message rule)", () => {
       "Something went wrong. Please try again.",
     );
     expect(friendlyAssessError("weird")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+// F35 snap-first: diagnose with NO plant yet (nothing saved/persisted), then
+// persist later once the user confirmed the AI-drafted plant.
+describe("runDiagnoseOnly (F35)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("diagnoses without saving or persisting anything", async () => {
+    const { deps, saved, linked } = makeDeps();
+    const result = await runDiagnoseOnly(deps, { photoUri: "file:///tmp/p.jpg" });
+    expect(result.status).toBe("diagnosed");
+    if (result.status === "diagnosed") expect(result.diagnosis.health_score).toBe(81);
+    expect(saved).toHaveLength(0);
+    expect(linked).toHaveLength(0);
+  });
+
+  it("returns rejected for a non-plant, still persisting nothing", async () => {
+    const { local } = makeLocal({
+      generate: async () =>
+        JSON.stringify({ ...LOCAL_DIAGNOSIS, subject: "not_a_plant", health_score: 0 }),
+    });
+    const { deps, saved } = makeDeps({ local });
+    const result = await runDiagnoseOnly(deps, { photoUri: "file:///tmp/p.jpg" });
+    expect(result.status).toBe("rejected");
+    expect(saved).toHaveLength(0);
+  });
+
+  it("throws the honest not-ready error when the engine is off", async () => {
+    const { local } = makeLocal();
+    local.isReady = () => false;
+    const { deps } = makeDeps({ local });
+    await expect(runDiagnoseOnly(deps, { photoUri: "u" })).rejects.toThrow(
+      LOCAL_UNAVAILABLE_ERROR,
+    );
+  });
+});
+
+describe("persistDeferredAssessment (F35)", () => {
+  it("saves the photo, persists the row, links the photo — in that order", async () => {
+    const order: string[] = [];
+    const { local } = makeLocal();
+    local.persist = async () => {
+      order.push("persist");
+      return "assessment-9";
+    };
+    const { deps } = makeDeps({
+      local,
+      savePhoto: async () => {
+        order.push("save");
+        return "file:///docs/photos/p9/x.jpg";
+      },
+      linkPhoto: async () => {
+        order.push("link");
+      },
+    });
+    const id = await persistDeferredAssessment(deps, {
+      plantId: "p9",
+      photoUri: "file:///tmp/p.jpg",
+      diagnosis: LOCAL_DIAGNOSIS,
+      raw: LOCAL_JSON,
+    });
+    expect(id).toBe("assessment-9");
+    expect(order).toEqual(["save", "persist", "link"]);
+  });
+
+  it("link failures stay best-effort (no throw)", async () => {
+    const { local } = makeLocal();
+    const { deps } = makeDeps({
+      local,
+      linkPhoto: async () => {
+        throw new Error("index write failed");
+      },
+    });
+    await expect(
+      persistDeferredAssessment(deps, {
+        plantId: "p",
+        photoUri: "u",
+        diagnosis: LOCAL_DIAGNOSIS,
+        raw: "{}",
+      }),
+    ).resolves.toBeTruthy();
   });
 });

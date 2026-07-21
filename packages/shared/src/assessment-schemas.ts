@@ -42,6 +42,14 @@ export const assessmentDiagnosisSchema: z.ZodType<AssessmentDiagnosis> = z.objec
   symptoms: z.array(symptomSchema).max(8),
   causes: z.array(causeSchema).max(6),
   recommendations: z.array(recommendationSchema).max(5),
+  /** F35: optional identification of WHAT plant the photo shows — drafts the
+   * new-plant form in snap-first capture. Only when the model is confident. */
+  plant_guess: z
+    .object({
+      plant_type: z.string().max(40).optional(),
+      species: z.string().max(120).optional(),
+    })
+    .optional(),
   comparison: z
     .object({
       delta: z.enum(["better", "same", "worse", "unknown"]),

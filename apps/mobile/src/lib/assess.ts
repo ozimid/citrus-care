@@ -179,23 +179,7 @@ async function runLocal(
   | { status: "assessed"; assessmentId: string; diagnosis: AssessmentDiagnosis }
   | { status: "rejected"; diagnosis: AssessmentDiagnosis }
 > {
-  let inference: { diagnosis: AssessmentDiagnosis; raw: string } | null;
-  try {
-    inference = await withBudget(localDiagnose(local, input, localUri), {
-      slowMs: LOCAL_SLOW_THRESHOLD_MS,
-      hardMs: LOCAL_HARD_CEILING_MS,
-      onSlow: hooks.onSlow,
-      onHardTimeout: () => local.interrupt?.(),
-    });
-  } catch (e) {
-    console.error("[runAssess] on-device inference failed:", (e as Error).message);
-    if (e instanceof LocalTimeoutError) throw new Error(ANALYSIS_TIMEOUT_ERROR);
-    throw new Error(ANALYSIS_FAILED_ERROR);
-  }
-
-  // Unparseable output — the small local model has no responseSchema, so the
-  // shared Zod schema is the only gate (logged with its reason in localDiagnose).
-  if (!inference) throw new Error(ANALYSIS_UNREADABLE_ERROR);
+  const inference = await diagnoseWithBudget(local, localUri, hooks);
 
   // F21: don't put a non-plant in a plant's timeline unless the user says to.
   if (inference.diagnosis.subject === "not_a_plant" && !input.force) {
@@ -216,9 +200,89 @@ async function runLocal(
   return { status: "assessed", assessmentId, diagnosis: inference.diagnosis };
 }
 
+/** The budget-wrapped diagnose step shared by the normal flow and F35's
+ * diagnose-only path: 25s slow hint, 120s interrupt ceiling, honest errors,
+ * schema gate. Never persists anything. */
+async function diagnoseWithBudget(
+  local: LocalAssessDeps,
+  localUri: string,
+  hooks: AssessHooks,
+): Promise<{ diagnosis: AssessmentDiagnosis; raw: string }> {
+  let inference: { diagnosis: AssessmentDiagnosis; raw: string } | null;
+  try {
+    inference = await withBudget(localDiagnose(local, localUri), {
+      slowMs: LOCAL_SLOW_THRESHOLD_MS,
+      hardMs: LOCAL_HARD_CEILING_MS,
+      onSlow: hooks.onSlow,
+      onHardTimeout: () => local.interrupt?.(),
+    });
+  } catch (e) {
+    console.error("[runAssess] on-device inference failed:", (e as Error).message);
+    if (e instanceof LocalTimeoutError) throw new Error(ANALYSIS_TIMEOUT_ERROR);
+    throw new Error(ANALYSIS_FAILED_ERROR);
+  }
+  // Unparseable output — the small local model has no responseSchema, so the
+  // shared Zod schema is the only gate (logged with its reason in localDiagnose).
+  if (!inference) throw new Error(ANALYSIS_UNREADABLE_ERROR);
+  return inference;
+}
+
+export type DiagnoseOnlyResult =
+  | { status: "diagnosed"; diagnosis: AssessmentDiagnosis; raw: string }
+  | { status: "rejected"; diagnosis: AssessmentDiagnosis; raw: string };
+
+/** F35 snap-first: diagnose a photo BEFORE any plant exists. Nothing is saved
+ * or persisted — the caller shows the AI-drafted new-plant sheet and, once the
+ * user confirms, completes with persistDeferredAssessment. */
+export async function runDiagnoseOnly(
+  deps: AssessDeps,
+  input: { photoUri: string; force?: boolean },
+  hooks: AssessHooks = {},
+): Promise<DiagnoseOnlyResult> {
+  if (!deps.local.isReady()) throw new Error(LOCAL_UNAVAILABLE_ERROR);
+  hooks.onPhase?.("analyzing");
+  const inference = await diagnoseWithBudget(deps.local, input.photoUri, hooks);
+  if (inference.diagnosis.subject === "not_a_plant" && !input.force) {
+    return { status: "rejected", diagnosis: inference.diagnosis, raw: inference.raw };
+  }
+  return { status: "diagnosed", diagnosis: inference.diagnosis, raw: inference.raw };
+}
+
+/** F35: the write half of snap-first — runs AFTER the user confirmed the new
+ * plant. Same order and honesty as the normal flow: photo file first, then the
+ * assessment row, then the best-effort thumbnail link. Returns the new
+ * assessment id. */
+export async function persistDeferredAssessment(
+  deps: AssessDeps,
+  args: { plantId: string; photoUri: string; diagnosis: AssessmentDiagnosis; raw: string },
+  hooks: AssessHooks = {},
+): Promise<string> {
+  hooks.onPhase?.("saving");
+  let localUri: string;
+  try {
+    localUri = await deps.savePhoto(args.plantId, args.photoUri);
+    hooks.onPhotoSaved?.(localUri);
+  } catch (e) {
+    console.error("[runAssess] deferred photo save failed:", (e as Error).message);
+    throw new Error(PHOTO_SAVE_FAILED_ERROR);
+  }
+  let assessmentId: string;
+  try {
+    assessmentId = await deps.local.persist({
+      plantId: args.plantId,
+      diagnosis: args.diagnosis,
+      raw: args.raw,
+    });
+  } catch (e) {
+    console.error("[runAssess] deferred persist failed:", (e as Error).message);
+    throw new Error(PERSIST_FAILED_ERROR);
+  }
+  await linkPhotoBestEffort(deps, assessmentId, localUri, args.plantId, "on-device");
+  return assessmentId;
+}
+
 async function localDiagnose(
   local: LocalAssessDeps,
-  input: AssessInput,
   localUri: string,
 ): Promise<{ diagnosis: AssessmentDiagnosis; raw: string } | null> {
   const imageUri = await local.prepare(localUri);

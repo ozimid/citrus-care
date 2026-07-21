@@ -78,6 +78,12 @@ export interface AssessmentDiagnosis {
   symptoms: Symptom[];
   causes: Cause[];
   recommendations: Recommendation[];
+  /** F35: optional identification of what plant the photo shows (drafts the
+   * new-plant form in snap-first capture). */
+  plant_guess?: {
+    plant_type?: string;
+    species?: string;
+  };
   comparison?: {
     delta: "better" | "same" | "worse" | "unknown";
     notes: string;

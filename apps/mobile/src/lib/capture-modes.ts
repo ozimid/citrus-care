@@ -7,7 +7,7 @@
 
 /** The one viewfinder hint. It asks for a good photo without asking the user
  * what the photo is; the model decides that (diagnosis.subject). */
-export const CAPTURE_HINT = "Fill the frame with the affected part — closer is better";
+export const CAPTURE_HINT = "Get close to the sick part in good light — the whole photo is analyzed, nothing gets cropped";
 
 /** The FAB needs a target plant: an explicitly requested plant wins (the
  * detail screen's "Assess this plant"), then the forced choice when there is

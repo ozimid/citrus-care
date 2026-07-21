@@ -5,7 +5,7 @@
 // plus a mobile-side 5-digit ZIP rule. D-17: no user_id — plants live only on
 // the phone.
 
-import { newPlantSchema, type NewPlantInput } from "@citrus/shared";
+import { PLANT_TYPES, newPlantSchema, type AssessmentDiagnosis, type NewPlantInput } from "@citrus/shared";
 import type { StoredPlant } from "./plant-store";
 
 export const GENERIC_CREATE_PLANT_ERROR = "Could not add the plant. Please try again.";
@@ -29,6 +29,26 @@ export const emptyNewPlantForm: NewPlantForm = {
 };
 
 /** Prefill for the edit sheet: DB row (nulls) → form state (empty strings). */
+/** F35: draft the new-plant form from the AI's optional plant_guess. The user
+ * always confirms — a guess is a starting point, never a decision. Unknown
+ * types collapse to "other"; no guess = empty prefill (form opens blank). */
+export function prefillFromDiagnosis(diagnosis: AssessmentDiagnosis): Partial<NewPlantForm> {
+  const guess = diagnosis.plant_guess;
+  if (!guess) return {};
+  const prefill: Partial<NewPlantForm> = {};
+  if (guess.plant_type) {
+    const normalized = guess.plant_type.trim().toLowerCase();
+    prefill.plant_type = (PLANT_TYPES as readonly string[]).includes(normalized)
+      ? normalized
+      : "other";
+  }
+  if (guess.species) {
+    prefill.species = guess.species;
+    prefill.name = guess.species;
+  }
+  return prefill;
+}
+
 export function formFromPlant(plant: {
   name: string;
   plant_type: string;

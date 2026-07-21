@@ -46,13 +46,17 @@ interface EditablePlant {
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** Called after a successful insert/update — parent refreshes and closes. */
-  onSaved: () => void;
+  /** Called after a successful insert/update — parent refreshes and closes.
+   * Receives the plant id + name (F35's deferred assess needs them). */
+  onSaved: (plantId: string, name: string) => void;
   /** Edit mode: prefill from this plant and update it on submit. */
   plant?: EditablePlant | null;
+  /** F35 snap-first: draft values from the AI's plant_guess (create mode
+   * only). The user always reviews before saving. */
+  prefill?: Partial<NewPlantForm> | null;
 }
 
-export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
+export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Props) {
   const { t } = useTheme();
   const [form, setForm] = useState<NewPlantForm>(emptyNewPlantForm);
   const [errors, setErrors] = useState<NewPlantFieldErrors>({});
@@ -71,6 +75,14 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
     setSubmitError(null);
     setCultivarOpen(false);
   }, [visible, plant]);
+
+  // F35: AI-drafted create mode — merge the guess over an empty form on open.
+  useEffect(() => {
+    if (!visible || plant || !prefill) return;
+    setForm({ ...emptyNewPlantForm, ...prefill });
+    setErrors({});
+    setSubmitError(null);
+  }, [visible, plant, prefill]);
 
   const set = (field: keyof NewPlantForm, value: string) =>
     setForm((f) => ({ ...f, [field]: value }));
@@ -92,17 +104,19 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
     setSubmitError(null);
     setBusy(true);
     try {
+      let savedId: string;
       if (plant) {
         await updatePlant(plant.id, result.data);
+        savedId = plant.id;
       } else {
-        await insertPlant(result.data);
+        savedId = await insertPlant(result.data);
         // F20: the plant is created without a care profile. It is generated
         // on-device, opportunistically, when the detail screen's watering card
         // finds the model ready — so adding a plant never waits on the model.
         setForm(emptyNewPlantForm);
       }
       setCultivarOpen(false);
-      onSaved();
+      onSaved(savedId, result.data.name);
     } catch {
       // insertPlant/updatePlant already logged details; generic message only.
       setSubmitError(editing ? GENERIC_UPDATE_PLANT_ERROR : GENERIC_CREATE_PLANT_ERROR);
@@ -130,6 +144,11 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant }: Props) {
                 <Text style={[styles.cancel, { color: t.sub }]}>Cancel</Text>
               </Pressable>
             </View>
+            {!editing && prefill ? (
+              <Text style={[styles.prefillNote, { color: t.sub }]}>
+                ✨ AI filled this in from the photo — check it and adjust.
+              </Text>
+            ) : null}
             <ScrollView
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.body}
@@ -371,6 +390,7 @@ function inputStyle(t: Tokens) {
 }
 
 const styles = StyleSheet.create({
+  prefillNote: { fontSize: 13, marginBottom: 8 },
   backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.45)" },
   backdropTouch: { flex: 1 },
   sheet: {

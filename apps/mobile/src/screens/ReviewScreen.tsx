@@ -2,19 +2,25 @@ import { useCallback, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { RoundButton } from "../components/CaptureOverlay";
 import { useLocalEngine } from "../components/LocalEngineProvider";
+import { NewPlantSheet } from "../components/NewPlantSheet";
 import {
   friendlyAssessError,
+  persistDeferredAssessment,
   runAssess,
+  runDiagnoseOnly,
+  type AssessDeps,
   type AssessPhase,
   type AssessedResult,
   type RejectedResult,
 } from "../lib/assess";
+import { prefillFromDiagnosis } from "../lib/new-plant";
 import { LOCAL_USER_PROMPT } from "../lib/local-engine";
 import { persistLocalAssessment } from "../lib/local-engine-io";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { linkPhotoToAssessment, savePlantPhoto } from "../lib/photo-store-io";
 import { SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
+import type { AssessmentDiagnosis } from "@citrus/shared";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
 
@@ -36,11 +42,14 @@ const SLOW_LABEL = "Still analyzing — the first one takes longer…";
 
 interface Props {
   photo: PreparedPhoto;
-  plantId: string;
-  plantName: string;
+  /** Null = F35 snap-first: no plant yet — diagnose, then the AI-drafted
+   * new-plant sheet creates one before anything persists. */
+  plantId: string | null;
+  plantName: string | null;
   onRetake: () => void;
   onClose: () => void;
-  onAssessed: (result: AssessedResult) => void;
+  /** `plant` is set when the assessment landed on a just-created plant. */
+  onAssessed: (result: AssessedResult, plant?: { id: string; name: string }) => void;
 }
 
 export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onAssessed }: Props) {
@@ -54,43 +63,67 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
   /** F21: the model read a non-plant and nothing was saved. The photo is
    * still on the phone; the user decides whether to keep the assessment. */
   const [rejection, setRejection] = useState<RejectedResult | null>(null);
+  /** F35: a finished diagnosis waiting for its plant (sheet open). */
+  const [deferred, setDeferred] = useState<{ diagnosis: AssessmentDiagnosis; raw: string } | null>(
+    null,
+  );
   const busy = phase !== null;
   const busyLabel = slow ? SLOW_LABEL : phase ? PHASE_LABEL[phase] : "";
+
+  const buildDeps = useCallback(
+    (): AssessDeps => ({
+      savePhoto: savePlantPhoto,
+      linkPhoto: linkPhotoToAssessment,
+      local: {
+        isReady: localEngine.isReady,
+        // 512px long edge for the local model (the saved copy has this
+        // photo's already-known dimensions).
+        prepare: async (uri) =>
+          (
+            await downscalePhoto(
+              uri,
+              { width: photo.width, height: photo.height },
+              SPIKE_MAX_DIMENSION,
+            )
+          ).uri,
+        // The diagnosis prompts live in the pure lib modules; the session
+        // is given them per call (F21: one prompt, the model reports subject).
+        generate: ({ imageUri }) =>
+          localEngine.generate({
+            system: SPIKE_SYSTEM_PROMPT,
+            user: LOCAL_USER_PROMPT,
+            imageUri,
+          }),
+        interrupt: localEngine.interrupt,
+        // The phone inserts the row itself into the local store.
+        persist: persistLocalAssessment,
+      },
+    }),
+    [localEngine, photo.height, photo.width],
+  );
 
   const analyze = useCallback(async (force = false) => {
     setError(null);
     setRejection(null);
     setSlow(false);
     try {
+      if (plantId === null) {
+        // F35 snap-first: diagnose only — nothing is saved until the user
+        // confirms the AI-drafted plant in the sheet.
+        const result = await runDiagnoseOnly(
+          buildDeps(),
+          { photoUri: photo.uri, force },
+          { onPhase: setPhase, onSlow: () => setSlow(true) },
+        );
+        if (result.status === "rejected") {
+          setRejection({ status: "rejected", diagnosis: result.diagnosis, localUri: photo.uri });
+          return;
+        }
+        setDeferred({ diagnosis: result.diagnosis, raw: result.raw });
+        return;
+      }
       const result = await runAssess(
-        {
-          savePhoto: savePlantPhoto,
-          linkPhoto: linkPhotoToAssessment,
-          local: {
-            isReady: localEngine.isReady,
-            // 512px long edge for the local model (the saved copy has this
-            // photo's already-known dimensions).
-            prepare: async (uri) =>
-              (
-                await downscalePhoto(
-                  uri,
-                  { width: photo.width, height: photo.height },
-                  SPIKE_MAX_DIMENSION,
-                )
-              ).uri,
-            // The diagnosis prompts live in the pure lib modules; the session
-            // is given them per call (F21: one prompt, the model reports subject).
-            generate: ({ imageUri }) =>
-              localEngine.generate({
-                system: SPIKE_SYSTEM_PROMPT,
-                user: LOCAL_USER_PROMPT,
-                imageUri,
-              }),
-            interrupt: localEngine.interrupt,
-            // The phone inserts the row itself into the local store.
-            persist: persistLocalAssessment,
-          },
-        },
+        buildDeps(),
         { plantId, photoUri: photo.uri, savedUri, force },
         { onPhase: setPhase, onPhotoSaved: setSavedUri, onSlow: () => setSlow(true) },
       );
@@ -106,7 +139,36 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       setPhase(null);
       setSlow(false);
     }
-  }, [localEngine, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
+  }, [buildDeps, onAssessed, photo.uri, plantId, savedUri]);
+
+  /** F35: the user saved the drafted plant — now persist photo + assessment. */
+  const completeDeferred = useCallback(
+    async (newPlantId: string, name: string) => {
+      if (!deferred) return;
+      setError(null);
+      try {
+        let localUri = photo.uri;
+        const assessmentId = await persistDeferredAssessment(
+          buildDeps(),
+          { plantId: newPlantId, photoUri: photo.uri, diagnosis: deferred.diagnosis, raw: deferred.raw },
+          { onPhase: setPhase, onPhotoSaved: (u) => { localUri = u; } },
+        );
+        setDeferred(null);
+        onAssessed(
+          { status: "assessed", assessmentId, diagnosis: deferred.diagnosis, localUri },
+          { id: newPlantId, name },
+        );
+      } catch (e) {
+        // The plant exists; only the assessment write failed. Honest + retryable
+        // via Analyze once the user reopens capture for that plant.
+        setDeferred(null);
+        setError(friendlyAssessError(e));
+      } finally {
+        setPhase(null);
+      }
+    },
+    [buildDeps, deferred, onAssessed, photo.uri],
+  );
 
   return (
     <View style={styles.root}>
@@ -120,7 +182,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         <RoundButton label="Retake" glyph="‹" disabled={busy} onPress={onRetake} />
         <View style={styles.chip}>
           <Text style={styles.chipText} numberOfLines={1}>
-            🪴 {plantName}
+            {plantName ? `🪴 ${plantName}` : "New plant ✨"}
           </Text>
         </View>
         <RoundButton label="Close" glyph="✕" disabled={busy} onPress={onClose} />
@@ -134,8 +196,9 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
               {rejection.diagnosis.subject_note || rejection.diagnosis.summary}
             </Text>
             <Text style={styles.rejectionBody}>
-              Nothing was added to {plantName}&apos;s timeline. Retake the photo, or save it anyway
-              if we got this wrong.
+              {plantName
+                ? `Nothing was added to ${plantName}'s timeline. Retake the photo, or save it anyway if we got this wrong.`
+                : "Nothing was saved. Retake the photo, or save it anyway if we got this wrong."}
             </Text>
           </View>
         ) : null}
@@ -173,6 +236,14 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
           <Text style={styles.note}>Photo saved on this phone — retrying skips the save.</Text>
         ) : null}
       </View>
+      {/* F35: the AI-drafted plant confirmation. Cancel keeps the diagnosis
+          discarded (nothing was persisted) — same as closing capture. */}
+      <NewPlantSheet
+        visible={deferred !== null}
+        prefill={deferred ? prefillFromDiagnosis(deferred.diagnosis) : null}
+        onClose={() => setDeferred(null)}
+        onSaved={completeDeferred}
+      />
     </View>
   );
 }

@@ -3,21 +3,11 @@ import { CAPTURE_HINT } from "../lib/capture-modes";
 
 // Viewfinder chrome for the capture screen. F21 deleted the segmented mode
 // pill and the three per-mode guide shapes: the user should not have to tell a
-// vision model what it is looking at. One neutral frame and one fixed hint
+// vision model what it is looking at. F35 removed the framing rectangle too
+// (it read as a crop preview and nothing is cropped); one honest hint remains.
 // keep the "get closer" nudge without asking for a classification. Purely
 // presentational — the hint string lives in src/lib/capture-modes.ts (tested).
 
-const GUIDE_COLOR = "rgba(255,255,255,0.85)";
-
-/** One neutral frame for every shot. It says "fill this", not "this must be a
- * leaf" — the subject is the model's call. */
-export function GuideOverlay() {
-  return (
-    <View pointerEvents="none" style={styles.guideArea}>
-      <View style={[styles.dashed, styles.frame]} />
-    </View>
-  );
-}
 
 export function CaptureHint() {
   return (
@@ -68,14 +58,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  dashed: {
-    borderWidth: 2,
-    borderStyle: "dashed",
-    borderColor: GUIDE_COLOR,
-  },
   /** Deliberately shape-neutral: a soft rectangle suits a leaf, a whole tree
    * and a sawn branch end equally, which is the point. */
-  frame: { width: 280, height: 380, borderRadius: 28 },
   hintWrap: {
     alignSelf: "center",
     backgroundColor: "rgba(0,0,0,0.45)",

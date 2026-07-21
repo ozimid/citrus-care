@@ -8,7 +8,10 @@ import { CAPTURE_HINT, preselectedPlantId } from "./capture-modes";
 // no classification.
 describe("CAPTURE_HINT", () => {
   it("nudges for a close, filled frame without asking what the subject is", () => {
-    expect(CAPTURE_HINT).toBe("Fill the frame with the affected part — closer is better");
+    // F35: the framing square was removed (it read as a crop preview and lied —
+    // nothing is cropped). The hint now carries the guidance and the honesty.
+    expect(CAPTURE_HINT).toMatch(/good light/i);
+    expect(CAPTURE_HINT).toMatch(/whole photo|nothing gets cropped/i);
     expect(CAPTURE_HINT).not.toMatch(/leaf|whole plant|cut/i);
   });
 });

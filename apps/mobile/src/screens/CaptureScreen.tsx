@@ -2,7 +2,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from "react-native";
-import { CaptureHint, GuideOverlay, RoundButton } from "../components/CaptureOverlay";
+import { CaptureHint, RoundButton } from "../components/CaptureOverlay";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
 import type { AssessedResult } from "../lib/assess";
 import { preselectedPlantId } from "../lib/capture-modes";
@@ -20,6 +20,8 @@ import { ReviewScreen } from "./ReviewScreen";
 // the Plants tab behind the modal can refresh its scores.
 // F21: there is one shutter and no mode selector — the model reports what it
 // saw, and a rejected (non-plant) photo never reaches DiagnosisScreen.
+// F35: no plant needs to be selected — snap first, and the AI drafts the
+// new-plant form from the photo (ReviewScreen owns that deferred flow).
 
 const GENERIC_PHOTO_ERROR = "Couldn't process that photo. Please try again.";
 const GENERIC_PLANTS_ERROR = "Could not load your plants. Close and try again.";
@@ -43,6 +45,8 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [photo, setPhoto] = useState<PreparedPhoto | null>(null);
   const [result, setResult] = useState<AssessedResult | null>(null);
+  /** F35: the plant created by the deferred (snap-first) flow. */
+  const [savedPlant, setSavedPlant] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,10 +66,8 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
       .then((items) => {
         if (cancelled) return;
         setPlants(items);
-        const preselected = preselectedPlantId(items, initialPlantId);
-        setSelectedPlantId(preselected);
-        // More than one plant: the FAB needs a target, so ask right away.
-        if (!preselected && items.length > 1) setPickerOpen(true);
+        // F35: no forced picker — an unselected plant means "new plant".
+        setSelectedPlantId(preselectedPlantId(items, initialPlantId));
       })
       .catch(() => {
         // fetchPlants already logged details.
@@ -77,7 +79,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   }, [initialPlantId]);
 
   const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
-  const ready = selectedPlantId !== null && !busy;
+  const ready = !busy;
 
   const prepare = useCallback(
     async (uri: string, width: number, height: number) => {
@@ -113,13 +115,6 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
 
   const pickFromGallery = useCallback(async () => {
     setError(null);
-    // Gallery import doesn't need the camera, but a photo still needs a plant
-    // to belong to — so if none is chosen yet, open the picker instead of a
-    // silent no-op.
-    if (selectedPlantId === null) {
-      setPickerOpen(true);
-      return;
-    }
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
@@ -134,27 +129,29 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     }
   }, [prepare, selectedPlantId]);
 
-  if (result && selectedPlant) {
+  const resultPlant = selectedPlant ?? savedPlant;
+  if (result && resultPlant) {
     return (
       <DiagnosisScreen
         diagnosis={result.diagnosis}
-        plantId={selectedPlant.id}
-        plantName={selectedPlant.name}
+        plantId={resultPlant.id}
+        plantName={resultPlant.name}
         onDone={onClose}
       />
     );
   }
 
-  if (photo && selectedPlant) {
+  if (photo) {
     return (
       <ReviewScreen
         photo={photo}
-        plantId={selectedPlant.id}
-        plantName={selectedPlant.name}
+        plantId={selectedPlant?.id ?? null}
+        plantName={selectedPlant?.name ?? null}
         onRetake={() => setPhoto(null)}
         onClose={onClose}
-        onAssessed={(r) => {
+        onAssessed={(r, plant) => {
           setResult(r);
+          if (plant) setSavedPlant(plant);
           onAssessed?.();
         }}
       />
@@ -172,8 +169,6 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         />
       )}
 
-      {permission?.granted ? <GuideOverlay /> : null}
-
       <View style={styles.topBar}>
         <RoundButton label="Close" glyph="✕" onPress={onClose} />
         <Pressable
@@ -184,7 +179,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
           style={styles.plantChip}
         >
           <Text style={styles.plantChipText} numberOfLines={1}>
-            {selectedPlant ? `🪴 ${selectedPlant.name}` : "Choose plant ▾"}
+            {selectedPlant ? `🪴 ${selectedPlant.name}` : "New plant ✨ (tap to pick)"}
           </Text>
         </Pressable>
         <View style={styles.topSpacer} />
@@ -193,9 +188,6 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
       <View style={styles.bottomArea}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {plantsError ? <Text style={styles.error}>{GENERIC_PLANTS_ERROR}</Text> : null}
-        {plants && plants.length === 0 ? (
-          <Text style={styles.error}>Add a plant first — the photo needs a plant to belong to.</Text>
-        ) : null}
         <CaptureHint />
         <View style={styles.controls}>
           <View style={styles.sideControl}>
