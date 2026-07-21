@@ -16,6 +16,11 @@ export interface CareProfile {
   temp_max_c: number;
   drought_tolerance: "low" | "medium" | "high";
   indoor_ok: boolean;
+  /** F37: optional AI-generated reference fields (Plant Info card). */
+  difficulty?: "easy" | "moderate" | "hard";
+  mature_size_note?: string;
+  flowering_months?: number[];
+  fruiting_months?: number[];
   notes: string;
 }
 

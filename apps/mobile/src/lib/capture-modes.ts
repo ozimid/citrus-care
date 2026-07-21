@@ -19,3 +19,31 @@ export function preselectedPlantId(
   if (preferredId && plants.some((p) => p.id === preferredId)) return preferredId;
   return plants.length === 1 ? plants[0].id : null;
 }
+
+// F36: the one-time photo guide (competitor-inspired "Snap Tips", filtered to
+// what actually helps OUR model — one photo, on-device, full frame).
+export interface SnapTip {
+  glyph: string;
+  title: string;
+  body: string;
+}
+
+export const SNAP_TIPS: SnapTip[] = [
+  {
+    glyph: "🔍",
+    title: "Get close",
+    body: "Fill the photo with the sick part — a leaf, a branch, a cut. Closer detail means a better diagnosis.",
+  },
+  {
+    glyph: "☀️",
+    title: "Good light",
+    body: "Bright, even light works best — daylight beats lamps. Avoid harsh shadows across the plant.",
+  },
+  {
+    glyph: "🖼️",
+    title: "The whole photo counts",
+    body: "Everything in the frame is analyzed — nothing gets cropped. Keep the phone steady and the plant in focus.",
+  },
+];
+
+export const SNAP_TIPS_SEEN_KEY = "citrus.snap-tips-seen.v1";

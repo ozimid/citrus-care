@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CARE_PROFILE_SYSTEM_PROMPT,
   buildCareProfileUserText,
   parseCareProfileOutput,
   type CareProfilePlant,
@@ -71,5 +72,51 @@ describe("parseCareProfileOutput", () => {
   it("returns null when the JSON fails the shared schema", () => {
     expect(parseCareProfileOutput(JSON.stringify({ ...VALID, base_watering_interval_days: 999 }))).toBeNull();
     expect(parseCareProfileOutput('{"base_watering_interval_days": "seven"}')).toBeNull();
+  });
+});
+
+// F37 (competitor-inspired Plant Info card): the profile also carries
+// reference fields — difficulty, mature size, flowering/fruiting months.
+// All optional: old stored profiles must keep parsing.
+describe("care profile v2 reference fields (F37)", () => {
+  const base = {
+    base_watering_interval_days: 7,
+    water_amount_note: "Until it drains.",
+    sun: "full",
+    temp_min_c: 5,
+    temp_max_c: 35,
+    drought_tolerance: "medium",
+    indoor_ok: false,
+    notes: "Water deeply.",
+  };
+
+  it("parses the new fields when present", () => {
+    const out = parseCareProfileOutput(
+      JSON.stringify({
+        ...base,
+        difficulty: "moderate",
+        mature_size_note: "3-10 ft tall, up to 20 ft spread",
+        flowering_months: [5, 6],
+        fruiting_months: [11, 12, 1],
+      }),
+    );
+    expect(out?.difficulty).toBe("moderate");
+    expect(out?.flowering_months).toEqual([5, 6]);
+  });
+
+  it("still parses a v1 profile with none of them", () => {
+    const out = parseCareProfileOutput(JSON.stringify(base));
+    expect(out).not.toBeNull();
+    expect(out?.difficulty).toBeUndefined();
+  });
+
+  it("rejects out-of-range months (whole profile fails closed)", () => {
+    expect(parseCareProfileOutput(JSON.stringify({ ...base, flowering_months: [0, 13] }))).toBeNull();
+  });
+
+  it("the prompt requests the reference fields", () => {
+    expect(CARE_PROFILE_SYSTEM_PROMPT).toMatch(/difficulty/);
+    expect(CARE_PROFILE_SYSTEM_PROMPT).toMatch(/flowering_months/);
+    expect(CARE_PROFILE_SYSTEM_PROMPT).toMatch(/mature_size_note/);
   });
 });

@@ -5,7 +5,8 @@ import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from "r
 import { CaptureHint, RoundButton } from "../components/CaptureOverlay";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
 import type { AssessedResult } from "../lib/assess";
-import { preselectedPlantId } from "../lib/capture-modes";
+import { SNAP_TIPS, preselectedPlantId } from "../lib/capture-modes";
+import { loadSnapTipsSeen, markSnapTipsSeen } from "../lib/capture-modes-io";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { type PlantListItem } from "../lib/plants";
 import { fetchPlants } from "../lib/plants-io";
@@ -49,6 +50,18 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const [savedPlant, setSavedPlant] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** F36: null until the seen-flag loads; true = the guide is on screen. */
+  const [tipsOpen, setTipsOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadSnapTipsSeen().then((seen) => {
+      if (!cancelled && !seen) setTipsOpen(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Request camera permission on open (once); the denied state below offers
   // the settings hint and keeps gallery import available.
@@ -182,7 +195,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
             {selectedPlant ? `🪴 ${selectedPlant.name}` : "New plant ✨ (tap to pick)"}
           </Text>
         </Pressable>
-        <View style={styles.topSpacer} />
+        <RoundButton label="Photo tips" glyph="?" onPress={() => setTipsOpen(true)} />
       </View>
 
       <View style={styles.bottomArea}>
@@ -219,6 +232,34 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
           </View>
         </View>
       </View>
+
+      {tipsOpen ? (
+        <View style={styles.tipsOverlay}>
+          <View style={styles.tipsCard}>
+            <Text style={styles.tipsTitle}>Getting a good photo</Text>
+            {SNAP_TIPS.map((tip) => (
+              <View key={tip.title} style={styles.tipRow}>
+                <Text style={styles.tipGlyph}>{tip.glyph}</Text>
+                <View style={styles.tipTextWrap}>
+                  <Text style={styles.tipTitle}>{tip.title}</Text>
+                  <Text style={styles.tipBody}>{tip.body}</Text>
+                </View>
+              </View>
+            ))}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close photo tips"
+              onPress={() => {
+                setTipsOpen(false);
+                void markSnapTipsSeen();
+              }}
+              style={styles.tipsCta}
+            >
+              <Text style={styles.tipsCtaText}>Got it</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <PlantPickerSheet
         visible={pickerOpen}
@@ -259,6 +300,33 @@ function PermissionState({ denied, onRequest }: { denied: boolean; onRequest: ()
 }
 
 const styles = StyleSheet.create({
+  tipsOverlay: {
+    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  tipsCard: {
+    backgroundColor: "rgba(20,24,20,0.97)",
+    borderRadius: RADIUS * 1.5,
+    padding: 20,
+    gap: 16,
+  },
+  tipsTitle: { color: "#ffffff", fontSize: 18, fontWeight: "700" },
+  tipRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
+  tipGlyph: { fontSize: 22 },
+  tipTextWrap: { flex: 1, gap: 2 },
+  tipTitle: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
+  tipBody: { color: "rgba(255,255,255,0.75)", fontSize: 13, lineHeight: 19 },
+  tipsCta: {
+    marginTop: 4,
+    backgroundColor: "#059669",
+    borderRadius: RADIUS,
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tipsCtaText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
   root: { flex: 1, backgroundColor: "#000" },
   topBar: {
     position: "absolute",
@@ -271,7 +339,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  topSpacer: { width: 40 },
   plantChip: {
     flex: 1,
     alignItems: "center",

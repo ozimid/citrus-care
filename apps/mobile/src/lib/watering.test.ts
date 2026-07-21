@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CareProfile } from "@citrus/shared";
 import type { WeatherSummary } from "./weather";
 import {
+  monthsLabel,
   distinctZips,
   dueLabel,
   isIndoor,
@@ -414,5 +415,29 @@ describe("wateringPlansFor", () => {
       NOW,
     );
     expect(plans["plant-1"].isDue).toBe(false);
+  });
+});
+
+// F37: "Flowers May–Jun · Fruits Nov–Jan" — the seasonal row, as text.
+describe("monthsLabel", () => {
+  it("renders a contiguous range", () => {
+    expect(monthsLabel([5, 6])).toBe("May–Jun");
+  });
+
+  it("renders a single month plainly", () => {
+    expect(monthsLabel([9])).toBe("Sep");
+  });
+
+  it("renders a year-wrapping range as one span", () => {
+    expect(monthsLabel([11, 12, 1])).toBe("Nov–Jan");
+  });
+
+  it("lists disjoint months", () => {
+    expect(monthsLabel([3, 9])).toBe("Mar, Sep");
+  });
+
+  it("empty or missing = null (row hidden)", () => {
+    expect(monthsLabel([])).toBeNull();
+    expect(monthsLabel(undefined)).toBeNull();
   });
 });

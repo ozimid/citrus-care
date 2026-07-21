@@ -28,6 +28,9 @@ Rules:
 - water_amount_note: how much per watering, concrete (volume or "until it drains"). <= 140 characters.
 - notes: one or two sentences of the single most useful watering/siting habit. <= 300 characters.
 - Base the numbers on the species/cultivar given. If vague, choose a sensible middle-of-the-road baseline, not an extreme.
+- difficulty: how demanding this plant is for a home grower — "easy", "moderate" or "hard".
+- mature_size_note: typical mature size in plain words, e.g. "3-10 ft tall, up to 20 ft spread". <= 110 characters.
+- flowering_months / fruiting_months: month NUMBERS (1=Jan .. 12=Dec) typical for a temperate northern-hemisphere climate; [] when not applicable.
 
 Respond with VALID JSON ONLY — no prose, no markdown fences — exactly this shape:
 {
@@ -38,7 +41,11 @@ Respond with VALID JSON ONLY — no prose, no markdown fences — exactly this s
   "temp_max_c": <number>,
   "drought_tolerance": "low|medium|high",
   "indoor_ok": <boolean>,
-  "notes": "..."
+  "notes": "...",
+  "difficulty": "easy|moderate|hard",
+  "mature_size_note": "...",
+  "flowering_months": [<numbers 1..12>],
+  "fruiting_months": [<numbers 1..12>]
 }`;
 
 export function buildCareProfileUserText(plant: CareProfilePlant): string {

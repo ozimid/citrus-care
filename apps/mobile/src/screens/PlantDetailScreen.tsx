@@ -14,6 +14,7 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
+import { PlantInfoCard } from "../components/PlantInfoCard";
 import { WateringCard } from "../components/WateringCard";
 import { bandColor, healthBand } from "../lib/health";
 import {
@@ -175,6 +176,10 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
             t={t}
             onProfileGenerated={load}
           />
+
+          {/* F37 — the AI-generated plant reference (difficulty, light, temps,
+              size, seasons). Renders only once a care profile exists. */}
+          <PlantInfoCard plant={plant} t={t} onProfileGenerated={load} />
 
           <Pressable
             accessibilityRole="button"

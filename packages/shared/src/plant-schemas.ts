@@ -81,6 +81,11 @@ export const careProfileSchema: z.ZodType<CareProfile> = z.object({
   temp_max_c: z.number().min(-60).max(70),
   drought_tolerance: z.enum(["low", "medium", "high"]),
   indoor_ok: z.boolean(),
+  /** F37 reference fields — optional so v1 stored profiles keep parsing. */
+  difficulty: z.enum(["easy", "moderate", "hard"]).optional(),
+  mature_size_note: z.string().max(120).optional(),
+  flowering_months: z.array(z.number().int().min(1).max(12)).max(12).optional(),
+  fruiting_months: z.array(z.number().int().min(1).max(12)).max(12).optional(),
   notes: z.string().max(600),
 });
 

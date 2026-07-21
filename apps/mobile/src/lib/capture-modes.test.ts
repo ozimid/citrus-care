@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CAPTURE_HINT, preselectedPlantId } from "./capture-modes";
+import { CAPTURE_HINT, SNAP_TIPS, SNAP_TIPS_SEEN_KEY, preselectedPlantId } from "./capture-modes";
 
 // F21 deleted the three capture modes: classifying the photo was the user's
 // job only because the prompt branched on it, and it manufactured false
@@ -35,5 +35,31 @@ describe("preselectedPlantId", () => {
 
   it("ignores a preferred id that is not in the list", () => {
     expect(preselectedPlantId([{ id: "p1" }, { id: "p2" }], "p9")).toBeNull();
+  });
+});
+
+// F36 (competitor-inspired): a one-time photo guide replaces the teaching the
+// removed framing square never did. Content must stay honest (no cloud talk)
+// and grounded in what actually helps the on-device model.
+describe("SNAP_TIPS", () => {
+  it("has three tips, each with glyph, title and body", () => {
+    expect(SNAP_TIPS).toHaveLength(3);
+    for (const tip of SNAP_TIPS) {
+      expect(tip.glyph.length).toBeGreaterThan(0);
+      expect(tip.title.length).toBeGreaterThan(0);
+      expect(tip.body.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("covers the three things that matter: closeness, light, no cropping", () => {
+    const all = SNAP_TIPS.map((t) => `${t.title} ${t.body}`).join(" ");
+    expect(all).toMatch(/close/i);
+    expect(all).toMatch(/light/i);
+    expect(all).toMatch(/whole photo|not.*cropped|nothing.*cropped/i);
+    expect(all).not.toMatch(/gemini|cloud|upload/i);
+  });
+
+  it("seen-flag key follows the store convention", () => {
+    expect(SNAP_TIPS_SEEN_KEY).toBe("citrus.snap-tips-seen.v1");
   });
 });

@@ -273,3 +273,43 @@ export function parseWateringLog(json: string | null): WateringLog {
 export function serializeWateringLog(log: WateringLog): string {
   return JSON.stringify(log);
 }
+
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** F37: "May–Jun", "Nov–Jan" (year wrap), "Mar, Sep" (disjoint), null for
+ * none — the Plant Info card's seasonal row, no chart dependency. */
+export function monthsLabel(months: number[] | undefined): string | null {
+  if (!months || months.length === 0) return null;
+  const valid = [...new Set(months.filter((m) => m >= 1 && m <= 12))].sort((a, b) => a - b);
+  if (valid.length === 0) return null;
+  if (valid.length === 1) return MONTH_ABBR[valid[0] - 1];
+
+  // Find runs over the circular month wheel: rotate so a year-wrapping run
+  // (e.g. Nov,Dec,Jan) starts at its true beginning.
+  const inSet = new Set(valid);
+  let start = valid[0];
+  if (valid.length < 12) {
+    while (inSet.has(((start + 10) % 12) + 1)) start = ((start + 10) % 12) + 1;
+  }
+  const runs: string[] = [];
+  let cursor = start;
+  let seen = 0;
+  while (seen < valid.length) {
+    const runStart = cursor;
+    let runEnd = cursor;
+    seen += 1;
+    while (seen < valid.length && inSet.has((runEnd % 12) + 1)) {
+      runEnd = (runEnd % 12) + 1;
+      seen += 1;
+    }
+    runs.push(
+      runStart === runEnd
+        ? MONTH_ABBR[runStart - 1]
+        : `${MONTH_ABBR[runStart - 1]}–${MONTH_ABBR[runEnd - 1]}`,
+    );
+    // Advance to the next member month.
+    cursor = (runEnd % 12) + 1;
+    while (seen < valid.length && !inSet.has(cursor)) cursor = (cursor % 12) + 1;
+  }
+  return runs.join(", ");
+}
