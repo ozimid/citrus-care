@@ -166,6 +166,19 @@ describe("parsePrunePlanOutput — the trained box_2d convention", () => {
     expect(result.plan.cuts).toHaveLength(1);
   });
 
+  it("rejects a box_2d that is not exactly four numbers", () => {
+    // A short array would otherwise destructure to undefined, and a long one
+    // would silently use its first four values as if they were the box.
+    for (const box of [[10], [200, 400, 400], [200, 400, 400, 600, 800]]) {
+      const result = parsePrunePlanOutput(
+        plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, box_2d: box }] }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.plan.cuts[0].x, JSON.stringify(box)).toBeUndefined();
+    }
+  });
+
   it("still accepts a bare x/y point when the model ignores the box format", () => {
     const result = parsePrunePlanOutput(
       plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, x: 30, y: 60 }] }),

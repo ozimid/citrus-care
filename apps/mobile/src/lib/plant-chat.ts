@@ -172,7 +172,6 @@ function latestFrom(timeline: TimelineEntry[]): PlantChatLatest | null {
   const entry = timeline[0];
   if (!entry) return null;
   const diagnosis = parseTimelineDiagnosis(entry.diagnosis);
-  if (!diagnosis) return null; // MUTATION
   return {
     dateLabel: entry.dateLabel,
     score: entry.score,
@@ -429,6 +428,7 @@ export async function runPlantChatTurn(
   // The question goes down first: if the answer fails, the user still has a
   // record of what they asked (the same reason the assess flow saves the photo
   // before it runs the model).
+  await saveBestEffort(deps, { plantId: input.plantId, role: "user", text: input.question });
 
   let raw: string;
   try {
@@ -456,7 +456,6 @@ export async function runPlantChatTurn(
     throw new Error(CHAT_UNREADABLE_ERROR);
   }
 
-  await saveBestEffort(deps, { plantId: input.plantId, role: "user", text: input.question });
   await saveBestEffort(deps, { plantId: input.plantId, role: "assistant", text: answer });
   return answer;
 }

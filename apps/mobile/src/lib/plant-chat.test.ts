@@ -481,6 +481,27 @@ describe("runPlantChatTurn", () => {
     expect(saved[1].text).toBe("Water it deeply once the top inch is dry.");
   });
 
+  // The question is written BEFORE the model runs, for the same reason the
+  // assess flow saves the photo first: a failed answer must not also lose the
+  // record of what was asked. Nothing caught this until it broke.
+  it("keeps the question when the model fails outright", async () => {
+    const { deps, saved } = makeDeps({
+      generate: async () => {
+        throw new Error("vulkan device lost");
+      },
+    });
+    await expect(runPlantChatTurn(deps, INPUT)).rejects.toThrow(CHAT_FAILED_ERROR);
+    expect(saved).toEqual([
+      { plantId: "plant-1", role: "user", text: "How often do I water?" },
+    ]);
+  });
+
+  it("keeps the question when the answer is unreadable", async () => {
+    const { deps, saved } = makeDeps({ generate: async () => "PLANT FACTS\nName: Mr Lemon" });
+    await expect(runPlantChatTurn(deps, INPUT)).rejects.toThrow(CHAT_UNREADABLE_ERROR);
+    expect(saved.map((m) => m.role)).toEqual(["user"]);
+  });
+
   it("refuses honestly when the engine isn't ready", async () => {
     const { deps, generated } = makeDeps({ isReady: () => false });
     await expect(runPlantChatTurn(deps, INPUT)).rejects.toThrow(CHAT_UNAVAILABLE_ERROR);

@@ -260,6 +260,7 @@ function preprocess(raw: unknown): Preprocessed {
       .sort(
         (a, b) =>
           a.cut.priority - b.cut.priority ||
+          Number(a.cut.x === undefined) - Number(b.cut.x === undefined) ||
           a.i - b.i,
       )
       .map(({ cut }) => cut)
