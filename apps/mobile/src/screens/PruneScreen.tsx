@@ -17,7 +17,6 @@ import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { bandColor } from "../lib/health";
 import { formatTimelineDate } from "../lib/plant-detail";
 import { PruneOverlay } from "../components/PruneOverlay";
-import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto } from "../lib/photo-io";
 import { latestPhotoForPlant } from "../lib/photo-store";
 import { loadPhotoIndex, savePlantPhoto } from "../lib/photo-store-io";
@@ -164,10 +163,16 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
   }, [plant.id, plant.zip_code]);
 
   const buildDeps = useCallback(
-    (size: { width: number; height: number }): PruneAnalysisDeps => ({
+    (): PruneAnalysisDeps => ({
       isReady: localEngine.isReady,
       savePhoto: savePlantPhoto,
-      prepare: async (uri) => (await downscalePhoto(uri, size, SPIKE_MAX_DIMENSION)).uri,
+      // Device V&V round 3 (2026-08-31): the model's own words were "the
+      // image is too small and lacks sufficient detail". It was right — this
+      // used to shrink every photo to 512px (the DIAGNOSIS discipline, where a
+      // leaf close-up survives it). Branch structure does not. The saved photo
+      // is already the 1600px pipeline JPEG; the vision encoder resizes to its
+      // own fixed input internally, so hand it everything we have.
+      prepare: async (uri) => uri,
       generate: ({ imageUri, system, user }) =>
         localEngine.generate({ system, user, imageUri }),
       persist: persistPrunePlan,
@@ -186,7 +191,7 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
       setDebug(null);
       try {
         const result = await runPruneAnalysis(
-          buildDeps({ width: photo.width, height: photo.height }),
+          buildDeps(),
           {
             plantId: plant.id,
             photoUri: photo.uri,

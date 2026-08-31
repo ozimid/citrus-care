@@ -187,6 +187,17 @@ south; same permission/replace/9-am machinery as watering), **dashboard cover ph
 photo, falling back to the plant's newest; `attachCoverPhotos`) and a **full-screen photo viewer** from
 the card thumbnail and the timeline thumbnails.
 
+### Round 3 (same day): "the image is too small"
+
+The details pipeline paid off immediately: the model's own summary said the image was *"too small and
+lacks sufficient details to make specific pruning recommendations."* It was right — the prune flow was
+inheriting the diagnosis flow's 512px input discipline, which preserves a leaf close-up and destroys
+branch structure. Two changes: **the prune model now receives the full stored 1600px photo** (the vision
+encoder resizes to its own fixed input internally, so pre-shrinking only threw detail away), and the
+prompt's easy exit — "return an empty cuts list and explain why" — is closed: cuts are expected, an empty
+list is reserved for a plant that genuinely needs nothing, and uncertainty must be expressed through
+`confidence`, never by refusing to answer. D-P4's guards still gate what gets DRAWN.
+
 ## 5. Deliberately not built
 
 | Not built | Why |

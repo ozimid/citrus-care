@@ -66,10 +66,17 @@ describe("prune prompt carries this plant's rules", () => {
     expect(buildPrunePromptSystem(RULES)).toMatch(/at most 3|no more than 3/i);
   });
 
-  it("tells the model to return no cuts rather than invent them", () => {
+  // Round 3 of device V&V: given an easy honest exit ("return an empty list
+  // and explain why"), the model took it every time and the feature read as
+  // useless. The contract flips to best-effort: cuts are expected, an empty
+  // list is reserved for a plant that genuinely needs nothing, and uncertainty
+  // is expressed through confidence — not through refusing to answer.
+  it("demands best-effort cuts and reserves the empty list for a plant needing nothing", () => {
     const prompt = buildPrunePromptSystem(RULES).toLowerCase();
-    expect(prompt).toContain("empty");
-    expect(prompt).toMatch(/do not invent|never invent/);
+    expect(prompt).toMatch(/almost every|nearly every/);
+    expect(prompt).toContain("needs nothing");
+    expect(prompt).toMatch(/best.guess|best box/);
+    expect(prompt).not.toMatch(/do not invent|never invent/);
   });
 
   it("asks for JSON only", () => {
