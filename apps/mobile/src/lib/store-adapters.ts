@@ -35,6 +35,7 @@ export function plantRowsFromStore(plants: StoredPlant[], assessments: StoredAss
     cultivar: plant.cultivar,
     location: plant.location,
     zip_code: plant.zip_code,
+    cover_assessment_id: plant.cover_assessment_id,
     care_profile: plant.care_profile,
     created_at: plant.created_at,
     assessments: byPlant.get(plant.id) ?? [],

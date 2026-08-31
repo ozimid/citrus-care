@@ -131,3 +131,22 @@ describe("plantDetailRowFromStore", () => {
     expect(row.name).toBe("Lemon");
   });
 });
+
+describe("cover assessment id rides through to the list", () => {
+  it("plantRowsFromStore carries cover_assessment_id so the card can find its photo", () => {
+    const plant: StoredPlant = {
+      id: "p1",
+      name: "Multiple Trees",
+      plant_type: "tree",
+      species: null,
+      cultivar: null,
+      location: null,
+      zip_code: null,
+      cover_assessment_id: "assess-7",
+      care_profile: null,
+      created_at: "2026-08-01T00:00:00Z",
+    };
+    const [row] = plantRowsFromStore([plant], []);
+    expect(row.cover_assessment_id).toBe("assess-7");
+  });
+});

@@ -336,3 +336,78 @@ export function mapScheduledReminders(requests: ScheduledReminderRequest[]): Rem
     .sort((a, b) => (a.fireDate < b.fireDate ? -1 : a.fireDate > b.fireDate ? 1 : 0))
     .map(({ id, plantName, dateLabel }) => ({ id, plantName, dateLabel }));
 }
+
+// ------------------------------------------------------------------
+// F23 — pruning reminders: "tell me when the window opens". The DATE comes
+// from pruning-rules.nextPruneWindowStart (deterministic, sourced); this half
+// owns only the notification mechanics — same permission flow, morning-window
+// clamp and replace-don't-stack rule as the watering reminders above.
+// ------------------------------------------------------------------
+
+export const PRUNE_REMINDER_KIND = "prune";
+
+export function pruneReminderContent(
+  plantName: string,
+  packLabel: string,
+): { title: string; body: string } {
+  return {
+    title: `Time to prune ${plantName} ✂️`,
+    body: `The pruning window for a ${packLabel.toLowerCase()} opens now. Open the plant for where to cut.`,
+  };
+}
+
+export interface SchedulePruneInput {
+  plantId: string;
+  plantName: string;
+  /** The pack label ("Citrus tree") — the notification explains itself. */
+  packLabel: string;
+  /** First day of the next best window, from nextPruneWindowStart. */
+  windowStart: Date;
+}
+
+function isPruneReminderFor(req: ScheduledReminderRequest, plantId: string): boolean {
+  const data = req.content.data ?? {};
+  return data.kind === PRUNE_REMINDER_KIND && data.plantId === plantId;
+}
+
+/** (Re)schedule the plant's prune reminder for the morning the window opens.
+ * Any previous prune reminder for the same plant is replaced — the date moves
+ * if the plant's species (and so its rule pack) is edited. */
+export async function schedulePruneReminder(
+  scheduler: ReminderScheduler,
+  input: SchedulePruneInput,
+): Promise<ScheduleOutcome> {
+  let permission = await scheduler.getPermissions();
+  if (!permission.granted) {
+    if (!permission.canAskAgain) return { ok: false, reason: "permission-denied" };
+    permission = await scheduler.requestPermissions();
+    if (!permission.granted) return { ok: false, reason: "permission-denied" };
+  }
+
+  // Window start is a midnight date; nobody prunes at 00:00. Same 9am slot as
+  // the watering nudges.
+  const date = clampToWateringWindow(input.windowStart);
+
+  try {
+    const existing = await scheduler.getScheduled();
+    for (const req of existing) {
+      if (isPruneReminderFor(req, input.plantId)) await scheduler.cancel(req.identifier);
+    }
+  } catch (e) {
+    console.error("[schedulePruneReminder] could not clear old reminders:", (e as Error).message);
+  }
+
+  const id = await scheduler.schedule({
+    content: {
+      ...pruneReminderContent(input.plantName, input.packLabel),
+      data: {
+        plantId: input.plantId,
+        plantName: input.plantName,
+        fireDate: date.toISOString(),
+        kind: PRUNE_REMINDER_KIND,
+      },
+    },
+    trigger: { type: "date", date },
+  });
+  return { ok: true, id, date };
+}

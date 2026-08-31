@@ -130,23 +130,33 @@ describe("parsePrunePlanOutput — the trained box_2d convention", () => {
     expect(result.dropped).toBe(1);
   });
 
-  // All four values <= 100 is ambiguous between the 0-1000 grid we asked for
-  // and percentages. Read on the grid it becomes a small box pinned near the
-  // top-left corner — confident-looking and wrong, the one outcome the design
-  // ranks worst. An area floor alone does not catch it: a 50%x40% percent box
-  // reads as 5%x4%, which is well clear of any sane floor.
+  // Device V&V 2026-08-31: the model routinely answers in PERCENTAGES despite
+  // being asked for the 1000-grid, and refusing those as "ambiguous" produced
+  // a photo with nothing marked — the feature's useless state. A percent box
+  // is honored as a REGION (y,x,y,x order kept): a halo carries its own size,
+  // so the misread-grid risk degrades to a small visible box, not a crosshair.
   it.each([
-    [[10, 20, 30, 40], "small percent box"],
-    [[20, 20, 70, 60], "large percent box — an area floor would let this through"],
-    [[0, 0, 100, 100], "whole-image percent box"],
-  ])("refuses an ambiguous box written in the wrong units: %j (%s)", (box) => {
+    [[20, 20, 70, 60], { top: 20, left: 20, bottom: 70, right: 60 }],
+    [[10, 20, 30, 40], { top: 10, left: 20, bottom: 30, right: 40 }],
+  ])("honors a percent box %j as a region", (box: unknown, expected: unknown) => {
     const result = parsePrunePlanOutput(
       plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, box_2d: box }] }),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.plan.cuts[0].x).toBeUndefined();
-    expect(result.dropped).toBe(1);
+    expect(result.plan.cuts[0].box).toEqual(expected);
+    expect(result.dropped).toBe(0);
+  });
+
+  it("still refuses a whole-image box in either convention", () => {
+    for (const box of [[0, 0, 100, 100], [0, 0, 1000, 1000]]) {
+      const result = parsePrunePlanOutput(
+        plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, box_2d: box }] }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.plan.cuts[0].x, JSON.stringify(box)).toBeUndefined();
+    }
   });
 
   it("still accepts a box that is unambiguously on the 0-1000 grid", () => {

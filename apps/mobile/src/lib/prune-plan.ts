@@ -89,7 +89,7 @@ export function buildPrunePromptSystem(rules: PrunePromptRules): string {
     "",
     "Respond with VALID JSON ONLY — no prose, no markdown fences — exactly this shape:",
     "{",
-    '  "summary": "<what you see and the overall pruning read, <= 300 characters>",',
+    '  "summary": "<one or two short sentences, <= 160 characters>",',
     '  "subject": "plant|unclear|not_a_plant",',
     '  "confidence": "low|medium|high",',
     '  "cuts": [{"label": "<short name>", "action": "<what to do here>", "reason": "<why>", "priority": 1, "box_2d": [<y_min>, <x_min>, <y_max>, <x_max>]}],',
@@ -152,14 +152,17 @@ export function normalizeBox(value: unknown): PruneBox | null {
   if (!Array.isArray(value) || value.length !== 4) return null;
   const grid = value.map((n) => (typeof n === "number" ? n : Number(n)));
   if (grid.some((n) => !Number.isFinite(n) || n < 0 || n > 1000)) return null;
-  // All four values <= 100 is ambiguous between the grid we asked for and
-  // percentages. Read on the grid, a percent box lands as a small rectangle in
-  // the top-left corner: tight, confident-looking and wrong — the outcome the
-  // design ranks worst. An area floor cannot catch it (a 50%x40% percent box
-  // reads as 5%x4%, well clear of any sane floor), so refuse the whole box
-  // rather than guess which convention the model meant.
-  if (grid.every((n) => n <= 100)) return null;
-  const [yMin, xMin, yMax, xMax] = grid.map((n) => round1(n / 10));
+  // All four values <= 100 used to be refused as ambiguous between the grid we
+  // asked for and percentages. Device V&V (2026-08-31, the user's own rose)
+  // showed what that buys: the model answers in percentages anyway, every box
+  // was dropped, and the photo rendered with NOTHING marked — the useless
+  // state. So a percent-shaped answer is now read AS percentages (y,x,y,x
+  // order kept). The residual risk — a true 1000-grid box that happens to fit
+  // 0-100 — is a ≤10%×10% region drawn top-left: small, visible and checkable,
+  // where the old behaviour was no information at all. Regions carry their own
+  // size, so this loosening never creates a crosshair.
+  const scale = grid.every((n) => n <= 100) ? 1 : 10;
+  const [yMin, xMin, yMax, xMax] = grid.map((n) => round1(n / scale));
   if (yMax <= yMin || xMax <= xMin) return null;
   const area = ((yMax - yMin) / 100) * ((xMax - xMin) / 100);
   if (area > MAX_BOX_AREA_FRACTION || area < MIN_BOX_AREA_FRACTION) return null;

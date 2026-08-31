@@ -5,6 +5,7 @@
 // tests, are unchanged.
 
 import type { Assessment, CareProfile, Plant } from "@citrus/shared";
+import { photoForAssessment, photosForPlant, type PhotoIndex } from "./photo-store";
 import { comparisonDelta } from "./plant-detail";
 import { parseStoredCareProfile } from "./watering";
 
@@ -20,6 +21,8 @@ export type PlantRow = Pick<
   "id" | "name" | "plant_type" | "species" | "cultivar" | "location" | "created_at"
 > & {
   zip_code?: string | null;
+  /** The card's photo anchor — updated best-effort after each assessment. */
+  cover_assessment_id?: string | null;
   /** jsonb from Postgres — untrusted until parseStoredCareProfile validates it. */
   care_profile?: unknown;
   assessments?: AssessmentScoreRow[] | null;
@@ -40,6 +43,10 @@ export interface PlantListItem {
   zipCode: string | null;
   careProfile: CareProfile | null;
   lastAssessedAt: string | null;
+  coverAssessmentId: string | null;
+  /** On-phone uri of the card's photo, joined by attachCoverPhotos; null =
+   * placeholder (a plant never photographed, or photos not on this device). */
+  coverUri: string | null;
 }
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
@@ -100,5 +107,26 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
     // watering guidance for this plant", never bad math on a bad baseline.
     careProfile: parseStoredCareProfile(row.care_profile),
     lastAssessedAt: latestAssessedAt(row.assessments),
+    coverAssessmentId: row.cover_assessment_id ?? null,
+    coverUri: null,
   }));
+}
+
+/** Join each card to its photo (same shape as plant-detail's attachLocalPhotos):
+ * the cover assessment's photo when this phone has it, else the plant's newest
+ * photo — pre-cover rows and restores land there — else null for the
+ * placeholder. Pure; a plant is never shown another plant's picture. */
+export function attachCoverPhotos(items: PlantListItem[], index: PhotoIndex): PlantListItem[] {
+  return items.map((item) => {
+    const cover = item.coverAssessmentId
+      ? photoForAssessment(index, item.coverAssessmentId)
+      : null;
+    const fallback =
+      cover ??
+      photosForPlant(index, item.id).sort((a, b) =>
+        a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
+      )[0] ??
+      null;
+    return { ...item, coverUri: fallback?.localUri ?? null };
+  });
 }

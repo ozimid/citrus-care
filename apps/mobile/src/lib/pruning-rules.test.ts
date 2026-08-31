@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { PLANT_TYPES } from "@citrus/shared";
 import {
   PRUNING_PACKS,
+  bestWindowLabel,
+  nextPruneWindowStart,
   chatCareRules,
   promptRulesFor,
   pruningPackFor,
@@ -252,6 +254,56 @@ describe("seasonVerdict is deterministic, not model output", () => {
   it("rejects a month outside 1-12 instead of guessing", () => {
     expect(seasonVerdict(pack, 0).status).toBe("off_season");
     expect(seasonVerdict(pack, 13).status).toBe("off_season");
+  });
+});
+
+// "Remind me when it's time to prune" needs one date: the first day of the
+// next best window, in the grower's own calendar. Deterministic — never the
+// model's opinion.
+describe("bestWindowLabel", () => {
+  it("gives the short window range in the grower's own calendar", () => {
+    expect(bestWindowLabel(PRUNING_PACKS.citrus)).toBe("Mar–May");
+    expect(bestWindowLabel(PRUNING_PACKS.citrus, "southern")).toBe("Sep–Nov");
+    expect(bestWindowLabel(PRUNING_PACKS.vine)).toBe("Dec–Feb");
+  });
+});
+
+describe("nextPruneWindowStart", () => {
+  it("finds the next window start later this year", () => {
+    // Rose: best Feb-Mar. From December, the window opens Feb 1 next year.
+    const start = nextPruneWindowStart(PRUNING_PACKS.rose, new Date(2026, 11, 15));
+    expect([start.getFullYear(), start.getMonth(), start.getDate()]).toEqual([2027, 1, 1]);
+  });
+
+  it("rolls to NEXT year when the grower is already inside the window", () => {
+    // Mid-February is rose-pruning time NOW; the next reminder-worthy date is
+    // next year's window, not tomorrow.
+    const start = nextPruneWindowStart(PRUNING_PACKS.rose, new Date(2027, 1, 15));
+    expect([start.getFullYear(), start.getMonth(), start.getDate()]).toEqual([2028, 1, 1]);
+  });
+
+  it("finds the START of a year-wrapping window, not just any best month", () => {
+    // Vine: best Dec-Feb. From June, the window STARTS Dec 1 — not Jan or Feb.
+    const start = nextPruneWindowStart(PRUNING_PACKS.vine, new Date(2026, 5, 10));
+    expect([start.getFullYear(), start.getMonth(), start.getDate()]).toEqual([2026, 11, 1]);
+  });
+
+  it("mirrors for the southern hemisphere", () => {
+    // Citrus best Mar-May northern → Sep-Nov southern. From local July, the
+    // window opens Sep 1 the same year.
+    const start = nextPruneWindowStart(PRUNING_PACKS.citrus, new Date(2026, 6, 20), "southern");
+    expect([start.getFullYear(), start.getMonth(), start.getDate()]).toEqual([2026, 8, 1]);
+  });
+
+  it("is always strictly in the future", () => {
+    for (const pack of Object.values(PRUNING_PACKS)) {
+      for (let month = 0; month < 12; month++) {
+        const now = new Date(2026, month, 28);
+        expect(nextPruneWindowStart(pack, now).getTime(), `${pack.key} m${month + 1}`).toBeGreaterThan(
+          now.getTime(),
+        );
+      }
+    }
   });
 });
 

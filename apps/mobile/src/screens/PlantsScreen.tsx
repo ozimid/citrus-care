@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -11,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
+import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { bandColor, healthBand } from "../lib/health";
 import { type PlantListItem } from "../lib/plants";
@@ -39,6 +41,8 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  /** Full-screen photo (tap a card's thumbnail). */
+  const [viewing, setViewing] = useState<{ uri: string; caption?: string } | null>(null);
 
   /**
    * F20 chips, computed for the whole list in one pass AFTER the plants render.
@@ -121,10 +125,14 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
               t={t}
               scheme={scheme}
               onPress={() => setDetailId(item.id)}
+              onViewPhoto={() =>
+                item.coverUri ? setViewing({ uri: item.coverUri, caption: item.name }) : setDetailId(item.id)
+              }
             />
           )}
         />
       )}
+      <PhotoViewer photo={viewing} onClose={() => setViewing(null)} />
       <NewPlantSheet
         visible={adding}
         onClose={() => setAdding(false)}
@@ -157,6 +165,7 @@ function PlantCard({
   t,
   scheme,
   onPress,
+  onViewPhoto,
 }: {
   item: PlantListItem;
   /** F20: this plant's watering plan says it's due (chip appears once the
@@ -165,6 +174,9 @@ function PlantCard({
   t: Tokens;
   scheme: "light" | "dark";
   onPress: () => void;
+  /** Tap on the thumbnail: open the photo full-screen (falls back to detail
+   * when the plant has no photo yet). */
+  onViewPhoto: () => void;
 }) {
   return (
     <Pressable
@@ -173,6 +185,23 @@ function PlantCard({
       onPress={onPress}
       style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}
     >
+      {/* The photo is what tells you WHICH plant "Multiple Trees" is (user
+          request 2026-08-31). Its own tap target: thumb → full screen, the
+          rest of the card → detail. */}
+      <Pressable
+        accessibilityRole={item.coverUri ? "imagebutton" : "none"}
+        accessibilityLabel={item.coverUri ? `View ${item.name}'s photo full screen` : undefined}
+        onPress={onViewPhoto}
+        hitSlop={6}
+      >
+        {item.coverUri ? (
+          <Image source={{ uri: item.coverUri }} style={styles.thumb} />
+        ) : (
+          <View style={[styles.thumb, styles.thumbEmpty, { borderColor: t.border }]}>
+            <Text style={styles.thumbGlyph}>🪴</Text>
+          </View>
+        )}
+      </Pressable>
       <View style={styles.cardText}>
         <Text style={[styles.cardName, { color: t.text }]} numberOfLines={1}>
           {item.name}
@@ -298,6 +327,13 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS,
     padding: 16,
   },
+  thumb: { width: 64, height: 64, borderRadius: RADIUS - 2 },
+  thumbEmpty: {
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  thumbGlyph: { fontSize: 24 },
   cardText: { flex: 1, gap: 2, alignItems: "flex-start" },
   cardName: { fontSize: 16, fontWeight: "600" },
   cardSub: { fontSize: 13 },

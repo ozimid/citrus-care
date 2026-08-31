@@ -11,6 +11,7 @@ import {
   reminderContent,
   reminderDate,
   scheduleReminder,
+  schedulePruneReminder,
   scheduleWateringReminder,
   syncWateringReminder,
   wateringReminderContent,
@@ -440,5 +441,56 @@ describe("cancelWateringReminders", () => {
       },
     });
     expect(await cancelWateringReminders(scheduler, "plant-1")).toEqual([]);
+  });
+});
+
+// F23 — "remind me when it's time to prune". The date is the deterministic
+// window start from pruning-rules.nextPruneWindowStart; this half only owns
+// the notification mechanics, mirroring the watering pattern.
+describe("schedulePruneReminder", () => {
+  const INPUT = {
+    plantId: "plant-1",
+    plantName: "Mr Lemon",
+    packLabel: "Citrus tree",
+    windowStart: new Date(2027, 2, 1), // Mar 1, midnight local
+  };
+
+  it("fires on the window-start DAY, inside the morning window — never at midnight", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    const outcome = await schedulePruneReminder(scheduler, INPUT);
+    expect(outcome.ok).toBe(true);
+    const req = scheduled[0] as { content: { title: string; data: Record<string, unknown> }; trigger: { date: Date } };
+    expect([req.trigger.date.getFullYear(), req.trigger.date.getMonth(), req.trigger.date.getDate()]).toEqual([2027, 2, 1]);
+    expect(req.trigger.date.getHours()).toBe(9);
+    expect(req.content.data).toMatchObject({ plantId: "plant-1", kind: "prune" });
+    expect(req.content.title).toContain("Mr Lemon");
+  });
+
+  it("names the plant and the why in the notification itself", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    await schedulePruneReminder(scheduler, INPUT);
+    const content = (scheduled[0] as { content: { title: string; body: string } }).content;
+    expect(content.title.toLowerCase()).toContain("prun");
+    expect(content.body.toLowerCase()).toContain("citrus tree");
+  });
+
+  it("replaces the plant's previous prune reminder and leaves everything else alone", async () => {
+    const existing: ScheduledReminderRequest[] = [
+      { identifier: "old-prune", content: { data: { plantId: "plant-1", kind: "prune" } } },
+      { identifier: "watering", content: { data: { plantId: "plant-1", kind: "watering" } } },
+      { identifier: "other-prune", content: { data: { plantId: "plant-2", kind: "prune" } } },
+    ];
+    const { scheduler, scheduled, cancelled } = makeScheduler({ getScheduled: async () => existing });
+    await schedulePruneReminder(scheduler, INPUT);
+    expect(cancelled).toEqual(["old-prune"]);
+    expect(scheduled).toHaveLength(1);
+  });
+
+  it("does not schedule when permission is denied", async () => {
+    const { scheduler, scheduled } = makeScheduler({
+      getPermissions: async () => ({ granted: false, canAskAgain: false }),
+    });
+    expect(await schedulePruneReminder(scheduler, INPUT)).toEqual({ ok: false, reason: "permission-denied" });
+    expect(scheduled).toHaveLength(0);
   });
 });

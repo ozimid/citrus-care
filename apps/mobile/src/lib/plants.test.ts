@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CareProfile } from "@citrus/shared";
 import {
+  attachCoverPhotos,
   latestAssessedAt,
   latestScore,
   latestTrend,
@@ -8,6 +9,7 @@ import {
   plantSubLabel,
   type PlantRow,
 } from "./plants";
+import type { PhotoIndex } from "./photo-store";
 
 const PROFILE: CareProfile = {
   base_watering_interval_days: 10,
@@ -162,6 +164,8 @@ describe("mapPlantRows", () => {
       location: "Patio",
       zipCode: "90210",
       careProfile: PROFILE,
+      coverAssessmentId: null,
+      coverUri: null,
       lastAssessedAt: "2026-07-11T00:00:00Z",
     });
     expect(items[1].latestScore).toBeNull();
@@ -182,5 +186,62 @@ describe("mapPlantRows", () => {
   it("returns an empty list for null/undefined data", () => {
     expect(mapPlantRows(null)).toEqual([]);
     expect(mapPlantRows(undefined)).toEqual([]);
+  });
+});
+
+// The dashboard card carries the plant's photo — the difference between a row
+// that says "Multiple Trees" and one that shows you which trees those are.
+describe("attachCoverPhotos", () => {
+  const INDEX: PhotoIndex = {
+    "assess-old": {
+      localUri: "file:///photos/plant-1/old.jpg",
+      plantId: "plant-1",
+      engine: "on-device",
+      createdAt: "2026-07-01T00:00:00Z",
+    },
+    "assess-new": {
+      localUri: "file:///photos/plant-1/new.jpg",
+      plantId: "plant-1",
+      engine: "on-device",
+      createdAt: "2026-08-01T00:00:00Z",
+    },
+    "assess-other": {
+      localUri: "file:///photos/plant-2/other.jpg",
+      plantId: "plant-2",
+      engine: "on-device",
+      createdAt: "2026-08-15T00:00:00Z",
+    },
+  };
+
+  function item(overrides: Partial<PlantRow> = {}) {
+    return mapPlantRows([row(overrides)])[0];
+  }
+
+  it("uses the plant's cover assessment's photo when it has one on this phone", () => {
+    const [withCover] = attachCoverPhotos([item({ cover_assessment_id: "assess-old" })], INDEX);
+    expect(withCover.coverUri).toBe("file:///photos/plant-1/old.jpg");
+  });
+
+  it("falls back to the plant's NEWEST photo when the cover has no local file", () => {
+    // Pre-cover rows and restores land here: cover id points nowhere, but the
+    // phone still has photos of this plant — show the latest, not nothing.
+    const [fallback] = attachCoverPhotos([item({ cover_assessment_id: "assess-gone" })], INDEX);
+    expect(fallback.coverUri).toBe("file:///photos/plant-1/new.jpg");
+    const [noCover] = attachCoverPhotos([item({ cover_assessment_id: null })], INDEX);
+    expect(noCover.coverUri).toBe("file:///photos/plant-1/new.jpg");
+  });
+
+  it("never borrows another plant's photo", () => {
+    const [lonely] = attachCoverPhotos([item({ id: "plant-3", cover_assessment_id: null })], INDEX);
+    expect(lonely.coverUri).toBeNull();
+  });
+
+  it("is null (placeholder) with an empty index and leaves items otherwise untouched", () => {
+    const source = item();
+    const [attached] = attachCoverPhotos([source], {});
+    expect(attached.coverUri).toBeNull();
+    expect(attached.name).toBe(source.name);
+    // Pure: the input item was not mutated.
+    expect("coverUri" in source ? source.coverUri : null).toBeNull();
   });
 });

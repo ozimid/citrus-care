@@ -258,3 +258,37 @@ export function chatCareRules(
     ...pack.never.slice(0, 2),
   ];
 }
+
+/** The best window as a short range in the grower's own calendar ("Mar–May") —
+ * for compact UI; the full sentence stays in seasonVerdict().line. */
+export function bestWindowLabel(pack: PruningPack, hemisphere: Hemisphere = "northern"): string {
+  return windowLabel(pack.bestMonths, hemisphere);
+}
+
+/**
+ * The first day of the plant's NEXT best pruning window, in the grower's own
+ * calendar — the one date "remind me when it's time to prune" needs. Window
+ * START means a best month whose predecessor is not best, so a year-wrapping
+ * window (vine: Dec–Feb) opens on Dec 1, not on whichever best month comes
+ * next. A grower already inside the window gets NEXT year's opening — the
+ * reminder is "it's time again", not a nudge about right now. Deterministic;
+ * strictly in the future.
+ */
+export function nextPruneWindowStart(
+  pack: PruningPack,
+  now: Date,
+  hemisphere: Hemisphere = "northern",
+): Date {
+  const currentMonth = now.getMonth() + 1; // grower-local, 1-12
+  for (let offset = 1; offset <= 12; offset++) {
+    const localMonth = ((currentMonth - 1 + offset) % 12) + 1;
+    const packMonth = shift(localMonth, hemisphere);
+    const previousPackMonth = ((packMonth + 10) % 12) + 1;
+    if (pack.bestMonths.includes(packMonth) && !pack.bestMonths.includes(previousPackMonth)) {
+      const yearRoll = currentMonth - 1 + offset >= 12 ? 1 : 0;
+      return new Date(now.getFullYear() + yearRoll, localMonth - 1, 1);
+    }
+  }
+  // Unreachable while every pack has a best window; a sane fallback beats a throw.
+  return new Date(now.getFullYear() + 1, now.getMonth(), 1);
+}

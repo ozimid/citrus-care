@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
+import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
 import { PlantInfoCard } from "../components/PlantInfoCard";
@@ -63,6 +64,8 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
   const [capturing, setCapturing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [viewing, setViewing] = useState<{ diagnosis: AssessmentDiagnosis; entry: TimelineEntry } | null>(null);
+  /** Full-screen photo (tap a timeline thumbnail). */
+  const [viewingPhoto, setViewingPhoto] = useState<{ uri: string; caption?: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -241,6 +244,15 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
                 key={entry.id}
                 entry={entry}
                 onPress={() => openRow(entry)}
+                onViewPhoto={
+                  entry.localUri
+                    ? () =>
+                        setViewingPhoto({
+                          uri: entry.localUri!,
+                          caption: `${data?.plant.name ?? "Plant"} · ${entry.dateLabel}`,
+                        })
+                    : undefined
+                }
                 t={t}
                 scheme={scheme}
               />
@@ -248,6 +260,8 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           )}
         </ScrollView>
       ) : null}
+
+      <PhotoViewer photo={viewingPhoto} onClose={() => setViewingPhoto(null)} />
 
       {plant ? (
         <NewPlantSheet
@@ -294,11 +308,14 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 function TimelineRowCard({
   entry,
   onPress,
+  onViewPhoto,
   t,
   scheme,
 }: {
   entry: TimelineEntry;
   onPress: () => void;
+  /** Tap on the thumbnail: the photo full-screen (row tap stays the diagnosis). */
+  onViewPhoto?: () => void;
   t: Tokens;
   scheme: "light" | "dark";
 }) {
@@ -312,13 +329,21 @@ function TimelineRowCard({
       onPress={onPress}
       style={[styles.card, styles.row, { backgroundColor: t.card, borderColor: t.border }]}
     >
-      {/* Local photo when this phone has one; neutral placeholder otherwise. */}
-      {entry.localUri ? (
-        <Image
-          source={{ uri: entry.localUri }}
-          style={styles.thumb}
-          accessibilityLabel="Assessment photo"
-        />
+      {/* Local photo when this phone has one; neutral placeholder otherwise.
+          The thumb is its own target: photo full-screen, row → diagnosis. */}
+      {entry.localUri && onViewPhoto ? (
+        <Pressable
+          accessibilityRole="imagebutton"
+          accessibilityLabel={`View the ${entry.dateLabel} photo full screen`}
+          onPress={onViewPhoto}
+          hitSlop={6}
+        >
+          <Image
+            source={{ uri: entry.localUri }}
+            style={styles.thumb}
+            accessibilityLabel="Assessment photo"
+          />
+        </Pressable>
       ) : (
         <View style={[styles.thumb, { backgroundColor: t.border }]} />
       )}

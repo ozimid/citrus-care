@@ -20,10 +20,10 @@ import {
   PLANT_DETAIL_LOAD_ERROR,
   type PlantDetailData,
 } from "./plant-detail";
-import { mapPlantRows, type PlantListItem } from "./plants";
+import { attachCoverPhotos, mapPlantRows, type PlantListItem } from "./plants";
 import { allPlants, getPlant, type PlantStore } from "./plant-store";
 import { deletePlantRecord, loadPlantStore, putPlant } from "./plant-store-io";
-import { deleteLocalPlantPhotos } from "./photo-store-io";
+import { deleteLocalPlantPhotos, loadPhotoIndex } from "./photo-store-io";
 import {
   plantDetailRowFromStore,
   plantRowsFromStore,
@@ -35,10 +35,12 @@ async function loadStores(): Promise<{ plants: PlantStore; assessments: Assessme
   return { plants, assessments };
 }
 
-/** The plants list, newest-first, with latest score + trend chip. */
+/** The plants list, newest-first, with latest score, trend chip and the
+ * card's cover photo (joined from the on-phone index — plain file uris). */
 export async function fetchPlants(): Promise<PlantListItem[]> {
   const { plants, assessments } = await loadStores();
-  return mapPlantRows(plantRowsFromStore(allPlants(plants), allAssessments(assessments)));
+  const items = mapPlantRows(plantRowsFromStore(allPlants(plants), allAssessments(assessments)));
+  return attachCoverPhotos(items, await loadPhotoIndex());
 }
 
 /** One plant's header row + full timeline (newest-first). */

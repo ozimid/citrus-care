@@ -70,10 +70,15 @@ the region says "the branch is in here" — the strongest claim this tier suppor
 **D-P4. A mark we cannot trust is not drawn — the mark, not the cut.**
 The marker is dropped (the cut survives, per D-P1) when coordinates are out of range, the box is
 inverted, the box covers more than 55% of the photo (the documented "one huge box over a quadrant"
-failure), or the box is under 0.05% — all four values ≤ 100 is ambiguous between the 0–1000 grid and
-percentages, and guessing produces a small, tight, confident-looking, wrong overlay, which is the one
-outcome worth avoiding most. `MAX_CUTS = 3` holds the model to the three it was asked for; extra boxes
-are guesses. When the model itself reports `subject: "unclear"` we believe it and draw nothing at all.
+failure), or the box is under 0.05%. `MAX_CUTS = 3` holds the model to the three it was asked for; extra
+boxes are guesses.
+
+**Amended by device V&V (2026-08-31):** a box whose four values all fit 0–100 was originally refused as
+ambiguous between the grid and percentages. On the user's own rose the model answered in percentages,
+every box was refused, and the photo rendered with nothing marked — the useless state. Percent-shaped
+answers are now read AS percentages (y-first order kept). The residual misread — a true grid box that
+fits 0–100 — degrades to a small top-left region that is visible and checkable, where the old behaviour
+was no information at all; regions carry their own size, so the loosening cannot produce a crosshair. When the model itself reports `subject: "unclear"` we believe it and draw nothing at all.
 A plan with zero drawable marks still renders — the rules, the season and the text steps carry it.
 *A missing overlay is a good outcome; a wrong one is not.*
 
@@ -170,6 +175,18 @@ The screens were then put through the project's `ux-designer` subagent
   question into the next prompt.
 - **Touch targets, live regions and speaker attribution** across both screens.
 
+## 4c. Device-feedback round (2026-08-31, the user's first real run)
+
+The first on-device run returned the V10 result: **every mark dropped, and far too much text.** Changes:
+percent boxes honored (above); the season card became WORD + window + one line (the full verdict sentence
+still feeds the model prompt); the how-to rules collapsed behind a toggle with the *never* list always
+visible (hidden detail, never hidden warnings); the AI summary card became two plain lines; the
+nothing-marked banners were halved. Added in the same round: **prune reminders** (a local notification on
+the morning the next best window opens — date from `nextPruneWindowStart`, deterministic, mirrored for the
+south; same permission/replace/9-am machinery as watering), **dashboard cover photos** (cover assessment's
+photo, falling back to the plant's newest; `attachCoverPhotos`) and a **full-screen photo viewer** from
+the card thumbnail and the timeline thumbnails.
+
 ## 5. Deliberately not built
 
 | Not built | Why |
@@ -182,7 +199,7 @@ The screens were then put through the project's `ux-designer` subagent
 
 ## 6. How we know it works
 
-Automated (green as of 2026-08-31): mobile `tsc --noEmit`, **562** vitest tests, `arch-guard` (pure/`-io`
+Automated (green as of 2026-08-31): mobile `tsc --noEmit`, **577** vitest tests, `arch-guard` (pure/`-io`
 split + no backend/cloud imports), `expo export`.
 
 Two of those tests exist specifically to guard decisions above, because a decision with no test is a

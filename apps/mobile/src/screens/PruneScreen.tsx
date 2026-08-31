@@ -33,12 +33,16 @@ import {
 } from "../lib/prune-io";
 import { cutProgress, type StoredPrunePlan } from "../lib/prune-store";
 import {
+  bestWindowLabel,
+  nextPruneWindowStart,
   promptRulesFor,
   pruningPackFor,
   seasonVerdict,
   type Hemisphere,
   type SeasonStatus,
 } from "../lib/pruning-rules";
+import { formatReminderDate, schedulePruneReminder } from "../lib/reminders";
+import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
 import { cachedLocalConditions } from "../lib/weather-io";
@@ -93,6 +97,14 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
   // condition as well as the months.
   const [hemisphere, setHemisphere] = useState<Hemisphere>("northern");
   const [noticeSeen, setNoticeSeen] = useState(true);
+  /** F23 reminders: idle → setting → set(dateLabel) | note(message). */
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [reminder, setReminder] = useState<
+    | { kind: "idle" }
+    | { kind: "setting" }
+    | { kind: "set"; dateLabel: string }
+    | { kind: "note"; message: string }
+  >({ kind: "idle" });
 
   /** Guards the picker + downscale window that `phase` cannot see. */
   const busyRef = useRef(false);
@@ -228,6 +240,30 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
     }
   }, []);
 
+  const remindMe = useCallback(async () => {
+    setReminder({ kind: "setting" });
+    try {
+      const windowStart = nextPruneWindowStart(pack, new Date(), hemisphere);
+      const outcome = await schedulePruneReminder(notificationScheduler, {
+        plantId: plant.id,
+        plantName: plant.name,
+        packLabel: pack.label,
+        windowStart,
+      });
+      if (outcome.ok) {
+        setReminder({ kind: "set", dateLabel: formatReminderDate(outcome.date) });
+      } else {
+        setReminder({
+          kind: "note",
+          message: "Notifications are off for Citrus Care — enable them in your device settings.",
+        });
+      }
+    } catch (e) {
+      console.error("[PruneScreen] prune reminder failed:", (e as Error).message);
+      setReminder({ kind: "note", message: "Couldn't set the reminder. Please try again." });
+    }
+  }, [hemisphere, pack, plant.id, plant.name]);
+
   const progress = record ? cutProgress(record) : null;
   /** What is actually ON the photo — not what the plan contains. Tested in
    * prune-plan.test.ts; two bugs came from having it inline here. */
@@ -257,13 +293,44 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
 
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Deterministic, always right: the season and the species rules. */}
-        {/* Deterministic and certainly correct — so it reads at arm's length in
-            sun, and the verdict is a WORD, not just a border colour. */}
+        {/* Deterministic and certainly correct — the verdict is a WORD plus the
+            window, readable at arm's length. Device feedback 2026-08-31: the
+            full verdict sentence read as generic filler, so the paragraph is
+            gone — it still feeds the model prompt, humans get the short form. */}
         <View style={[styles.card, { backgroundColor: t.card, borderColor: seasonColor(season.status, t, caution) }]}>
-          <Text style={[styles.cardLabel, { color: seasonColor(season.status, t, caution) }]}>
-            RIGHT NOW · {SEASON_WORD[season.status]}
+          <View style={styles.seasonHead}>
+            <Text style={[styles.seasonWord, { color: seasonColor(season.status, t, caution) }]}>
+              {SEASON_WORD[season.status]}
+            </Text>
+            <Text style={[styles.seasonWindow, { color: t.text }]}>Best: {bestWindowLabel(pack, hemisphere)}</Text>
+          </View>
+          <Text style={[styles.seasonNote, { color: t.sub }]} numberOfLines={2}>
+            {pack.seasonNote.charAt(0).toUpperCase() + pack.seasonNote.slice(1)}. Dead or damaged
+            wood: any time.
           </Text>
-          <Text style={[styles.seasonLine, { color: t.text }]}>{season.line}</Text>
+          {reminder.kind === "set" ? (
+            <Text style={[styles.reminderSet, { color: t.green }]}>
+              ✓ Reminder set · {reminder.dateLabel}
+            </Text>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Remind me when the pruning window opens"
+              disabled={reminder.kind === "setting"}
+              onPress={remindMe}
+              hitSlop={8}
+              style={styles.remindRow}
+            >
+              <Text style={[styles.remindText, { color: t.green, opacity: reminder.kind === "setting" ? 0.5 : 1 }]}>
+                {reminder.kind === "setting"
+                  ? "Setting reminder…"
+                  : `🔔 Remind me when the window opens · ${formatReminderDate(nextPruneWindowStart(pack, new Date(), hemisphere))}`}
+              </Text>
+            </Pressable>
+          )}
+          {reminder.kind === "note" ? (
+            <Text style={[styles.seasonNote, { color: t.sub }]}>{reminder.message}</Text>
+          ) : null}
         </View>
 
         {/* Renders nothing once the model is ready. Without it the only way out
@@ -309,8 +376,8 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
                 </Text>
                 <Text style={[styles.cutText, { color: t.text }]}>
                   {record.plan.subject === "unclear"
-                    ? "The AI couldn't make out the branches, so nothing is marked. The written steps below are still what it advises. To try again: step back so a whole branch is in frame, in even light, against a plain background."
-                    : "The AI didn't place any cut it was sure enough of to draw. The steps below are still its advice — find each one on the plant yourself."}
+                    ? "Couldn't make out the branches. Retake: whole branch in frame, even light."
+                    : "No cut was sure enough to mark. The steps below still apply."}
                 </Text>
               </View>
             )}
@@ -330,13 +397,12 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
               </View>
             ) : null}
 
-            <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
-              <Text style={[styles.cardLabel, { color: t.sub }]}>AI · WHAT IT SEES</Text>
-              <Text style={[styles.summary, { color: t.text }]}>{record.plan.summary}</Text>
-              {/* The low-confidence line lives ABOVE the overlay, next to the
-                  marks it hedges. Repeating it here would say it twice — once
-                  ungated on whether anything was actually drawn. */}
-            </View>
+            {/* Device feedback 2026-08-31: the summary card was "too much
+                text". Two lines, no card, no label — the marks and the steps
+                are the content. */}
+            <Text style={[styles.summary, { color: t.sub }]} numberOfLines={2}>
+              {record.plan.summary}
+            </Text>
 
             {record.plan.cuts.map((cut, index) => {
               const done = record.doneCuts.includes(index);
@@ -404,22 +470,38 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
           </>
         ) : null}
 
-        {/* The rules the model was given — visible so the grower can check its
-            work against the same standard, and useful on its own. */}
+        {/* The rules the model was given. Device feedback 2026-08-31: the full
+            list read as a wall of text, so the DANGEROUS half (the nevers) is
+            always visible and the how-to expands on demand — hidden detail,
+            never hidden warnings. The model still gets every rule. */}
         <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
           <Text style={[styles.cardLabel, { color: t.sub }]}>
-            PRUNING A {pack.label.toUpperCase()} · SOURCED RULES
+            {pack.label.toUpperCase()} · SOURCED RULES
           </Text>
-          {pack.rules.map((rule) => (
-            <Text key={rule} style={[styles.cutText, { color: t.text }]}>
-              • {rule}
-            </Text>
-          ))}
           {pack.never.map((rule) => (
             <Text key={rule} style={[styles.cutText, { color: t.danger }]}>
               • {rule}
             </Text>
           ))}
+          {rulesOpen
+            ? pack.rules.map((rule) => (
+                <Text key={rule} style={[styles.cutText, { color: t.text }]}>
+                  • {rule}
+                </Text>
+              ))
+            : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: rulesOpen }}
+            accessibilityLabel={rulesOpen ? "Hide the how-to rules" : `Show all ${pack.rules.length} how-to rules`}
+            onPress={() => setRulesOpen(!rulesOpen)}
+            hitSlop={8}
+            style={styles.remindRow}
+          >
+            <Text style={[styles.remindText, { color: t.green }]}>
+              {rulesOpen ? "Hide how-to" : `Show how-to (${pack.rules.length} rules)`}
+            </Text>
+          </Pressable>
           {/* The season line above is mirrored, but month names INSIDE a rule
               are not — say so rather than let a southern grower read
               "September through January" as their own calendar. */}
@@ -536,6 +618,18 @@ const styles = StyleSheet.create({
   card: { borderWidth: 1, borderRadius: RADIUS, padding: 14, gap: 6 },
   cardLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
   seasonLine: { fontSize: 14, lineHeight: 20, fontWeight: "600" },
+  seasonHead: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  seasonWord: { fontSize: 17, fontWeight: "800", letterSpacing: 0.3 },
+  seasonWindow: { fontSize: 14, fontWeight: "600" },
+  seasonNote: { fontSize: 12, lineHeight: 17 },
+  remindRow: { minHeight: 44, justifyContent: "center" },
+  remindText: { fontSize: 13, fontWeight: "600" },
+  reminderSet: { fontSize: 13, fontWeight: "600", paddingVertical: 12 },
   summary: { fontSize: 14, lineHeight: 20 },
   confidence: { fontSize: 12, lineHeight: 17 },
   noticeCta: { fontSize: 14, fontWeight: "700", marginTop: 4 },
