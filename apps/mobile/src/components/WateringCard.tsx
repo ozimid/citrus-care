@@ -124,7 +124,10 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
     }
     setError(null);
     setPhase({ kind: "no-profile", retrying: true });
-    const generated = await generateAndStoreCareProfile(localEngine.generate, plant);
+    const generated = await generateAndStoreCareProfile(
+      { generate: localEngine.generate, interrupt: localEngine.interrupt },
+      plant,
+    );
     if (generated) {
       onProfileGenerated?.();
       return;

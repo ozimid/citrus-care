@@ -53,7 +53,15 @@ interface LocalEngineContextValue {
   isReady: () => boolean;
   /** Rejects when the session isn't loaded. Serialized: the single native
    * session runs one request at a time (a diagnosis and a care-profile call
-   * never overlap), FIFO. */
+   * never overlap), FIFO.
+   *
+   * INVARIANT for every caller: run the call under withInferenceBudget with the
+   * shared LOCAL_HARD_CEILING_MS. Each request's clock starts when it is
+   * ENQUEUED, so with equal ceilings the earliest one always expires first —
+   * and the earliest is always the one currently running, so interrupt() can
+   * only ever hit its own request. A caller that skips the budget can hold the
+   * session past another request's ceiling and take an interrupt meant for
+   * itself. (care-profile-io was that caller until 2026-08-31.) */
   generate: LocalGenerate;
   /** Interrupt the in-flight inference (assess flow's hard ceiling). No-op
    * when nothing is running. */

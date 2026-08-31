@@ -50,7 +50,10 @@ export function PlantInfoCard({ plant, t, onProfileGenerated }: Props) {
     }
     setNote(null);
     setBusy(true);
-    const generated = await generateAndStoreCareProfile(localEngine.generate, plant);
+    const generated = await generateAndStoreCareProfile(
+      { generate: localEngine.generate, interrupt: localEngine.interrupt },
+      plant,
+    );
     setBusy(false);
     if (generated) onProfileGenerated?.();
     else setNote("Couldn't refresh right now — try again later.");

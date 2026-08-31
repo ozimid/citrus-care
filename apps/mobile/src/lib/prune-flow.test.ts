@@ -1,0 +1,218 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LOCAL_HARD_CEILING_MS, LOCAL_SLOW_THRESHOLD_MS } from "./inference-budget";
+import {
+  PRUNE_ANALYSIS_FAILED_ERROR,
+  PRUNE_PERSIST_ERROR,
+  PRUNE_PHOTO_SAVE_ERROR,
+  PRUNE_TIMEOUT_ERROR,
+  PRUNE_UNAVAILABLE_ERROR,
+  PRUNE_UNREADABLE_ERROR,
+  type PrunePromptRules,
+} from "./prune-plan";
+import { runPruneAnalysis, type PruneAnalysisDeps, type PruneAnalysisResult } from "./prune-flow";
+
+const RULES: PrunePromptRules = {
+  className: "Rose",
+  seasonLine: "Late August: deadhead only.",
+  rules: ["Cut above an outward-facing bud eye."],
+  never: ["Never leave a stub."],
+};
+
+const MODEL_JSON = JSON.stringify({
+  summary: "Two crossing canes in the middle.",
+  subject: "plant",
+  confidence: "medium",
+  cuts: [{ label: "Crossing cane", action: "Cut here", reason: "Rubs", priority: 1, x: 40, y: 55 }],
+  general_steps: ["Wipe the blades between plants."],
+});
+
+const INPUT = {
+  plantId: "plant-1",
+  photoUri: "file:///tmp/shot.jpg",
+  photoAspect: 0.75,
+  ruleClass: "rose",
+  rules: RULES,
+};
+
+function makeDeps(overrides: Partial<PruneAnalysisDeps> = {}) {
+  const saved: { plantId: string; sourceUri: string }[] = [];
+  const prepared: string[] = [];
+  const generated: { imageUri: string; system: string; user: string }[] = [];
+  const persisted: unknown[] = [];
+  const interrupted: string[] = [];
+  const deps: PruneAnalysisDeps = {
+    isReady: () => true,
+    savePhoto: async (plantId, sourceUri) => {
+      saved.push({ plantId, sourceUri });
+      return "file:///docs/photos/plant-1/saved.jpg";
+    },
+    prepare: async (uri) => {
+      prepared.push(uri);
+      return `${uri}#512`;
+    },
+    generate: async (args) => {
+      generated.push(args);
+      return MODEL_JSON;
+    },
+    persist: async (args) => {
+      persisted.push(args);
+      return "plan-1";
+    },
+    interrupt: () => interrupted.push("interrupt"),
+    ...overrides,
+  };
+  return { deps, saved, prepared, generated, persisted, interrupted };
+}
+
+function planned(result: PruneAnalysisResult) {
+  if (result.status !== "planned") throw new Error(`expected a planned result, got ${result.status}`);
+  return result;
+}
+
+describe("runPruneAnalysis happy path", () => {
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("saves the photo, analyses the downscaled copy, and stores the plan", async () => {
+    const { deps, saved, prepared, generated, persisted } = makeDeps();
+    const result = planned(await runPruneAnalysis(deps, INPUT));
+
+    expect(saved).toEqual([{ plantId: "plant-1", sourceUri: "file:///tmp/shot.jpg" }]);
+    expect(prepared).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
+    expect(generated[0].imageUri).toBe("file:///docs/photos/plant-1/saved.jpg#512");
+    expect(result.planId).toBe("plan-1");
+    expect(result.plan.cuts).toHaveLength(1);
+    expect(result.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
+    expect(persisted).toEqual([
+      {
+        plantId: "plant-1",
+        photoUri: "file:///docs/photos/plant-1/saved.jpg",
+        photoAspect: 0.75,
+        ruleClass: "rose",
+        plan: result.plan,
+      },
+    ]);
+  });
+
+  it("puts this plant's rules in the prompt it sends", async () => {
+    const { deps, generated } = makeDeps();
+    await runPruneAnalysis(deps, INPUT);
+    expect(generated[0].system).toContain("Rose");
+    expect(generated[0].system).toContain("Cut above an outward-facing bud eye.");
+    expect(generated[0].system).toContain("Late August: deadhead only.");
+    expect(generated[0].user.length).toBeGreaterThan(0);
+  });
+
+  it("reports the phases so the screen can say what it is doing", async () => {
+    const { deps } = makeDeps();
+    const phases: string[] = [];
+    await runPruneAnalysis(deps, INPUT, { onPhase: (phase) => phases.push(phase) });
+    expect(phases).toEqual(["saving", "analyzing"]);
+  });
+
+  it("hands the durable uri up as soon as the photo lands", async () => {
+    const { deps } = makeDeps();
+    const uris: string[] = [];
+    await runPruneAnalysis(deps, INPUT, { onPhotoSaved: (uri) => uris.push(uri) });
+    expect(uris).toEqual(["file:///docs/photos/plant-1/saved.jpg"]);
+  });
+});
+
+describe("runPruneAnalysis failure modes are honest and retryable", () => {
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("fails on a photo it could not save", async () => {
+    const { deps } = makeDeps({
+      savePhoto: async () => {
+        throw new Error("ENOSPC");
+      },
+    });
+    await expect(runPruneAnalysis(deps, INPUT)).rejects.toThrow(PRUNE_PHOTO_SAVE_ERROR);
+  });
+
+  it("keeps the photo but refuses to analyse when the engine isn't ready", async () => {
+    const { deps, saved, generated } = makeDeps({ isReady: () => false });
+    await expect(runPruneAnalysis(deps, INPUT)).rejects.toThrow(PRUNE_UNAVAILABLE_ERROR);
+    expect(saved).toHaveLength(1);
+    expect(generated).toHaveLength(0);
+  });
+
+  it("turns a model crash into a retryable error", async () => {
+    const { deps } = makeDeps({
+      generate: async () => {
+        throw new Error("vulkan device lost");
+      },
+    });
+    await expect(runPruneAnalysis(deps, INPUT)).rejects.toThrow(PRUNE_ANALYSIS_FAILED_ERROR);
+  });
+
+  it("reports unreadable output rather than inventing a plan", async () => {
+    const { deps, persisted } = makeDeps({ generate: async () => "I'm not sure, sorry!" });
+    await expect(runPruneAnalysis(deps, INPUT)).rejects.toThrow(PRUNE_UNREADABLE_ERROR);
+    expect(persisted).toHaveLength(0);
+  });
+
+  it("surfaces a failed store write", async () => {
+    const { deps } = makeDeps({
+      persist: async () => {
+        throw new Error("AsyncStorage full");
+      },
+    });
+    await expect(runPruneAnalysis(deps, INPUT)).rejects.toThrow(PRUNE_PERSIST_ERROR);
+  });
+
+  it("does not store a plan for a photo with no plant in it", async () => {
+    const { deps, persisted } = makeDeps({
+      generate: async () =>
+        JSON.stringify({ summary: "This is a keyboard.", subject: "not_a_plant", cuts: [] }),
+    });
+    const result = await runPruneAnalysis(deps, INPUT);
+    expect(result.status).toBe("rejected");
+    expect(persisted).toHaveLength(0);
+  });
+
+  it("DOES store a plan the model marked unclear — the seasonal advice still helps", async () => {
+    const { deps, persisted } = makeDeps({
+      generate: async () =>
+        JSON.stringify({ summary: "Too dark to place a cut.", subject: "unclear", cuts: [] }),
+    });
+    const result = planned(await runPruneAnalysis(deps, INPUT));
+    expect(result.plan.subject).toBe("unclear");
+    expect(persisted).toHaveLength(1);
+  });
+});
+
+describe("runPruneAnalysis under the shared inference budget", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("hints that it is slow but keeps waiting", async () => {
+    const slow: string[] = [];
+    const { deps } = makeDeps({
+      generate: () =>
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve(MODEL_JSON), LOCAL_SLOW_THRESHOLD_MS + 1_000),
+        ),
+    });
+    const pending = runPruneAnalysis(deps, INPUT, { onSlow: () => slow.push("slow") });
+    await vi.advanceTimersByTimeAsync(LOCAL_SLOW_THRESHOLD_MS + 1_000);
+    expect((await pending).status).toBe("planned");
+    expect(slow).toEqual(["slow"]);
+  });
+
+  it("interrupts the session and gives up honestly at the ceiling", async () => {
+    const { deps, interrupted } = makeDeps({ generate: () => new Promise<string>(() => {}) });
+    const pending = runPruneAnalysis(deps, INPUT);
+    const assertion = expect(pending).rejects.toThrow(PRUNE_TIMEOUT_ERROR);
+    await vi.advanceTimersByTimeAsync(LOCAL_HARD_CEILING_MS + 1);
+    await assertion;
+    expect(interrupted).toEqual(["interrupt"]);
+  });
+});

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import type { StoredAssessment } from "./assessment-store";
+import type { ChatMessage } from "./chat-store";
 import type { StoredPlant } from "./plant-store";
 import {
   base64ToBytes,
@@ -39,18 +40,23 @@ function assessment(id: string, plantId: string): StoredAssessment {
   return { id, plantId, createdAt: "2026-07-15T00:00:00Z", diagnosis: diagnosis(), comparedToId: null, engine: "on-device" };
 }
 
+function chatMessage(id: string, plantId = "p1"): ChatMessage {
+  return { id, plantId, role: "user", text: `question ${id}`, createdAt: "2026-07-15T00:00:00Z" };
+}
+
 function stores(overrides: Partial<BackupStores> = {}): BackupStores {
   return {
     plants: { p1: plant("p1") },
     assessments: { a1: assessment("a1", "p1") },
     wateringLog: { p1: "2026-07-14T00:00:00Z" },
     photoIndex: { a1: { localUri: "file:///x.jpg", plantId: "p1", engine: "on-device", createdAt: "2026-07-15T00:00:00Z" } },
+    chat: { p1: [chatMessage("m1")] },
     ...overrides,
   };
 }
 
 describe("buildBackup / serializeBackup / parseBackup", () => {
-  it("round-trips the four stores through a JSON document", () => {
+  it("round-trips every store through a JSON document", () => {
     const doc = buildBackup(stores(), "2026-07-15T12:00:00Z");
     expect(doc.exportedAt).toBe("2026-07-15T12:00:00Z");
     expect(parseBackup(serializeBackup(doc))).toEqual({ stores: stores(), photos: [] });
@@ -78,7 +84,7 @@ describe("buildBackup / serializeBackup / parseBackup", () => {
 
   it("tolerates missing sections (empty stores)", () => {
     const parsed = parseBackup(JSON.stringify({ app: "citrus-care", version: 1, exportedAt: "t" }))?.stores;
-    expect(parsed).toEqual({ plants: {}, assessments: {}, wateringLog: {}, photoIndex: {} });
+    expect(parsed).toEqual({ plants: {}, assessments: {}, wateringLog: {}, photoIndex: {}, chat: {} });
   });
 });
 
@@ -133,6 +139,40 @@ describe("backup v2 photos", () => {
       photos: [photo, { assessmentId: 5 }, "junk", { ...photo, base64: 7 }],
     };
     expect(parseBackup(JSON.stringify(doc))?.photos).toEqual([photo]);
+  });
+});
+
+// F38: the per-plant conversation travels with the backup. Pruning plans do
+// NOT — their photo is the plan, and the photo carrier is keyed to assessments,
+// so a restored plan would open on a dead image.
+describe("backup v3 chat", () => {
+  it("round-trips a conversation", () => {
+    const doc = buildBackup(stores(), "2026-08-31T00:00:00Z");
+    expect(parseBackup(serializeBackup(doc))?.stores.chat).toEqual({ p1: [chatMessage("m1")] });
+  });
+
+  it("parses an older backup with no chat section as an empty conversation store", () => {
+    const doc = { app: "citrus-care", version: 2, exportedAt: "t", plants: {}, assessments: {} };
+    expect(parseBackup(JSON.stringify(doc))?.stores.chat).toEqual({});
+  });
+
+  it("drops malformed messages through the store's own parser", () => {
+    const doc = {
+      app: "citrus-care",
+      version: 3,
+      exportedAt: "t",
+      chat: { p1: [chatMessage("good"), { id: "bad" }], p2: "not an array" },
+    };
+    const parsed = parseBackup(JSON.stringify(doc))?.stores.chat;
+    expect(parsed).toEqual({ p1: [chatMessage("good")] });
+  });
+
+  it("keeps the local conversation on collision — an import never clobbers it", () => {
+    const current = stores({ chat: { p1: [chatMessage("local")] } });
+    const incoming = stores({ chat: { p1: [chatMessage("from-backup")], p2: [chatMessage("m2", "p2")] } });
+    const { merged } = mergeBackup(current, incoming);
+    expect(merged.chat.p1).toEqual([chatMessage("local")]);
+    expect(merged.chat.p2).toHaveLength(1);
   });
 });
 

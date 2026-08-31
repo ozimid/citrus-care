@@ -1,5 +1,5 @@
 // D-17: manual export/import — the only backup now that nothing is synced. Pure
-// half: build a document from the four on-device stores, and parse an untrusted
+// half: build a document from the on-device stores, and parse an untrusted
 // backup file by REUSING each store's own tolerant parser (malformed entries
 // drop, never throw). Merge never overwrites local data — an import can only add
 // what the phone doesn't already have. The IO (file write, share sheet,
@@ -14,18 +14,23 @@ import {
   serializeAssessmentStore,
   type AssessmentStore,
 } from "./assessment-store";
+import { parseChatStore, serializeChatStore, type ChatStore } from "./chat-store";
 import { parsePhotoIndex, serializePhotoIndex, type PhotoIndex } from "./photo-store";
 import { parsePlantStore, serializePlantStore, type PlantStore } from "./plant-store";
 import { parseWateringLog, serializeWateringLog, type WateringLog } from "./watering";
 
 export const BACKUP_APP_TAG = "citrus-care";
-export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION = 3;
 
 export interface BackupStores {
   plants: PlantStore;
   assessments: AssessmentStore;
   wateringLog: WateringLog;
   photoIndex: PhotoIndex;
+  /** v3 (F38) — the per-plant conversations. Pruning plans are deliberately
+   * NOT here: a plan IS its annotated photo, and the photo carrier below is
+   * keyed to assessment ids, so a restored plan would open on a dead file. */
+  chat: ChatStore;
 }
 
 /** One photo, carried inside the document (v2+). */
@@ -100,6 +105,7 @@ export function parseBackup(json: string): ParsedBackup | null {
       assessments: reparse(r.assessments, parseAssessmentStore),
       wateringLog: reparse(r.wateringLog, parseWateringLog),
       photoIndex: reparse(r.photoIndex, parsePhotoIndex),
+      chat: reparse(r.chat, parseChatStore),
     },
     photos: Array.isArray(r.photos) ? r.photos.filter(isValidBackupPhoto) : [],
   };
@@ -147,6 +153,9 @@ export function mergeBackup(current: BackupStores, incoming: BackupStores): Merg
       assessments: { ...incoming.assessments, ...current.assessments },
       wateringLog: { ...incoming.wateringLog, ...current.wateringLog },
       photoIndex: { ...incoming.photoIndex, ...current.photoIndex },
+      // Per-PLANT arrays, so the collision unit is the whole conversation:
+      // a phone that has talked about this plant keeps what it has.
+      chat: { ...incoming.chat, ...current.chat },
     },
     added: {
       plants: countNew(current.plants, incoming.plants),
@@ -157,4 +166,10 @@ export function mergeBackup(current: BackupStores, incoming: BackupStores): Merg
 
 // Re-exported so backup-io can serialize each store the same way the document
 // does, without importing four modules.
-export { serializeAssessmentStore, serializePhotoIndex, serializePlantStore, serializeWateringLog };
+export {
+  serializeAssessmentStore,
+  serializeChatStore,
+  serializePhotoIndex,
+  serializePlantStore,
+  serializeWateringLog,
+};

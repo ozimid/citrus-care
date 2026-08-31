@@ -1,115 +1,87 @@
 # Citrus Care — Mobile (Expo)
 
-Native mobile app per locked decision **D-11** (Obsidian: Architecture § Locked decisions) and the design doc **Design - Citrus Care Native App**; since **D-16** the app IS the product. Implemented so far: **Google sign-in + authenticated Plants list** (Welcome screen → Plants tab with health rings, pull-to-refresh, Profile tab with sign-out), the **new-plant sheet** (shared `newPlantSchema`), **camera capture** (FAB → full-screen `expo-camera` viewfinder with the three-mode guide Leaf/Whole plant/Cut, gallery import, plant selector, downscale to 1600px JPEG q0.85, review screen), the **local-first assess pipeline** (save the JPEG on the phone → POST `/assess` with the base64 image → diagnosis screen with score ring, symptom chips, causes, ranked care plan; Plants list refreshes with the new score), **plant detail** (timeline with local thumbnails, before/after slider, quarantine alerts, edit/delete), and **re-assessment reminders** (local notifications; listed/cancellable on Profile). Photos live ONLY on this phone (`photos/{plantId}/…` in app documents + an AsyncStorage index); the server stores structured diagnoses, never images.
+**This app is the product.** Photo-driven plant care that runs entirely on the phone: no accounts, no
+server, no API keys, and nothing ever leaves the device except the one-time model download and anonymous
+weather lookups (locked decision **D-17**).
 
-## Deliberately NOT an npm workspace
+## What it does
 
-This package is excluded from the root `workspaces` so React Native's pinned `react` version can never collide with the web app's React in hoisted `node_modules`. Install and run it standalone:
+- **Assess** — snap a leaf, a whole plant or a pruning cut; Gemma 4 E2B runs on the phone and returns a
+  structured diagnosis (health score, symptoms, causes, ranked actions). A re-assessment shows
+  better/same/worse, computed deterministically from the scores.
+- **Ask about this plant (F38)** — a per-plant chat grounded in that plant's own stored record: its care
+  profile, its last assessment, its watering dates, its species pruning rules.
+- **Where to prune (F23)** — photograph the plant and the model marks the regions to cut, over a
+  deterministic season verdict and a species rule pack sourced from extension services
+  (`docs/research/pruning-rules.md`). The rules are correct whether or not the model marks anything.
+- **Watering** — weather-aware next-water dates from an on-device care profile plus anonymous Open-Meteo.
+- **Timeline, before/after slider, reminders, backup** — all local.
+
+Design contract for the two AI tools: `docs/design/plant-tools.md`.
+
+## Setup
 
 ```bash
 cd apps/mobile
-npm install
-npx expo start           # QR code -> Expo Go on your phone (see sign-in caveat below)
+npm install               # NOT an npm workspace — install it standalone
+npx expo start            # dev server
 ```
 
-Shared types/schemas come from `packages/shared` via the `@citrus/shared` alias — `tsconfig.json` paths for the compiler, `metro.config.js` for the bundler (plus the monorepo-root `node_modules` for `zod`). Note `app.json` sets `experiments.onDemandFilesystem: false`: Expo's on-demand filesystem breaks `expo export` for files outside the project root, which `packages/shared` is.
+**There is no configuration.** No `.env`, no keys, no Supabase, no OAuth client IDs — all of that was
+deleted with the backend in D-17. If you find a doc telling you to set `EXPO_PUBLIC_*` variables, it is
+older than the pivot.
 
-## Configuration (required once)
+The on-device model is downloaded **in the app**, once, over Wi-Fi: Profile → On-device AI (~1.3 GB).
+Until it is installed, assessments, chat and pruning show an honest "not ready" state with a setup card;
+everything else works.
 
-The app reads config from **`.env` (gitignored, preferred)** or `app.json > expo.extra` (committed — placeholders only, never put the real anon key there). Env vars win over `extra`; `YOUR_*` values are treated as unset. Create `apps/mobile/.env`:
+### Deliberately not an npm workspace
 
-```bash
-EXPO_PUBLIC_SUPABASE_URL=...            # = NEXT_PUBLIC_SUPABASE_URL in apps/web/.env.local
-EXPO_PUBLIC_SUPABASE_ANON_KEY=...       # = NEXT_PUBLIC_SUPABASE_ANON_KEY in apps/web/.env.local
-EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...    # existing web OAuth client (apps/web/app/_lib/google-auth-config.ts)
-EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=...    # created below
-EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=...# created below
-EXPO_PUBLIC_API_ORIGIN=...              # optional — see "API origin" below
-```
-
-Until Supabase + at least one Google client ID are set, the Welcome screen renders with the button disabled and a "not configured" hint.
-
-### API origin (assess pipeline)
-
-The assess flow talks to the standalone Hono service (`apps/api`, dev port 3003) with `Authorization: Bearer <supabase access token>`. The phone can't reach `localhost` on your dev machine, so the base URL defaults to **`http://192.168.1.205:3002/api`** — the web dev server's `/api/assess` rewrite (see `DEFAULT_API_ORIGIN` in `src/lib/api.ts`). If your machine has a different LAN IP — or you're pointing at a deployed API — set `EXPO_PUBLIC_API_ORIGIN` in `.env` (or `extra.apiOrigin` in `app.json`; env wins, `YOUR_*` placeholders are ignored, trailing slash stripped):
-
-```bash
-EXPO_PUBLIC_API_ORIGIN=http://<your-lan-ip>:3003   # `npm run dev` at the repo root starts the api on 3003
-```
-
-Note for Android dev builds: the default origin is plain `http`, which Android permits in debug builds only; production builds should point at an `https` origin.
-
-## Google Cloud Console setup (the one manual step)
-
-Google sign-in uses `expo-auth-session` → Supabase `signInWithIdToken`. Native Google OAuth needs **platform-specific client IDs** in the same Google Cloud project that already holds the web client (project `203990346092`, the one referenced in `apps/web/app/_lib/google-auth-config.ts`).
-
-In [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials):
-
-1. **iOS client** — Create credentials → OAuth client ID → *iOS*.
-   - Bundle ID: `com.citruscare.app` (must match `app.json > expo.ios.bundleIdentifier`).
-   - No redirect URI to enter — Google derives it; the app redirects to `com.citruscare.app:/oauthredirect`.
-   - Copy the client ID into `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`.
-2. **Android client** — Create credentials → OAuth client ID → *Android*.
-   - Package name: `com.citruscare.app` (matches `app.json > expo.android.package`).
-   - SHA-1 fingerprint: for a local debug build, `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android`; for EAS builds, `npx eas credentials -p android` shows the keystore SHA-1.
-   - Copy the client ID into `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`.
-3. **Web client** — reuse the existing one (no new client): the ID in `apps/web/app/_lib/google-auth-config.ts` → `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
-4. **Supabase Dashboard** → Authentication → Providers → Google → add the new **iOS and Android client IDs** to the *Authorized Client IDs / Client IDs* list (comma-separated, alongside the web client ID). Without this, `signInWithIdToken` rejects the token's audience.
-
-**Expo Go cannot complete Google sign-in** — inside Expo Go the application ID is `host.exp.exponent`, which matches none of your Google clients. Use a development build instead:
-
-```bash
-npx expo run:ios       # or: npx expo run:android
-# or a cloud dev build: npx eas build --profile development
-```
-
-Expo Go still works for everything up to the sign-in tap (Welcome screen, theming).
+Excluded from the root `workspaces` so React Native's pinned `react` can never collide with the web app's
+React in hoisted `node_modules`. Shared types come from `packages/shared` via the `@citrus/shared` alias —
+`tsconfig.json` paths for the compiler, `metro.config.js` for the bundler. Note `app.json` sets
+`experiments.onDemandFilesystem: false`: Expo's on-demand filesystem breaks `expo export` for files
+outside the project root, which `packages/shared` is.
 
 ## Commands
 
 ```bash
-npm test               # vitest (logic tests, run mode)
-npm run typecheck      # tsc --noEmit
-npx expo start         # dev server / Expo Go
-npx expo export        # metro production bundle (proves the app builds)
+npm test                  # vitest (pure logic), run mode
+npm run typecheck         # tsc --noEmit
+npx expo start            # dev server / dev build
+npx expo export --platform android   # metro production bundle — proves the app builds
 ```
 
-## Testing (vitest, not jest-expo — why)
+### Building an APK locally
 
-Tests target **pure logic modules only** (`src/lib/*.test.ts`): auth session reducer + id_token extraction, plants row mapping/sub-labels/latest-score, health-band thresholds, config resolution, new-plant validation/insert-row building, photo downscale math (1600px/q0.85), the local photo store index (mapping/upsert/remove — `photo-store.test.ts`), capture-mode definitions + plant preselection, API origin resolution + Bearer fetch (`api.test.ts`), the local-first assess flow + generic error strings (`assess.test.ts`), timeline mapping + local-photo joins (`plant-detail.test.ts`), plant mutations (`plant-mutations.test.ts`), and reminder scheduling/permission logic (`reminders.test.ts`). vitest was chosen over jest-expo because these modules import no react-native/expo code, the rest of the monorepo already uses vitest, and it needs zero Babel/transform config. Anything importing react-native stays thin (`*-io.ts`, screens) and is exercised by `expo export` bundling instead. Health-band thresholds intentionally mirror `apps/web/app/_lib/health-style.ts` (<40 Poor, <70 Fair, ≥70 Good) — web/mobile parity.
+EAS cloud builds are optional; the local path needs no quota and takes ~8 minutes:
 
-## Structure
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
+ANDROID_HOME=~/Library/Android/sdk \
+npx eas-cli build --local --profile preview --platform android --output ./build-local.apk
+```
 
-- `App.tsx` — session restore + conditional render (Welcome ⇄ tabs, capture as a full-screen Modal); no nav library yet on purpose
-- `src/lib/` — `supabase.ts` (AsyncStorage-persisted client), `auth.ts` (Google → `signInWithIdToken`), `auth-state.ts` (reducer), `plants.ts` (query + mapping), `new-plant.ts` (form validation → insert payload, shared `newPlantSchema` + 5-digit ZIP rule), `photo.ts` (downscale math mirroring web image-utils) / `photo-io.ts` (thin `expo-image-manipulator` wrapper), `capture-modes.ts` (Leaf/Whole plant/Cut definitions + plant preselection), `health.ts` (bands), `api.ts` (origin resolution + Bearer fetch) / `api-io.ts` (expo-constants + Supabase wiring), `assess.ts` (local save → direct-image `/assess` → Zod-parsed diagnosis, generic error strings, engine seam for D-15), `photo-store.ts` (on-phone photo index, pure) / `photo-store-io.ts` (expo-file-system + AsyncStorage wiring), `reminders.ts` (schedule/cancel/list logic) / `reminders-io.ts` (thin `expo-notifications` wrapper), `config.ts`/`app-config.ts` (env/extra resolution), `theme.ts` (design-doc §5 tokens)
-- `src/screens/` — `WelcomeScreen`, `PlantsScreen`, `ProfileScreen` (account, reminders, sign-out), `CaptureScreen` (camera + permission flow), `ReviewScreen` (post-capture → Analyze with progress states), `DiagnosisScreen` (score ring, symptoms, causes, care plan, remind-me CTA)
-- `src/components/` — `TabBar.tsx` (Plants · Assess FAB · Profile per design §3), `NewPlantSheet.tsx`, `CaptureOverlay.tsx` (mode pill + guide shapes + hint), `PlantPickerSheet.tsx`
+## Architecture: the pure / `-io` split
 
-## Re-assessment reminders (local-only, by design)
+Every module that touches AsyncStorage, the filesystem or an expo API is split in two:
 
-"🔔 Remind me in 2 weeks" on the diagnosis screen schedules a **local** `expo-notifications` notification (design doc §9 open question 6 resolved pragmatically: local first, server-driven push later). Notification permission is requested at that tap — contextual opt-in, never at launch. Scheduled reminders are listed and cancellable on the Profile tab. Known limitations of local scheduling: **deleting (or on iOS, offloading) the app silently loses all reminders**, they don't sync across devices, and they fire in the device's local timezone as scheduled — a future server-push upgrade (EAS + a scheduler table) would fix all three. Capture modes leaf/whole-plant remain client-side framing guidance only; the server's `/assess` accepts just `isCutCare` (Cut mode), so no unsupported fields are sent.
+- `src/lib/<name>.ts` — **pure**. All the logic. Imports no react-native and no expo, so plain vitest can
+  test it with zero transform config. Reads degrade to empty/default; they never throw.
+- `src/lib/<name>-io.ts` — **thin wiring**. Untested by policy, exercised by `expo export` and on device.
 
-## On-device AI requirements (D-15 Stage 2 / F22)
+`src/lib/arch-guard.test.ts` enforces this by scanning the source tree, along with two other rules: no
+backend/auth/cloud-AI imports anywhere, and every on-device flow must run under the shared inference
+budget (`inference-budget.ts` — 25 s slow hint, 120 s interrupt ceiling).
 
-The on-device engine is **opt-in and off by default** — the model is never fetched unasked. Before you turn it on in Profile → On-device AI:
+The single model session runs **one request at a time** (FIFO mutex in `LocalEngineProvider`), so a
+diagnosis, a care profile, a chat answer and a pruning run can never overlap.
 
-- **~1.3 GB download**, once, over WiFi (quantized Gemma 4 E2B, Apache 2.0 — `docs/research/on-device-vlm-native.md`). Cached on the phone; disabling the toggle keeps the files, and only deleting the app removes them.
-- **~2 GB free storage.** Checked before the download starts (`hasRoomForLocalModel` + `expo-file-system`'s `Paths.availableDiskSpace`): the payload plus unpacking headroom. Short on space → the toggle explains and does nothing, rather than downloading 1.3 GB and then failing.
-- **Works best on 8 GB+ RAM, Android 10+.** A rule of thumb, *not* a measurement — the research doc's only device data point is a Galaxy Z Fold-class flagship (~3–10 s/photo at 512px input). There is deliberately **no RAM gate**: `expo-device`'s `totalMemory` reports total rather than available memory (false precision), it would cost a new native build, and the fallback below already covers the failure.
-- **A weak device silently falls back to Gemini rather than failing.** This is the honest part: the router tries the local model, and on *any* problem — OOM, a 20 s timeout, output that fails the shared Zod schema — it escalates to the cloud without a word to the user. You do not get an error; you get a slightly slower diagnosis and a "Gemini" badge. So a phone that can't keep up doesn't break the app, but it also doesn't get the privacy benefit it opted in for.
-- **Needs a dev/EAS build** (native runtime): `react-native-executorch` does not exist in Expo Go.
+## Testing
 
-**Which engine actually answered** is recorded per assessment (`assessments.engine`, migration 0007): `on-device`, `gemini`, or `gemini:<reason>` when a local attempt was dropped (`local_timeout` / `local_invalid` / `local_error`). The badge on a diagnosis and on each timeline row reads that column; Profile shows the last-20 split ("Last 20 assessments: 14 on-device · 6 Gemini"), which is the D-15 go/no-go dataset. Rows written before F22 have no engine and render no badge.
+vitest, not jest-expo — the pure modules import no native code, the rest of the monorepo already uses
+vitest, and it needs no Babel config. **Screens and `-io` files are not unit-tested by policy**; when
+branching logic in a screen turns out to matter, it gets extracted into a pure module and tested there.
 
-## Testing on a phone (never done mobile testing?)
-
-Full from-zero walkthrough (Expo Go preview → credentials → installable EAS dev build → feature checklist) lives in Obsidian: `Project RESOURCES/Citrus Care v1/Testing - Android for Web Developers.md`.
-
-## Next implementation steps (from the design doc)
-
-1. ~~Google sign-in~~ ✅  2. ~~Plants tab~~ ✅  3. ~~New-plant sheet~~ ✅
-4. ~~Camera capture (`expo-camera`) with the three-mode guide: Leaf close-up (default) / Whole plant / Pruning cut~~ ✅
-5. ~~`/api/assess` call + diagnosis result screen~~ ✅
-6. ~~Re-assessment reminders (`expo-notifications`, local — see the reminders section above)~~ ✅
-
-All design-doc implementation steps are done, including the §8 parity items (plant detail/edit/delete, timeline with deltas, before/after slider, quarantine alerts). Next feature: the on-device engine spike (D-15) behind the `engine` seam in `assess.ts`.
+The full inventory, and the device V&V checklist that automated tests cannot replace, live in the
+Obsidian **Test Plan** doc.

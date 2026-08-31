@@ -4,14 +4,20 @@
 // via `expo export` bundling, the logic via weather.test.ts.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { Hemisphere } from "./pruning-rules";
 import {
+  cachedWeather,
+  normalizeZip,
   parseWeatherCache,
   resolveWeather,
   serializeWeatherCache,
+  summarizeWeather,
+  todayKey,
   WEATHER_CACHE_STORAGE_KEY,
   type ResolvedWeather,
   type WeatherCache,
   type WeatherDeps,
+  type WeatherSummary,
 } from "./weather";
 
 /** A forecast that never arrives must not hang the card behind it: Open-Meteo
@@ -56,4 +62,49 @@ export const weatherDeps: WeatherDeps = {
  */
 export function loadWeatherFor(zip: string | null, now: Date = new Date()): Promise<ResolvedWeather | null> {
   return resolveWeather(weatherDeps, { zip, now });
+}
+
+/**
+ * What the cache alone can tell us about a plant's location — no network, so a
+ * screen can open on it. Two facts come from the one read:
+ *
+ *  - `weather`, for watering math (null = the plain baseline interval).
+ *  - `hemisphere`, from the sign of the cached geocode's latitude. Pruning
+ *    windows are stored northern-hemisphere (every source behind them is), so
+ *    this is what stops a southern-hemisphere grower being told to prune six
+ *    months out of phase. Null = we genuinely don't know, and the caller's
+ *    default (northern) applies with the condition stated in the copy.
+ */
+export interface CachedLocalConditions {
+  weather: WeatherSummary | null;
+  hemisphere: Hemisphere | null;
+}
+
+export async function cachedLocalConditions(
+  zip: string | null | undefined,
+  now: Date = new Date(),
+): Promise<CachedLocalConditions> {
+  const normalized = normalizeZip(zip);
+  if (!normalized) return { weather: null, hemisphere: null };
+  try {
+    const cache = await weatherDeps.loadCache();
+    // Two different lifetimes on purpose: a FORECAST goes stale in hours, but
+    // the ZIP's latitude does not, so the hemisphere is read from the raw entry
+    // while the weather still respects the 6h TTL. Expiring the hemisphere
+    // would silently drop a southern grower back to northern pruning months.
+    const stored = cache[normalized];
+    const hemisphere: Hemisphere | null = stored
+      ? stored.coordinates.latitude < 0
+        ? "southern"
+        : "northern"
+      : null;
+    const fresh = cachedWeather(cache, normalized, now);
+    return {
+      weather: fresh ? summarizeWeather(fresh.daily, todayKey(now)) : null,
+      hemisphere,
+    };
+  } catch (e) {
+    console.error("[weather-io] cached conditions read failed:", (e as Error).message);
+    return { weather: null, hemisphere: null };
+  }
 }

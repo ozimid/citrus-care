@@ -96,6 +96,44 @@ describe("D-17: no backend, no accounts, no cloud AI", () => {
   });
 });
 
+// D-P9: every caller of the single model session must run under the SAME
+// inference budget. A request's clock starts when it is ENQUEUED, so with equal
+// ceilings the earliest one always expires first — and the earliest is always
+// the one currently running, which is what makes interrupt() safe. ONE
+// unbudgeted caller breaks that: it can hold the session past another request's
+// ceiling and take the interrupt meant for itself. care-profile-io was that
+// caller until 2026-08-31, so this guard exists to keep it fixed.
+describe("D-P9: every on-device flow runs under the shared inference budget", () => {
+  /** Modules that await the model. Adding a new one means adding it here — that
+   * is the point: the list is the invariant, made hard to forget. */
+  const ENGINE_FLOWS = [
+    "assess.ts",
+    "care-profile-io.ts",
+    "plant-chat.ts",
+    "prune-flow.ts",
+  ];
+
+  it.each(ENGINE_FLOWS)("%s imports withInferenceBudget", (file) => {
+    const source = readFileSync(join(MOBILE_ROOT, "src", "lib", file), "utf8");
+    expect(source).toContain("withInferenceBudget");
+    expect(source).toContain("LOCAL_HARD_CEILING_MS");
+  });
+
+  it("catches a new engine caller that skipped the budget", () => {
+    // Any lib module that hands the model a system+user prompt is a flow.
+    const callers = walk(join(MOBILE_ROOT, "src", "lib"))
+      .filter((f) => !f.endsWith(".test.ts"))
+      .filter((f) => {
+        const source = readFileSync(f, "utf8");
+        return /generate\(\s*\{/.test(source) || /\.generate\(/.test(source);
+      })
+      .map((f) => f.split("/").pop() as string);
+
+    const unbudgeted = callers.filter((file) => !ENGINE_FLOWS.includes(file));
+    expect(unbudgeted, `these call the model without a budget: ${unbudgeted.join(", ")}`).toEqual([]);
+  });
+});
+
 describe("pure/-io split: pure lib modules never import react-native/expo", () => {
   const pureLibFiles = walk(join(MOBILE_ROOT, "src", "lib")).filter(
     (f) => f.endsWith(".ts") && !f.endsWith("-io.ts") && !f.endsWith(".test.ts"),

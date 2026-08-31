@@ -197,7 +197,8 @@ function DataCard() {
       <Text style={[styles.label, { color: t.sub }]}>Your data</Text>
       <Text style={[styles.dataBody, { color: t.sub }]}>
         Everything lives on this phone — and it&apos;s gone if you lose it. Export a backup of your
-        plants, history and photos so you can restore it all later.
+        plants, history, photos and the questions you&apos;ve asked about each plant, so you can
+        restore it all later. The file is yours: it isn&apos;t sent anywhere.
       </Text>
       <View style={styles.dataRow}>
         <Pressable

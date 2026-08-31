@@ -10,8 +10,19 @@
 // local-store / executorch deps. Raw model/runtime messages never reach the UI.
 
 import type { AssessmentDiagnosis } from "@citrus/shared";
+import {
+  InferenceTimeoutError,
+  LOCAL_HARD_CEILING_MS,
+  LOCAL_SLOW_THRESHOLD_MS,
+  withInferenceBudget,
+} from "./inference-budget";
 import type { AssessEngine, PhotoIndexEntry } from "./photo-store";
 import { parseDiagnosisOutput } from "./spike-vlm";
+
+// The 25s slow-hint / 120s interrupt ceiling now lives in inference-budget.ts
+// (chat and pruning run under the same deal); re-exported here because this
+// flow's callers and tests have always read them from the assess module.
+export { LOCAL_HARD_CEILING_MS, LOCAL_SLOW_THRESHOLD_MS };
 
 export const PHOTO_SAVE_FAILED_ERROR = "Couldn't save the photo. Please try again.";
 export const LOCAL_UNAVAILABLE_ERROR =
@@ -35,25 +46,6 @@ const FLOW_ERRORS = new Set([
   ANALYSIS_TIMEOUT_ERROR,
   PERSIST_FAILED_ERROR,
 ]);
-
-/** On a mid-range phone the first inference (cold model) is legitimately slow,
- * so past this we only change the UI copy — we do NOT abandon the result (there
- * is nowhere to escalate to). */
-export const LOCAL_SLOW_THRESHOLD_MS = 25_000;
-
-/** Safety valve: past this the model is stuck. We interrupt() the single native
- * session so the next attempt isn't blocked, then surface a retryable error. */
-export const LOCAL_HARD_CEILING_MS = 120_000;
-
-/** The hard ceiling is a distinct outcome (interrupt + timeout message), so it
- * needs its own type — a message string would be indistinguishable from a model
- * that threw with unlucky wording. */
-class LocalTimeoutError extends Error {
-  constructor() {
-    super(`on-device inference exceeded ${LOCAL_HARD_CEILING_MS}ms`);
-    this.name = "LocalTimeoutError";
-  }
-}
 
 export type AssessPhase = "saving" | "analyzing";
 
@@ -210,7 +202,7 @@ async function diagnoseWithBudget(
 ): Promise<{ diagnosis: AssessmentDiagnosis; raw: string }> {
   let inference: { diagnosis: AssessmentDiagnosis; raw: string } | null;
   try {
-    inference = await withBudget(localDiagnose(local, localUri), {
+    inference = await withInferenceBudget(localDiagnose(local, localUri), {
       slowMs: LOCAL_SLOW_THRESHOLD_MS,
       hardMs: LOCAL_HARD_CEILING_MS,
       onSlow: hooks.onSlow,
@@ -218,7 +210,7 @@ async function diagnoseWithBudget(
     });
   } catch (e) {
     console.error("[runAssess] on-device inference failed:", (e as Error).message);
-    if (e instanceof LocalTimeoutError) throw new Error(ANALYSIS_TIMEOUT_ERROR);
+    if (e instanceof InferenceTimeoutError) throw new Error(ANALYSIS_TIMEOUT_ERROR);
     throw new Error(ANALYSIS_FAILED_ERROR);
   }
   // Unparseable output — the small local model has no responseSchema, so the
@@ -293,41 +285,6 @@ async function localDiagnose(
     return null;
   }
   return { diagnosis: parsed.diagnosis, raw };
-}
-
-interface Budget {
-  slowMs: number;
-  hardMs: number;
-  onSlow?: () => void;
-  onHardTimeout?: () => void;
-}
-
-/** Run `promise` with two timers: a soft `slowMs` that only fires `onSlow` (a
- * UI hint — the inference keeps running), and a hard `hardMs` that fires
- * `onHardTimeout` and rejects with LocalTimeoutError. The abandoned inference
- * keeps running in the native runtime; onHardTimeout interrupt()s it. */
-function withBudget<T>(promise: Promise<T>, budget: Budget): Promise<T> {
-  let slowTimer: ReturnType<typeof setTimeout>;
-  let hardTimer: ReturnType<typeof setTimeout>;
-  const slow = new Promise<void>((resolve) => {
-    slowTimer = setTimeout(() => {
-      budget.onSlow?.();
-      resolve();
-    }, budget.slowMs);
-  });
-  // Keep `slow` from being an unhandled floating promise without letting it win
-  // the race (it resolves void, never a T).
-  void slow;
-  const ceiling = new Promise<never>((_, reject) => {
-    hardTimer = setTimeout(() => {
-      budget.onHardTimeout?.();
-      reject(new LocalTimeoutError());
-    }, budget.hardMs);
-  });
-  return Promise.race([promise, ceiling]).finally(() => {
-    clearTimeout(slowTimer);
-    clearTimeout(hardTimer);
-  });
 }
 
 /** A failed index write only costs a thumbnail, never the result. */

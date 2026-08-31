@@ -2,6 +2,7 @@
 // share sheet; pick a file and merge it back. Thin (untested by policy) around
 // the pure build/parse/merge in backup.ts.
 //
+// v3 (F38): the per-plant conversations travel too — plain text, no photos.
 // v2 (F29): photos travel inside the document as base64. Export reads each
 // indexed JPEG; import writes them back under this phone's documents dir and
 // rewrites the index entries with the NEW local uris (the exporting phone's
@@ -12,6 +13,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { Directory, File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { loadAssessmentStore, saveAssessmentStore } from "./assessment-store-io";
+import { loadChatStore, saveChatStore } from "./plant-chat-io";
 import {
   base64ToBytes,
   buildBackup,
@@ -29,13 +31,14 @@ import { getWateringLog, saveWateringLog } from "./watering-io";
 export const BACKUP_IMPORT_INVALID = "That file isn't a Citrus Care backup.";
 
 async function currentStores(): Promise<BackupStores> {
-  const [plants, assessments, wateringLog, photoIndex] = await Promise.all([
+  const [plants, assessments, wateringLog, photoIndex, chat] = await Promise.all([
     loadPlantStore(),
     loadAssessmentStore(),
     getWateringLog(),
     loadPhotoIndex(),
+    loadChatStore(),
   ]);
-  return { plants, assessments, wateringLog, photoIndex };
+  return { plants, assessments, wateringLog, photoIndex, chat };
 }
 
 /** Read every indexed photo as base64 for the document. Unreadable files are
@@ -133,6 +136,7 @@ export async function importBackup(): Promise<ImportOutcome | null> {
     saveAssessmentStore(merged.assessments),
     saveWateringLog(merged.wateringLog),
     replacePhotoIndex({ ...merged.photoIndex, ...restoredIndex }),
+    saveChatStore(merged.chat),
   ]);
   return added;
 }

@@ -15,6 +15,7 @@ import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { QuarantineCard } from "../components/QuarantineCard";
 import { PlantInfoCard } from "../components/PlantInfoCard";
+import { PlantToolsCard } from "../components/PlantToolsCard";
 import { WateringCard } from "../components/WateringCard";
 import { bandColor, healthBand } from "../lib/health";
 import {
@@ -191,6 +192,9 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
               {timeline.length === 0 ? "📷 Assess now" : "📷 Assess this plant"}
             </Text>
           </Pressable>
+
+          {/* F38 + F23 — the two per-plant on-device tools (ask / prune). */}
+          <PlantToolsCard plant={plant} t={t} onChanged={load} />
           <View style={styles.secondaryRow}>
             <Pressable
               accessibilityRole="button"
