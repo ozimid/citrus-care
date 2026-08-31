@@ -1,8 +1,11 @@
+import * as Application from "expo-application";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,7 +19,8 @@ import { formatTimelineDate } from "../lib/plant-detail";
 import { PruneOverlay } from "../components/PruneOverlay";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto } from "../lib/photo-io";
-import { savePlantPhoto } from "../lib/photo-store-io";
+import { latestPhotoForPlant } from "../lib/photo-store";
+import { loadPhotoIndex, savePlantPhoto } from "../lib/photo-store-io";
 import {
   MARKS_CAVEAT,
   MARKS_FIRST_RUN_NOTICE,
@@ -29,8 +33,11 @@ import {
   loadMarksNoticeSeen,
   markMarksNoticeSeen,
   persistPrunePlan,
+  saveLastPruneDebug,
   toggleCut,
 } from "../lib/prune-io";
+import type { PruneDebugInfo } from "../lib/prune-flow";
+import { buildPruneDebugMailto } from "../lib/support";
 import { cutProgress, type StoredPrunePlan } from "../lib/prune-store";
 import {
   bestWindowLabel,
@@ -99,6 +106,12 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
   const [noticeSeen, setNoticeSeen] = useState(true);
   /** F23 reminders: idle → setting → set(dateLabel) | note(message). */
   const [rulesOpen, setRulesOpen] = useState(false);
+  /** The plant's newest on-phone photo — the default thing to analyse. */
+  const [latest, setLatest] = useState<{ uri: string; dateLabel: string } | null>(null);
+  /** The last shot analysed, kept so "Try again" never demands a re-take. */
+  const lastShotRef = useRef<{ uri: string; width: number; height: number } | null>(null);
+  /** What the last run actually did (raw model text included, stays on-phone). */
+  const [debug, setDebug] = useState<PruneDebugInfo | null>(null);
   const [reminder, setReminder] = useState<
     | { kind: "idle" }
     | { kind: "setting" }
@@ -129,6 +142,14 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
         if (!cancelled) setRecord(latest);
       })
       .catch((e) => console.error("[PruneScreen] plan load failed:", (e as Error).message));
+    loadPhotoIndex()
+      .then((index) => {
+        const entry = latestPhotoForPlant(index, plant.id);
+        if (!cancelled && entry) {
+          setLatest({ uri: entry.localUri, dateLabel: formatTimelineDate(entry.createdAt) });
+        }
+      })
+      .catch((e) => console.error("[PruneScreen] photo index load failed:", (e as Error).message));
     loadMarksNoticeSeen().then((seen) => {
       if (!cancelled) setNoticeSeen(seen);
     });
@@ -157,10 +178,12 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
 
   const analyze = useCallback(
     async (photo: { uri: string; width: number; height: number }) => {
+      lastShotRef.current = photo;
       setError(null);
       setRejected(false);
       setSlow(false);
       setActiveCut(null);
+      setDebug(null);
       try {
         const result = await runPruneAnalysis(
           buildDeps({ width: photo.width, height: photo.height }),
@@ -171,7 +194,16 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
             ruleClass: pack.key,
             rules: promptRulesFor(plant, new Date().getMonth() + 1, hemisphere),
           },
-          { onPhase: setPhase, onSlow: () => setSlow(true) },
+          {
+            onPhase: setPhase,
+            onSlow: () => setSlow(true),
+            // What the model actually said, kept on the phone — the difference
+            // between "it failed" and knowing why (device feedback 2026-08-31).
+            onDebug: (info) => {
+              setDebug(info);
+              void saveLastPruneDebug(info);
+            },
+          },
         );
         if (result.status === "rejected") {
           setRejected(true);
@@ -188,6 +220,35 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
     },
     [buildDeps, hemisphere, onChanged, pack.key, plant],
   );
+
+  /** Analyse the photo the user already took — RN gives us its size. */
+  const useLatestPhoto = useCallback(() => {
+    if (!latest || busyRef.current) return;
+    busyRef.current = true;
+    Image.getSize(
+      latest.uri,
+      (width, height) => {
+        busyRef.current = false;
+        void analyze({ uri: latest.uri, width, height });
+      },
+      (e) => {
+        busyRef.current = false;
+        console.error("[PruneScreen] latest photo unreadable:", String(e));
+        setError(PHOTO_ERROR);
+      },
+    );
+  }, [analyze, latest]);
+
+  const retrySameShot = useCallback(() => {
+    if (lastShotRef.current) void analyze(lastShotRef.current);
+  }, [analyze]);
+
+  const emailDetails = useCallback(() => {
+    if (!debug) return;
+    Linking.openURL(buildPruneDebugMailto(Application.nativeApplicationVersion, debug)).catch((e) =>
+      console.error("[PruneScreen] mailto failed:", (e as Error).message),
+    );
+  }, [debug]);
 
   const capture = useCallback(
     async (source: "camera" | "gallery") => {
@@ -377,7 +438,9 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
                 <Text style={[styles.cutText, { color: t.text }]}>
                   {record.plan.subject === "unclear"
                     ? "Couldn't make out the branches. Retake: whole branch in frame, even light."
-                    : "No cut was sure enough to mark. The steps below still apply."}
+                    : record.plan.cuts.length > 0
+                      ? `It suggested ${record.plan.cuts.length} cut${record.plan.cuts.length === 1 ? "" : "s"} but couldn't place them on the photo. The steps below still apply.`
+                      : "It found nothing specific to cut in this photo. The rules below still apply."}
                 </Text>
               </View>
             )}
@@ -521,7 +584,32 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
           during a run the scroll body is the season and the sourced rules,
           which is the most relevant thing the wait could be filled with. */}
       <View style={[styles.footer, { borderTopColor: t.border, backgroundColor: t.canvas }]}>
-        {error ? <Text style={[styles.footerError, { color: t.onGreen, backgroundColor: t.danger }]}>{error}</Text> : null}
+        {error ? (
+          <Text style={[styles.footerError, { color: t.onGreen, backgroundColor: t.danger }]}>{error}</Text>
+        ) : null}
+        {error && lastShotRef.current ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Try again with the same photo"
+            disabled={busy || !engineReady}
+            onPress={retrySameShot}
+            style={[styles.primary, { backgroundColor: t.green, opacity: busy || !engineReady ? 0.6 : 1 }]}
+          >
+            <Text style={[styles.primaryText, { color: t.onGreen }]}>↻ Try again — same photo</Text>
+          </Pressable>
+        ) : null}
+        {(error || (record && drawnMarks === 0)) && debug ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Email the run details to feedback"
+            onPress={emailDetails}
+            hitSlop={8}
+          >
+            <Text style={[styles.footerNote, { color: t.green, fontWeight: "600" }]}>
+              ✉️ Send the details — helps fix it
+            </Text>
+          </Pressable>
+        ) : null}
         {rejected ? (
           <Text style={[styles.footerError, { color: t.onGreen, backgroundColor: t.danger }]}>{NOT_A_PLANT}</Text>
         ) : null}
@@ -538,9 +626,23 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
         ) : null}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={busy ? busyLabel : record ? "Take a new photo" : "Take a photo to mark the cuts"}
+          accessibilityLabel={
+            busy
+              ? busyLabel
+              : !record && latest
+                ? `Mark my latest photo from ${latest.dateLabel}`
+                : record
+                  ? "Take a new photo"
+                  : "Take a photo to mark the cuts"
+          }
           disabled={busy || !engineReady}
-          onPress={() => capture("camera")}
+          onPress={() => {
+            // The photo from the assessment they just did is the default —
+            // pressing "Where to prune" must not demand a re-shoot (device
+            // feedback 2026-08-31).
+            if (!record && latest) useLatestPhoto();
+            else void capture("camera");
+          }}
           style={[
             styles.primary,
             // Once a plan is on screen, the loudest control must not be the one
@@ -558,20 +660,37 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
             </View>
           ) : (
             <Text style={[styles.primaryText, { color: record ? t.text : t.onGreen }]}>
-              {record ? "📷 New photo" : "📷 Photograph the plant"}
+              {record
+                ? "📷 New photo"
+                : latest
+                  ? `✂️ Mark my latest photo · ${latest.dateLabel}`
+                  : "📷 Photograph the plant"}
             </Text>
           )}
         </Pressable>
         {!busy ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Choose a photo from the gallery"
-            disabled={!engineReady}
-            onPress={() => capture("gallery")}
-            style={[styles.secondary, { borderColor: t.border, opacity: engineReady ? 1 : 0.6 }]}
-          >
-            <Text style={[styles.secondaryText, { color: t.text }]}>🖼️ From gallery</Text>
-          </Pressable>
+          <View style={styles.secondaryRow}>
+            {!record && latest ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Take a new photo instead"
+                disabled={!engineReady}
+                onPress={() => capture("camera")}
+                style={[styles.secondary, { borderColor: t.border, opacity: engineReady ? 1 : 0.6 }]}
+              >
+                <Text style={[styles.secondaryText, { color: t.text }]}>📷 New photo</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Choose a photo from the gallery"
+              disabled={!engineReady}
+              onPress={() => capture("gallery")}
+              style={[styles.secondary, { borderColor: t.border, opacity: engineReady ? 1 : 0.6 }]}
+            >
+              <Text style={[styles.secondaryText, { color: t.text }]}>🖼️ From gallery</Text>
+            </Pressable>
+          </View>
         ) : null}
         {!busy && !record ? (
           <Text style={[styles.footerNote, { color: t.sub }]}>
@@ -655,6 +774,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   footerNote: { fontSize: 12, lineHeight: 17 },
+  secondaryRow: { flexDirection: "row", gap: 10 },
   footerError: {
     fontSize: 13,
     lineHeight: 19,
@@ -667,6 +787,7 @@ const styles = StyleSheet.create({
   primary: { borderRadius: RADIUS, minHeight: 50, alignItems: "center", justifyContent: "center" },
   primaryText: { fontSize: 16, fontWeight: "600" },
   secondary: {
+    flex: 1,
     borderWidth: 1,
     borderRadius: RADIUS,
     minHeight: 46,

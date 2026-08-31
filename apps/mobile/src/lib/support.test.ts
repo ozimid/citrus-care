@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BMC_URL, FEEDBACK_EMAIL, buildFeedbackMailto } from "./support";
+import { BMC_URL, FEEDBACK_EMAIL, buildFeedbackMailto, buildPruneDebugMailto } from "./support";
 
 describe("support links", () => {
   it("points at the real Buy Me a Coffee page", () => {
@@ -35,5 +35,33 @@ describe("buildFeedbackMailto", () => {
   it("produces a fully encoded URL (no raw spaces or newlines)", () => {
     const url = buildFeedbackMailto("0.1.0", "14");
     expect(url).not.toMatch(/[ \n]/);
+  });
+});
+
+describe("buildPruneDebugMailto", () => {
+  it("prefills the failure details the user chooses to send", () => {
+    const url = buildPruneDebugMailto("0.1.6", {
+      outcome: "unreadable",
+      reason: "no-json",
+      raw: "model said things",
+    });
+    expect(url.startsWith(`mailto:${FEEDBACK_EMAIL}?`)).toBe(true);
+    const decoded = decodeURIComponent(url);
+    expect(decoded).toContain("unreadable");
+    expect(decoded).toContain("no-json");
+    expect(decoded).toContain("model said things");
+    expect(decoded).not.toContain("+");
+  });
+
+  it("truncates a runaway raw answer so the mailto stays openable", () => {
+    const url = buildPruneDebugMailto("0.1.6", {
+      outcome: "planned",
+      raw: "x".repeat(10_000),
+      cuts: 3,
+      drawable: 0,
+      dropped: 3,
+    });
+    expect(url.length).toBeLessThan(4_000);
+    expect(decodeURIComponent(url)).toContain("dropped: 3");
   });
 });

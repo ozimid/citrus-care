@@ -64,10 +64,35 @@ export interface PruneAnalysisInput {
 
 export type PrunePhase = "saving" | "analyzing";
 
+/** What a run actually did, model's raw text included — stored on the phone by
+ * the caller so a failure stops being a guessing game, and only ever leaves it
+ * inside an email the user drafts themself (D-17). */
+export interface PruneDebugInfo {
+  outcome: "planned" | "rejected" | "unreadable";
+  /** Parse failure reason when unreadable. */
+  reason?: "no-json" | "invalid-json" | "schema-mismatch";
+  raw: string;
+  subject?: string;
+  cuts?: number;
+  /** Cuts whose marks were drawable / refused. */
+  drawable?: number;
+  dropped?: number;
+}
+
 export interface PruneHooks {
   onPhase?: (phase: PrunePhase) => void;
   onPhotoSaved?: (localUri: string) => void;
   onSlow?: () => void;
+  /** Best-effort — a throwing sink must never break the run. */
+  onDebug?: (info: PruneDebugInfo) => void;
+}
+
+function debugBestEffort(hooks: PruneHooks, info: PruneDebugInfo): void {
+  try {
+    hooks.onDebug?.(info);
+  } catch (e) {
+    console.error("[runPruneAnalysis] debug sink failed:", (e as Error).message);
+  }
 }
 
 export type PruneAnalysisResult =
@@ -140,6 +165,7 @@ async function analyseWithBudget(
   const parsed = parsePrunePlanOutput(raw);
   if (!parsed.ok) {
     console.error("[runPruneAnalysis] on-device output rejected:", parsed.reason);
+    debugBestEffort(hooks, { outcome: "unreadable", reason: parsed.reason, raw });
     throw new Error(PRUNE_UNREADABLE_ERROR);
   }
   if (parsed.dropped > 0) {
@@ -147,6 +173,14 @@ async function analyseWithBudget(
     // drawn. Logged because a phone that always drops marks is a model problem.
     console.error(`[runPruneAnalysis] dropped ${parsed.dropped} unplaceable mark(s)`);
   }
+  debugBestEffort(hooks, {
+    outcome: parsed.plan.subject === "not_a_plant" ? "rejected" : "planned",
+    raw,
+    subject: parsed.plan.subject,
+    cuts: parsed.plan.cuts.length,
+    drawable: parsed.plan.cuts.filter((cut) => cut.x !== undefined).length,
+    dropped: parsed.dropped,
+  });
   return { plan: parsed.plan, dropped: parsed.dropped };
 }
 

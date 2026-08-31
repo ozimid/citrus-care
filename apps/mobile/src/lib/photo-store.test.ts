@@ -9,6 +9,7 @@ import {
   upsertPhoto,
   type PhotoIndex,
   type PhotoIndexEntry,
+  latestPhotoForPlant,
 } from "./photo-store";
 
 // D-16: photos live only on the phone. The AsyncStorage-backed index maps
@@ -114,5 +115,20 @@ describe("photoFileName", () => {
   it("differs across time or randomness (collision resistance)", () => {
     expect(photoFileName(1752573600000, 0.1)).not.toBe(photoFileName(1752573600000, 0.2));
     expect(photoFileName(1752573600000, 0.1)).not.toBe(photoFileName(1752573600001, 0.1));
+  });
+});
+
+describe("latestPhotoForPlant", () => {
+  // "Where to prune" reuses the newest photo the user already took instead of
+  // demanding a fresh one (device feedback 2026-08-31).
+  const index: PhotoIndex = {
+    a1: { localUri: "file:///p1/old.jpg", plantId: "p1", engine: "on-device", createdAt: "2026-07-01T00:00:00Z" },
+    a2: { localUri: "file:///p1/new.jpg", plantId: "p1", engine: "on-device", createdAt: "2026-08-20T00:00:00Z" },
+    b1: { localUri: "file:///p2/x.jpg", plantId: "p2", engine: "on-device", createdAt: "2026-08-25T00:00:00Z" },
+  };
+
+  it("returns the plant's newest photo, never another plant's", () => {
+    expect(latestPhotoForPlant(index, "p1")?.localUri).toBe("file:///p1/new.jpg");
+    expect(latestPhotoForPlant(index, "p3")).toBeNull();
   });
 });

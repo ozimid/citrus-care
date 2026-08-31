@@ -55,6 +55,17 @@ export function photosForPlant(index: PhotoIndex, plantId: string): PhotoIndexEn
   return Object.values(index).filter((entry) => entry.plantId === plantId);
 }
 
+/** The plant's newest on-phone photo — what "Where to prune" analyses by
+ * default, so having just assessed a plant never means photographing it again
+ * (device feedback 2026-08-31). */
+export function latestPhotoForPlant(index: PhotoIndex, plantId: string): PhotoIndexEntry | null {
+  return (
+    photosForPlant(index, plantId).sort((a, b) =>
+      a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
+    )[0] ?? null
+  );
+}
+
 function isValidEntry(value: unknown): value is PhotoIndexEntry {
   if (typeof value !== "object" || value === null) return false;
   const e = value as Record<string, unknown>;

@@ -26,3 +26,36 @@ export function buildFeedbackMailto(
   // in mailto bodies — force %20 form.
   return `mailto:${FEEDBACK_EMAIL}?${params.toString().replace(/\+/g, "%20")}`;
 }
+
+/** Longest raw-model excerpt an email draft carries: mailto URLs past a few KB
+ * fail to open in some mail clients. */
+const DEBUG_RAW_MAX = 1_500;
+
+/** mailto: draft carrying what a "Where to prune" run actually did, raw model
+ * text included. The user sees the draft and sends it themself — the app still
+ * transmits nothing (D-17). */
+export function buildPruneDebugMailto(
+  appVersion: string | null,
+  info: {
+    outcome: string;
+    reason?: string;
+    raw: string;
+    subject?: string;
+    cuts?: number;
+    drawable?: number;
+    dropped?: number;
+  },
+): string {
+  const body = [
+    "Where-to-prune run details (auto-filled — feel free to add what you saw):",
+    "",
+    `outcome: ${info.outcome}${info.reason ? ` (${info.reason})` : ""}`,
+    `subject: ${info.subject ?? "—"} · cuts: ${info.cuts ?? 0} · drawable: ${info.drawable ?? 0} · dropped: ${info.dropped ?? 0}`,
+    `app version: ${appVersion ?? "—"}`,
+    "",
+    "model output:",
+    info.raw.slice(0, DEBUG_RAW_MAX),
+  ].join("\n");
+  const params = new URLSearchParams({ subject: "Where to prune — run details", body });
+  return `mailto:${FEEDBACK_EMAIL}?${params.toString().replace(/\+/g, "%20")}`;
+}

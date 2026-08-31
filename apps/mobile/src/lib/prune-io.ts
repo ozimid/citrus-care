@@ -11,6 +11,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { PrunePlan } from "@citrus/shared";
+import type { PruneDebugInfo } from "./prune-flow";
 import { newLocalId } from "./local-id";
 import {
   MARKS_NOTICE_SEEN_KEY,
@@ -102,5 +103,27 @@ export async function markMarksNoticeSeen(): Promise<void> {
     await AsyncStorage.setItem(MARKS_NOTICE_SEEN_KEY, new Date().toISOString());
   } catch (e) {
     console.error("[prune-io] marks-notice flag save failed:", (e as Error).message);
+  }
+}
+
+/** The last run's debug record — what the model actually said. Stays on the
+ * phone; only ever leaves inside an email the user drafts themself. */
+const PRUNE_DEBUG_KEY = "citrus.prune-debug.v1";
+
+export async function saveLastPruneDebug(info: PruneDebugInfo): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PRUNE_DEBUG_KEY, JSON.stringify({ ...info, at: new Date().toISOString() }));
+  } catch (e) {
+    console.error("[prune-io] debug save failed:", (e as Error).message);
+  }
+}
+
+export async function loadLastPruneDebug(): Promise<(PruneDebugInfo & { at?: string }) | null> {
+  try {
+    const raw = await AsyncStorage.getItem(PRUNE_DEBUG_KEY);
+    return raw ? (JSON.parse(raw) as PruneDebugInfo & { at?: string }) : null;
+  } catch (e) {
+    console.error("[prune-io] debug load failed:", (e as Error).message);
+    return null;
   }
 }

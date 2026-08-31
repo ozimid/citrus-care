@@ -216,3 +216,51 @@ describe("runPruneAnalysis under the shared inference budget", () => {
     expect(interrupted).toEqual(["interrupt"]);
   });
 });
+
+// Device feedback 2026-08-31, round two: the screen said the model failed but
+// nothing recorded WHY or WHAT it said — so every failure is a guessing game.
+// The debug hook reports the run's outcome + the raw model text; the caller
+// stores it on the phone and the user can choose to email it.
+describe("runPruneAnalysis onDebug", () => {
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reports an unreadable answer with its parse reason and the raw text", async () => {
+    const debugs: unknown[] = [];
+    const { deps } = makeDeps({ generate: async () => "I cannot see any plant here, sorry!" });
+    await expect(
+      runPruneAnalysis(deps, INPUT, { onDebug: (d) => debugs.push(d) }),
+    ).rejects.toThrow(PRUNE_UNREADABLE_ERROR);
+    expect(debugs).toEqual([
+      { outcome: "unreadable", reason: "no-json", raw: "I cannot see any plant here, sorry!" },
+    ]);
+  });
+
+  it("reports a successful run with cut and dropped-mark counts", async () => {
+    const debugs: Array<{ raw?: unknown }> = [];
+    const { deps } = makeDeps({
+      generate: async () =>
+        JSON.stringify({
+          summary: "ok",
+          subject: "plant",
+          cuts: [
+            { label: "A", action: "Cut", reason: "Why", priority: 1, x: 40, y: 40 },
+            { label: "B", action: "Cut", reason: "Why", priority: 1, x: -4, y: 40 },
+          ],
+        }),
+    });
+    await runPruneAnalysis(deps, INPUT, { onDebug: (d) => debugs.push(d) });
+    expect(debugs[0]).toMatchObject({ outcome: "planned", cuts: 2, drawable: 1, dropped: 1, subject: "plant" });
+    expect(typeof debugs[0].raw).toBe("string");
+  });
+
+  it("never lets a throwing debug hook break the run", async () => {
+    const { deps } = makeDeps();
+    const result = await runPruneAnalysis(deps, INPUT, {
+      onDebug: () => {
+        throw new Error("debug sink exploded");
+      },
+    });
+    expect(result.status).toBe("planned");
+  });
+});
