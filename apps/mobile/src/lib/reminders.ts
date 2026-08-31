@@ -31,6 +31,14 @@ export function formatReminderDate(date: Date): string {
   return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
 }
 
+/** "Mar 1" — LOCAL-calendar. For dates built in the grower's own calendar (the
+ * prune window start and its 9am fire time): the UTC formatter renders those a
+ * day early everywhere east of Greenwich — Sydney saw "Aug 31" for a Sep 1
+ * window (critic finding, verified). */
+export function formatLocalReminderDate(date: Date): string {
+  return `${MONTHS[date.getMonth()]} ${date.getDate()}`;
+}
+
 export interface PermissionStatus {
   granted: boolean;
   canAskAgain: boolean;

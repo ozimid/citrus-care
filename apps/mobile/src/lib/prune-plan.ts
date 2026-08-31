@@ -58,6 +58,9 @@ export interface PrunePromptRules {
   className: string;
   /** Deterministic season verdict for today, e.g. "Late August: deadhead only". */
   seasonLine: string;
+  /** Scopes the prompt's demands: best-effort cuts in an open window, 3-Ds
+   * only when the window is closed. Absent = treated as open. */
+  seasonStatus?: "best" | "ok" | "avoid" | "off_season";
   rules: string[];
   never: string[];
 }
@@ -81,8 +84,18 @@ export function buildPrunePromptSystem(rules: PrunePromptRules): string {
     "- Look at the photo and find at most 3 specific cuts this grower should make, in priority order (1 = do first).",
     "- For each cut give \"box_2d\": [y_min, x_min, y_max, x_max] — a box around the branch or stem to cut, as whole numbers between 0 and 1000, where 0 is the TOP edge (for y) or the LEFT edge (for x) and 1000 is the bottom or right edge. Y COMES FIRST.",
     "- Draw the box tightly around the spot where the blade should go, not around the whole plant and not around the leaf you are describing. A tight box is more useful than a big one.",
-    "- Almost every plant photo has 1-3 worthwhile cuts: dead or damaged wood, crossing or rubbing stems, spent blooms, shape. Suggest the best ones you can see. An empty \"cuts\" list is only for a plant that genuinely needs nothing.",
-    "- If you can describe a useful cut but cannot pin it precisely, still include it: give your best-guess box and set \"confidence\": \"low\". Uncertainty goes in \"confidence\", never into refusing to answer.",
+    // Season-scoped on purpose: an unconditional "almost every photo has cuts"
+    // prior beat the season line in the same prompt and manufactured shape
+    // cuts under a WAIT verdict (adversarial critic, verified). In a closed
+    // window the empty list gets its permission back — exactly there.
+    ...(rules.seasonStatus === "avoid"
+      ? [
+          "- The season is WRONG for shaping this plant right now. Mark ONLY dead, broken or diseased wood. If you see none, return an empty \"cuts\" list and say in the summary that the pruning window is closed.",
+        ]
+      : [
+          "- Almost every plant photo has 1-3 worthwhile cuts: dead or damaged wood, crossing or rubbing stems, spent blooms, shape. Suggest the best ones you can see. An empty \"cuts\" list is only for a plant that genuinely needs nothing.",
+          "- If you can describe a useful cut but cannot pin it precisely, still include it: give your best-guess box and set \"confidence\": \"low\". Uncertainty goes in \"confidence\", never into refusing to answer.",
+        ]),
     "- If the season says not to prune now, say so in the summary, and limit your cuts to what is safe now (dead, broken or diseased wood is always allowed).",
     "- Set \"subject\": \"plant\" if you can see the plant clearly, \"unclear\" if the photo is too blurry, dark or far away to place a cut, \"not_a_plant\" if there is no plant in it.",
     "- Set \"confidence\" to how sure you are that your points land on the right branches: \"low\", \"medium\" or \"high\". Be honest — \"low\" is a useful answer.",
@@ -153,16 +166,23 @@ export function normalizeBox(value: unknown): PruneBox | null {
   if (!Array.isArray(value) || value.length !== 4) return null;
   const grid = value.map((n) => (typeof n === "number" ? n : Number(n)));
   if (grid.some((n) => !Number.isFinite(n) || n < 0 || n > 1000)) return null;
-  // All four values <= 100 used to be refused as ambiguous between the grid we
-  // asked for and percentages. Device V&V (2026-08-31, the user's own rose)
-  // showed what that buys: the model answers in percentages anyway, every box
-  // was dropped, and the photo rendered with NOTHING marked — the useless
-  // state. So a percent-shaped answer is now read AS percentages (y,x,y,x
-  // order kept). The residual risk — a true 1000-grid box that happens to fit
-  // 0-100 — is a ≤10%×10% region drawn top-left: small, visible and checkable,
-  // where the old behaviour was no information at all. Regions carry their own
-  // size, so this loosening never creates a crosshair.
-  const scale = grid.every((n) => n <= 100) ? 1 : 10;
+  // Three conventions are honored, largest-unit first: the 1000-grid we asked
+  // for, percentages (what the model actually emitted on the first device
+  // runs — refusing them meant NOTHING was ever marked), and 0-1 fractions.
+  //
+  // THE RESIDUAL RISK, stated honestly (the first version of this comment got
+  // it backwards, which the adversarial critic caught): a TRUE grid box whose
+  // four values happen to fit 0-100 — a region inside the photo's top-left
+  // 10%x10% — is read as percent, which inflates it 10x per axis and displaces
+  // it toward the centre: a confident-looking region up to the 55% cap, over
+  // the wrong branches. Accepted because genuine grid boxes confined to that
+  // corner are rare, percent answers are the observed norm, the halo is a
+  // region under a "likely area" caveat rather than a crosshair, and the old
+  // behaviour was no information at all. A second known unknown: percent
+  // answers are off-distribution, so nothing guarantees their y-first order —
+  // a transposed [x,y,x,y] box would also pass every guard. Both are why the
+  // caveat and the grower's own eyes stay in the loop.
+  const scale = grid.every((n) => n <= 1) ? 0.01 : grid.every((n) => n <= 100) ? 1 : 10;
   const [yMin, xMin, yMax, xMax] = grid.map((n) => round1(n / scale));
   if (yMax <= yMin || xMax <= xMin) return null;
   const area = ((yMax - yMin) / 100) * ((xMax - xMin) / 100);

@@ -66,17 +66,27 @@ describe("prune prompt carries this plant's rules", () => {
     expect(buildPrunePromptSystem(RULES)).toMatch(/at most 3|no more than 3/i);
   });
 
-  // Round 3 of device V&V: given an easy honest exit ("return an empty list
-  // and explain why"), the model took it every time and the feature read as
-  // useless. The contract flips to best-effort: cuts are expected, an empty
-  // list is reserved for a plant that genuinely needs nothing, and uncertainty
-  // is expressed through confidence — not through refusing to answer.
-  it("demands best-effort cuts and reserves the empty list for a plant needing nothing", () => {
+  // Round 3 flipped the contract to best-effort (the model took the empty-list
+  // exit every time). The adversarial critic then proved the flip went too
+  // far: in an AVOID window, "almost every photo has 1-3 cuts... shape" and
+  // "limit cuts to what is safe now" contradict, and a 2B model follows the
+  // stronger prior — manufacturing shape cuts under a WAIT card. So the
+  // best-effort demand is SEASON-SCOPED: full press in an open window, 3-Ds
+  // only (with the empty list explicitly allowed) when the window is closed.
+  it("demands best-effort cuts when the window is open", () => {
     const prompt = buildPrunePromptSystem(RULES).toLowerCase();
     expect(prompt).toMatch(/almost every|nearly every/);
     expect(prompt).toContain("needs nothing");
     expect(prompt).toMatch(/best.guess|best box/);
     expect(prompt).not.toMatch(/do not invent|never invent/);
+  });
+
+  it("restricts to dead/broken/diseased wood — empty list allowed — in an avoid window", () => {
+    const prompt = buildPrunePromptSystem({ ...RULES, seasonStatus: "avoid" }).toLowerCase();
+    expect(prompt).toMatch(/only dead, broken or diseased/);
+    expect(prompt).toContain("empty");
+    expect(prompt).not.toMatch(/almost every|nearly every/);
+    expect(prompt).not.toMatch(/spent blooms|crossing or rubbing/);
   });
 
   it("asks for JSON only", () => {
@@ -152,6 +162,18 @@ describe("parsePrunePlanOutput — the trained box_2d convention", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.plan.cuts[0].box).toEqual(expected);
+    expect(result.dropped).toBe(0);
+  });
+
+  it("honors the 0-1 fraction convention as a region too", () => {
+    // Third convention a small model actually emits. [0.2, 0.1, 0.6, 0.5] =
+    // y 20-60%, x 10-50%.
+    const result = parsePrunePlanOutput(
+      plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, box_2d: [0.2, 0.1, 0.6, 0.5] }] }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.cuts[0].box).toEqual({ top: 20, left: 10, bottom: 60, right: 50 });
     expect(result.dropped).toBe(0);
   });
 

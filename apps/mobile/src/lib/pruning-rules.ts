@@ -233,11 +233,20 @@ export function promptRulesFor(
   plant: PlantIdentity,
   month: number,
   hemisphere: Hemisphere = "northern",
-): { className: string; seasonLine: string; rules: string[]; never: string[] } {
+): {
+  className: string;
+  seasonLine: string;
+  /** Rides along so the prompt can scope its demands to the window. */
+  seasonStatus: SeasonStatus;
+  rules: string[];
+  never: string[];
+} {
   const pack = pruningPackFor(plant);
+  const verdict = seasonVerdict(pack, month, hemisphere);
   return {
     className: pack.label,
-    seasonLine: seasonVerdict(pack, month, hemisphere).line,
+    seasonLine: verdict.line,
+    seasonStatus: verdict.status,
     rules: pack.rules,
     never: pack.never,
   };

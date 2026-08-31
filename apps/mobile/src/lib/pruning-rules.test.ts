@@ -311,6 +311,10 @@ describe("what the two features consume", () => {
   it("builds the prompt rules the pruning prompt expects", () => {
     const rules = promptRulesFor(plant(), 3);
     expect(rules.className).toBe("Citrus tree");
+    // The season status rides along so the prompt can scope its demands:
+    // best-effort in an open window, 3-Ds-only in a closed one.
+    expect(rules.seasonStatus).toBe("best");
+    expect(promptRulesFor(plant(), 11).seasonStatus).toBe("avoid");
     expect(rules.seasonLine).toContain("Citrus tree");
     expect(rules.rules.length).toBeGreaterThan(0);
     expect(rules.never.length).toBeGreaterThan(0);

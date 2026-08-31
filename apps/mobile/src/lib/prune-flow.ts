@@ -60,6 +60,11 @@ export interface PruneAnalysisInput {
   /** Which rule pack produced `rules`, recorded on the stored plan. */
   ruleClass: string;
   rules: PrunePromptRules;
+  /** Already-durable uri (latest-photo default, retry-same-shot): skip the
+   * save — re-copying an already-stored photo duplicated the file on every
+   * run (critic finding). Reintroduced after being removed as unreachable;
+   * the latest-photo path made it reachable. */
+  savedUri?: string | null;
 }
 
 export type PrunePhase = "saving" | "analyzing";
@@ -68,10 +73,12 @@ export type PrunePhase = "saving" | "analyzing";
  * the caller so a failure stops being a guessing game, and only ever leaves it
  * inside an email the user drafts themself (D-17). */
 export interface PruneDebugInfo {
-  outcome: "planned" | "rejected" | "unreadable";
+  outcome: "planned" | "rejected" | "unreadable" | "failed" | "timeout";
   /** Parse failure reason when unreadable. */
   reason?: "no-json" | "invalid-json" | "schema-mismatch";
   raw: string;
+  /** Wall-clock of the model call — the datum when there is no raw text. */
+  elapsedMs?: number;
   subject?: string;
   cuts?: number;
   /** Cuts whose marks were drawable / refused. */
@@ -105,17 +112,17 @@ export async function runPruneAnalysis(
   input: PruneAnalysisInput,
   hooks: PruneHooks = {},
 ): Promise<PruneAnalysisResult> {
-  // Unlike the assess flow there is no retry-with-the-same-photo path: a
-  // failed run is retried by taking a new photo, so every run saves once.
-  hooks.onPhase?.("saving");
-  let localUri: string;
-  try {
-    localUri = await deps.savePhoto(input.plantId, input.photoUri);
-  } catch (e) {
-    console.error("[runPruneAnalysis] local photo save failed:", (e as Error).message);
-    throw new Error(PRUNE_PHOTO_SAVE_ERROR);
+  let localUri = input.savedUri ?? null;
+  if (!localUri) {
+    hooks.onPhase?.("saving");
+    try {
+      localUri = await deps.savePhoto(input.plantId, input.photoUri);
+    } catch (e) {
+      console.error("[runPruneAnalysis] local photo save failed:", (e as Error).message);
+      throw new Error(PRUNE_PHOTO_SAVE_ERROR);
+    }
+    hooks.onPhotoSaved?.(localUri);
   }
-  hooks.onPhotoSaved?.(localUri);
 
   hooks.onPhase?.("analyzing");
   if (!deps.isReady()) throw new Error(PRUNE_UNAVAILABLE_ERROR);
@@ -149,6 +156,7 @@ async function analyseWithBudget(
   hooks: PruneHooks,
 ): Promise<{ plan: PrunePlan; dropped: number }> {
   let raw: string;
+  const startedAt = Date.now();
   try {
     raw = await withInferenceBudget(runModel(deps, input, localUri), {
       slowMs: LOCAL_SLOW_THRESHOLD_MS,
@@ -158,7 +166,16 @@ async function analyseWithBudget(
     });
   } catch (e) {
     console.error("[runPruneAnalysis] on-device inference failed:", (e as Error).message);
-    if (e instanceof InferenceTimeoutError) throw new Error(PRUNE_TIMEOUT_ERROR);
+    // The diagnostics must see THIS class too: the full-res change's most
+    // probable regression is a timeout, and a debug channel blind to it would
+    // restart the guessing game it was built to end (critic finding).
+    const timedOut = e instanceof InferenceTimeoutError;
+    debugBestEffort(hooks, {
+      outcome: timedOut ? "timeout" : "failed",
+      raw: "",
+      elapsedMs: Date.now() - startedAt,
+    });
+    if (timedOut) throw new Error(PRUNE_TIMEOUT_ERROR);
     throw new Error(PRUNE_ANALYSIS_FAILED_ERROR);
   }
 

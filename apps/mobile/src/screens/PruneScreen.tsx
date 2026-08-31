@@ -47,7 +47,7 @@ import {
   type Hemisphere,
   type SeasonStatus,
 } from "../lib/pruning-rules";
-import { formatReminderDate, schedulePruneReminder } from "../lib/reminders";
+import { formatLocalReminderDate, schedulePruneReminder } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -107,8 +107,11 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
   const [rulesOpen, setRulesOpen] = useState(false);
   /** The plant's newest on-phone photo — the default thing to analyse. */
   const [latest, setLatest] = useState<{ uri: string; dateLabel: string } | null>(null);
-  /** The last shot analysed, kept so "Try again" never demands a re-take. */
-  const lastShotRef = useRef<{ uri: string; width: number; height: number } | null>(null);
+  /** The last shot analysed, kept so "Try again" never demands a re-take.
+   * `durable` = already in the photo store, so a retry must not re-copy it. */
+  const lastShotRef = useRef<{ uri: string; width: number; height: number; durable: boolean } | null>(
+    null,
+  );
   /** What the last run actually did (raw model text included, stays on-phone). */
   const [debug, setDebug] = useState<PruneDebugInfo | null>(null);
   const [reminder, setReminder] = useState<
@@ -182,8 +185,8 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
   );
 
   const analyze = useCallback(
-    async (photo: { uri: string; width: number; height: number }) => {
-      lastShotRef.current = photo;
+    async (photo: { uri: string; width: number; height: number; durable?: boolean }) => {
+      lastShotRef.current = { ...photo, durable: photo.durable === true };
       setError(null);
       setRejected(false);
       setSlow(false);
@@ -198,10 +201,16 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
             photoAspect: photo.height > 0 ? photo.width / photo.height : 1,
             ruleClass: pack.key,
             rules: promptRulesFor(plant, new Date().getMonth() + 1, hemisphere),
+            savedUri: photo.durable ? photo.uri : null,
           },
           {
             onPhase: setPhase,
             onSlow: () => setSlow(true),
+            // The saved copy is the durable one — a retry reuses it instead of
+            // copying the photo into storage again (critic finding).
+            onPhotoSaved: (localUri) => {
+              lastShotRef.current = { ...photo, uri: localUri, durable: true };
+            },
             // What the model actually said, kept on the phone — the difference
             // between "it failed" and knowing why (device feedback 2026-08-31).
             onDebug: (info) => {
@@ -234,7 +243,7 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
       latest.uri,
       (width, height) => {
         busyRef.current = false;
-        void analyze({ uri: latest.uri, width, height });
+        void analyze({ uri: latest.uri, width, height, durable: true });
       },
       (e) => {
         busyRef.current = false;
@@ -263,6 +272,10 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
       // and stores a second plan.
       if (busyRef.current) return;
       busyRef.current = true;
+      // A new capture invalidates the previous shot: if the picker or the
+      // downscale fails, "Try again — same photo" must not quietly retry the
+      // OLD photo the user thinks they just replaced (critic finding).
+      lastShotRef.current = null;
       setError(null);
       setRejected(false);
       try {
@@ -317,7 +330,7 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
         windowStart,
       });
       if (outcome.ok) {
-        setReminder({ kind: "set", dateLabel: formatReminderDate(outcome.date) });
+        setReminder({ kind: "set", dateLabel: formatLocalReminderDate(outcome.date) });
       } else {
         setReminder({
           kind: "note",
@@ -371,8 +384,8 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
             <Text style={[styles.seasonWindow, { color: t.text }]}>Best: {bestWindowLabel(pack, hemisphere)}</Text>
           </View>
           <Text style={[styles.seasonNote, { color: t.sub }]} numberOfLines={2}>
-            {pack.seasonNote.charAt(0).toUpperCase() + pack.seasonNote.slice(1)}. Dead or damaged
-            wood: any time.
+            {pack.seasonNote.charAt(0).toUpperCase() + pack.seasonNote.slice(1)}. Dead, damaged or
+            diseased wood: any time.{pack.alwaysAllowedCaveat ? ` ${pack.alwaysAllowedCaveat}` : ""}
           </Text>
           {reminder.kind === "set" ? (
             <Text style={[styles.reminderSet, { color: t.green }]}>
@@ -390,7 +403,7 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
               <Text style={[styles.remindText, { color: t.green, opacity: reminder.kind === "setting" ? 0.5 : 1 }]}>
                 {reminder.kind === "setting"
                   ? "Setting reminder…"
-                  : `🔔 Remind me when the window opens · ${formatReminderDate(nextPruneWindowStart(pack, new Date(), hemisphere))}`}
+                  : `🔔 Remind me when the window opens · ${formatLocalReminderDate(nextPruneWindowStart(pack, new Date(), hemisphere))}`}
               </Text>
             </Pressable>
           )}
@@ -412,6 +425,15 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
             {/* Only doubt is surfaced, and it sits ABOVE the marks it describes.
                 A model asserting "high" about its own coordinates has no
                 calibration behind it; saying it is unsure is information. */}
+            {/* The prompt is season-scoped, but the SCREEN enforces it too: a
+                model that invents shaping cuts in a closed window gets them
+                labelled, deterministically (adversarial critic, verified). */}
+            {drawnMarks > 0 && season.status === "avoid" ? (
+              <Text style={[styles.confidence, { color: t.danger }]}>
+                Out of season — WAIT above still applies. Only dead, damaged or diseased wood should
+                come off now; treat any other suggestion below as next-window planning.
+              </Text>
+            ) : null}
             {drawnMarks > 0 && record.plan.confidence === "low" ? (
               <Text style={[styles.confidence, { color: caution }]}>
                 The AI says it is unsure where these go — treat them as a rough area only.

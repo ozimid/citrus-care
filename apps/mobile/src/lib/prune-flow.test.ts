@@ -264,3 +264,54 @@ describe("runPruneAnalysis onDebug", () => {
     expect(result.status).toBe("planned");
   });
 });
+
+describe("onDebug covers the failure class the full-res change most risks", () => {
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reports an inference crash as outcome 'failed'", async () => {
+    const debugs: Array<{ outcome?: string }> = [];
+    const { deps } = makeDeps({
+      generate: async () => {
+        throw new Error("native OOM");
+      },
+    });
+    await expect(
+      runPruneAnalysis(deps, INPUT, { onDebug: (d) => debugs.push(d) }),
+    ).rejects.toThrow(PRUNE_ANALYSIS_FAILED_ERROR);
+    expect(debugs[0]).toMatchObject({ outcome: "failed", raw: "" });
+    expect(typeof (debugs[0] as { elapsedMs?: unknown }).elapsedMs).toBe("number");
+  });
+
+  it("reports the hard ceiling as outcome 'timeout' — the datum IS that there was no text", async () => {
+    vi.useFakeTimers();
+    const debugs: Array<{ outcome?: string }> = [];
+    const { deps } = makeDeps({ generate: () => new Promise<string>(() => {}) });
+    const pending = runPruneAnalysis(deps, INPUT, { onDebug: (d) => debugs.push(d) });
+    const assertion = expect(pending).rejects.toThrow(PRUNE_TIMEOUT_ERROR);
+    await vi.advanceTimersByTimeAsync(LOCAL_HARD_CEILING_MS + 1);
+    await assertion;
+    expect(debugs[0]).toMatchObject({ outcome: "timeout", raw: "" });
+    vi.useRealTimers();
+  });
+});
+
+describe("an already-durable photo is not copied again", () => {
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  // The latest-photo default and retry-same-shot both feed the flow a photo
+  // that is ALREADY in durable storage; re-saving it duplicated the file on
+  // every run (critic finding). savedUri short-circuits the save.
+  it("skips the save when the caller marks the photo durable", async () => {
+    const { deps, saved, prepared } = makeDeps();
+    const result = await runPruneAnalysis(deps, {
+      ...INPUT,
+      photoUri: "file:///docs/photos/plant-1/already.jpg",
+      savedUri: "file:///docs/photos/plant-1/already.jpg",
+    });
+    expect(saved).toEqual([]);
+    expect(prepared).toEqual(["file:///docs/photos/plant-1/already.jpg"]);
+    expect(result.status).toBe("planned");
+  });
+});

@@ -6,6 +6,7 @@ import {
   cancelReminder,
   cancelWateringReminders,
   clampToWateringWindow,
+  formatLocalReminderDate,
   formatReminderDate,
   mapScheduledReminders,
   reminderContent,
@@ -59,6 +60,17 @@ describe("reminderContent", () => {
     const content = reminderContent("Meyer Lemon");
     expect(content.title).toBe("Meyer Lemon is due for a check 🍋");
     expect(content.body).toBe("Snap a quick photo to see how it's doing.");
+  });
+});
+
+describe("formatLocalReminderDate", () => {
+  // The prune labels show LOCAL-calendar dates (window start, 9am fire time).
+  // The UTC formatter renders those a day early anywhere east of Greenwich —
+  // Sydney saw "Aug 31" for a Sep 1 window (critic finding, verified).
+  it("formats by the phone's local calendar, not UTC", () => {
+    expect(formatLocalReminderDate(new Date(2027, 2, 1))).toBe("Mar 1");
+    expect(formatLocalReminderDate(new Date(2027, 2, 1, 9, 0))).toBe("Mar 1");
+    expect(formatLocalReminderDate(new Date(2026, 11, 31, 23, 30))).toBe("Dec 31");
   });
 });
 

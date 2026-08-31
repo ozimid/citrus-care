@@ -76,9 +76,15 @@ boxes are guesses.
 **Amended by device V&V (2026-08-31):** a box whose four values all fit 0–100 was originally refused as
 ambiguous between the grid and percentages. On the user's own rose the model answered in percentages,
 every box was refused, and the photo rendered with nothing marked — the useless state. Percent-shaped
-answers are now read AS percentages (y-first order kept). The residual misread — a true grid box that
-fits 0–100 — degrades to a small top-left region that is visible and checkable, where the old behaviour
-was no information at all; regions carry their own size, so the loosening cannot produce a crosshair. When the model itself reports `subject: "unclear"` we believe it and draw nothing at all.
+answers (and 0–1 fractions) are now read in their own convention, y-first order assumed.
+
+**Residual risk, corrected (the first amendment stated it backwards; the adversarial critic caught it):**
+a TRUE grid box whose values fit 0–100 — a region inside the photo's top-left 10%×10% — gets inflated 10×
+per axis and displaced toward the centre: a confident-looking region up to the 55% area cap, over the
+wrong branches. Accepted because genuine grid boxes confined to that corner are rare, percent answers are
+the observed norm on-device, and the halo is a region under a "likely area" caveat. Second known unknown:
+nothing guarantees an off-distribution percent answer is y-first — a transposed box passes every guard.
+Both are why the caveat and the grower's own eyes stay in the loop. When the model itself reports `subject: "unclear"` we believe it and draw nothing at all.
 A plan with zero drawable marks still renders — the rules, the season and the text steps carry it.
 *A missing overlay is a good outcome; a wrong one is not.*
 
@@ -197,6 +203,23 @@ encoder resizes to its own fixed input internally, so pre-shrinking only threw d
 prompt's easy exit — "return an empty cuts list and explain why" — is closed: cuts are expected, an empty
 list is reserved for a plant that genuinely needs nothing, and uncertainty must be expressed through
 `confidence`, never by refusing to answer. D-P4's guards still gate what gets DRAWN.
+
+### Round 4 (same day): the adversarial critic on rounds 1–3
+
+Sixteen agents attacked the three feedback rounds; ten findings survived verification. The two that
+mattered: (1) the percent-box amendment above had its residual risk **inverted** — fixed in place; and
+(2) the no-refusal prompt's "almost every photo has 1–3 cuts… shape" prior **beat the season line in the
+same prompt**, so a closed-window healthy shrub would get manufactured shape cuts under a WAIT card. The
+best-effort demand is now **season-scoped** (`PrunePromptRules.seasonStatus`): full press in an open
+window; in an avoid window the model is told to mark only dead/broken/diseased wood and the empty list
+gets its permission back exactly there — and the screen independently labels any drawn marks in an avoid
+window ("Out of season — WAIT still applies"). Also fixed: timeouts/crashes now produce debug records
+(`outcome: "timeout" | "failed"` + `elapsedMs`) so the diagnostics can see the full-res change's most
+likely regression; prune-reminder labels use a local-calendar formatter (the UTC one was a day early
+east of Greenwich — Sydney saw "Aug 31" for a Sep 1 window); the season card's 3-Ds line regained
+"diseased" and the citrus frost caveat; retry can no longer resurrect a photo the user replaced; and
+durable photos (latest-photo default, retries) are no longer re-copied into storage on every run
+(`savedUri` reinstated — removed earlier as unreachable, made reachable by the latest-photo path).
 
 ## 5. Deliberately not built
 
