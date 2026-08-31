@@ -38,3 +38,9 @@ next-env.d.ts
 
 # eas-cli debris when invoked from repo root (the real app.json is apps/mobile/app.json)
 /app.json
+
+# .claude/ is tracked for the shared agent definitions, so the per-machine
+# pieces have to be excluded HERE rather than relying on a global gitignore
+# that a fresh clone will not have.
+.claude/settings.local.json
+.claude/worktrees/

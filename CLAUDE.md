@@ -40,6 +40,11 @@ npm run typecheck         # tsc --noEmit (web)
 - `apps/mobile/src/lib/assess.ts` — the assess flow: local save FIRST → run Gemma → persist locally. No cloud fallback; failures are terminal + retryable. 25s slow-hint / 120s interrupt ceiling.
 - `apps/mobile/src/lib/spike-vlm.ts` — the on-device diagnosis prompt + tolerant JSON extractor + shared-schema parse.
 - `apps/mobile/src/lib/care-profile-local.ts` + `care-profile-io.ts` — F20 care profile generated on-device (text-only Gemma), stored on the plant.
+- `apps/mobile/src/lib/inference-budget.ts` — the 25s slow hint / 120s interrupt ceiling **every** on-device flow runs under. Not optional: with equal ceilings the earliest-enqueued request always expires first, which is the only reason a global `interrupt()` can't kill someone else's inference. `arch-guard` enforces it.
+- **F38 chat:** `plant-chat.ts` (system prompt from the plant's own record · `sanitizeChatAnswer` — the gate that stands in for a Zod schema on prose · `runPlantChatTurn`) + `chat-store.ts` / `plant-chat-io.ts`.
+- **F23 pruning:** `pruning-rules.ts` + `pruning-rules-packs.ts` (the DETERMINISTIC, sourced half — species rule packs and the season verdict; the model never supplies horticulture), `prune-plan.ts` (the `box_2d` prompt + tolerant parse + mark placement), `prune-flow.ts`, `prune-store.ts` / `prune-io.ts`, `components/PruneOverlay.tsx`.
+- `docs/design/plant-tools.md` — the design contract for both AI tools (locked decisions D-P1..D-P11). **Read before changing either.**
+- `docs/research/pruning-rules.md` — the sourced, adversarially fact-checked pruning rules + the on-device VLM grounding limits that constrain how they may be displayed.
 - `apps/mobile/src/lib/plant-store.ts` / `assessment-store.ts` (pure) + `plants-io.ts` — the local data layer; `store-adapters.ts` feeds the unchanged list/detail mappers (`plants.ts` / `plant-detail.ts`).
 - `apps/mobile/src/lib/assessment-store.ts` `withComputedComparison` — the deterministic better/same/worse trend (replaces Gemini's `comparison`).
 - `apps/mobile/src/lib/backup.ts` + `backup-io.ts` — manual JSON export/import (data-only; photos stay on the phone).
@@ -62,6 +67,7 @@ Use the installed Claude Code skills instead of improvising the equivalent step 
 | Choosing a library, model, or API | `research` (grounded in primary sources, output committed as Markdown) |
 | Locking an architecture decision | `domain-modeling` (then record it in Obsidian Architecture §"Locked decisions") |
 | A task that smells repeatable | `loopy` — check the Loop Library before inventing a workflow |
+| Refining a built screen (hierarchy, wait-time UX, trust calibration, load, empty/failure states, a11y) | **`ux-designer` subagent** (`.claude/agents/ux-designer.md`) — defaults to a ranked critique with concrete edits; say "apply" to have it make them |
 
 Two rules from the Vibe Coding template that apply to ALL builds, including subagent-delegated ones:
 - **Test-first, even in subagents.** Delegated implementation prompts must require a failing test before the implementation (red → green), not tests written alongside.
@@ -85,7 +91,7 @@ If your change conflicts with Architecture or the PRD, stop and surface it befor
 - **Nothing leaves the phone.** The only network calls are the model download and anonymous Open-Meteo weather. Do not add analytics, uploads, or telemetry.
 - **User-facing errors are generic/honest strings.** Log details via `console.error`, never surface raw model/runtime text.
 - **Backup is data-only.** Export/import carries plants/assessments/watering/photo-index; photo binaries stay on the phone. Import must never overwrite existing local data.
-- **Trunk-based.** CI gates push. (Currently on branch `feat/on-device-router-and-weather-foundation`, PR #1.)
+- **Trunk-based.** Work lands on `main`; CI gates push. (The D-17 branch and PR #1 were merged 2026-07-16.)
 - **No new files just because.** Edit existing files first. Files >250 lines → consider splitting.
 - **No `tags:` field in any new Obsidian doc.** Frontmatter is `date / last_updated / purpose / parent / related / status / sources`.
 - **Pure/`-io` split for anything touching AsyncStorage or expo.** The pure `<name>.ts` (logic, tested with vitest) never imports react-native/expo; the thin `<name>-io.ts` holds all the wiring and is untested by policy (exercised via `expo export`). Reads degrade to empty/default; writes throw.
