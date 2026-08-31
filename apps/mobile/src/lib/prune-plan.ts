@@ -295,8 +295,10 @@ export function parsePrunePlanOutput(raw: string): PrunePlanParseResult {
   return { ok: true, plan: result.data, dropped };
 }
 
-/** Keep a badge (and the arrow hanging off it) inside the photo. */
-const EDGE_MARGIN = 0;
+/** Keep a badge (and the arrow hanging off it) inside the photo. Exported so
+ * the test can assert the real margin rather than a vacuous "inside 0..100",
+ * which any value including zero would satisfy. */
+export const EDGE_MARGIN = 6;
 
 /** Halo drawn around a bare point, in percent of the photo. Deliberately
  * generous: a point carries no size signal at all, so the mark must not look

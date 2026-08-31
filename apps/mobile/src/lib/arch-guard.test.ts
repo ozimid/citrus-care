@@ -113,10 +113,12 @@ describe("D-P9: every on-device flow runs under the shared inference budget", ()
     "prune-flow.ts",
   ];
 
-  it.each(ENGINE_FLOWS)("%s imports withInferenceBudget", (file) => {
+  it.each(ENGINE_FLOWS)("%s actually CALLS withInferenceBudget with the shared ceiling", (file) => {
     const source = readFileSync(join(MOBILE_ROOT, "src", "lib", file), "utf8");
-    expect(source).toContain("withInferenceBudget");
-    expect(source).toContain("LOCAL_HARD_CEILING_MS");
+    // A mere import would satisfy `toContain`, which is the regression this
+    // guard exists to catch — so assert the call and the ceiling it is given.
+    expect(source, `${file}: no withInferenceBudget( call`).toMatch(/withInferenceBudget\s*\(/);
+    expect(source, `${file}: not using the shared ceiling`).toMatch(/hardMs:\s*LOCAL_HARD_CEILING_MS/);
   });
 
   it("catches a new engine caller that skipped the budget", () => {

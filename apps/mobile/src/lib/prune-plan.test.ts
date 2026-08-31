@@ -10,6 +10,7 @@ import {
   PRUNE_USER_PROMPT,
   buildPrunePromptSystem,
   friendlyPruneError,
+  EDGE_MARGIN,
   drawableMarkCount,
   haloBox,
   parsePrunePlanOutput,
@@ -179,6 +180,21 @@ describe("parsePrunePlanOutput — the trained box_2d convention", () => {
     }
   });
 
+  it.each([
+    [[500, 500, 502, 503], "a degenerate sliver — a 2px halo with an arrow on it is a crosshair"],
+    [[200, 400, 400, 1600], "a value off the 0-1000 grid"],
+    ["middle branch", "not an array at all"],
+  ])("refuses %j (%s)", (box: unknown, _why: string) => {
+    const result = parsePrunePlanOutput(
+      plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, box_2d: box }] }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.cuts[0].action).toBe("Cut");
+    expect(result.plan.cuts[0].x).toBeUndefined();
+    expect(result.dropped).toBe(1);
+  });
+
   it("still accepts a bare x/y point when the model ignores the box format", () => {
     const result = parsePrunePlanOutput(
       plan({ cuts: [{ label: "A", action: "Cut", reason: "Why", priority: 1, x: 30, y: 60 }] }),
@@ -292,6 +308,25 @@ describe("parsePrunePlanOutput", () => {
     expect(result.plan.summary).toContain("cross");
   });
 
+  // Priority decides first; among EQUAL priorities a cut we can draw beats one
+  // we cannot, so the three that survive the trim are the three most useful.
+  it("prefers placeable cuts when trimming a tie", () => {
+    const result = parsePrunePlanOutput(
+      plan({
+        cuts: [
+          { label: "Unplaceable", action: "Cut", reason: "Why", priority: 2, x: -4, y: 20 },
+          { label: "A", action: "Cut", reason: "Why", priority: 2, x: 10, y: 20 },
+          { label: "B", action: "Cut", reason: "Why", priority: 2, x: 20, y: 30 },
+          { label: "C", action: "Cut", reason: "Why", priority: 2, x: 30, y: 40 },
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.cuts.map((c) => c.label)).toEqual(["A", "B", "C"]);
+    expect(result.plan.cuts.every((c) => c.x !== undefined)).toBe(true);
+  });
+
   it("holds the model to the three cuts it was asked for", () => {
     const many = Array.from({ length: 9 }, (_, i) => ({
       label: `Cut ${i}`, action: "Cut", reason: "Why", priority: 2, x: 10 + i, y: 20,
@@ -403,9 +438,16 @@ describe("placeMark — the arrow points AT the region, never into it", () => {
     expect(placeMark({ x: 50, y: 30, box: { top: 20, left: 40, bottom: 40, right: 60 } }).tipY).toBe(30);
   });
 
-  it("keeps the tip inside a safe margin", () => {
-    expect(placeMark({ x: 0, y: 0 }).tipX).toBeGreaterThanOrEqual(0);
-    expect(placeMark({ x: 100, y: 100 }).tipX).toBeLessThanOrEqual(100);
+  it("keeps the tip inside a REAL margin, not merely on the canvas", () => {
+    // Asserting 0..100 would pass with no margin at all, which is how a mark at
+    // the very edge ends up with its badge clipped off the photo.
+    expect(EDGE_MARGIN).toBeGreaterThan(0);
+    const topLeft = placeMark({ x: 0, y: 0 });
+    expect(topLeft.tipX).toBeGreaterThanOrEqual(EDGE_MARGIN);
+    expect(topLeft.tipY).toBeGreaterThanOrEqual(EDGE_MARGIN);
+    const bottomRight = placeMark({ x: 100, y: 100 });
+    expect(bottomRight.tipX).toBeLessThanOrEqual(100 - EDGE_MARGIN);
+    expect(bottomRight.tipY).toBeLessThanOrEqual(100 - EDGE_MARGIN);
   });
 });
 

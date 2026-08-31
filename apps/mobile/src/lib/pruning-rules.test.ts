@@ -225,6 +225,26 @@ describe("seasonVerdict is deterministic, not model output", () => {
     expect(seasonVerdict(pack, 3).line).toContain("after the last frost");
   });
 
+  it("carries a pack's own caveat on the 3-Ds line, not just the blanket sentence", () => {
+    // Citrus is the documented exception: frost-damaged wood must NOT come off
+    // straight away. A blanket "dead wood can come off any month" would hand a
+    // grower permission the pack's own never-rule refuses — and it goes into
+    // the model prompt too.
+    expect(seasonVerdict(PRUNING_PACKS.citrus, 11).line).toContain("frost-damaged");
+
+    // Generic, so it cannot be outlived by a new pack with its own caveat.
+    for (const withCaveat of (Object.values(PRUNING_PACKS) as PruningPack[]).filter(
+      (p) => p.alwaysAllowedCaveat,
+    )) {
+      for (let month = 1; month <= 12; month++) {
+        const { line } = seasonVerdict(withCaveat, month);
+        if (line.includes("can come off in any month")) {
+          expect(line, `${withCaveat.key} m${month}`).toContain(withCaveat.alwaysAllowedCaveat!);
+        }
+      }
+    }
+  });
+
   it("always allows the safety exception, whatever the season says", () => {
     expect(seasonVerdict(pack, 12).line.toLowerCase()).toMatch(/dead|damaged|diseased|broken/);
   });

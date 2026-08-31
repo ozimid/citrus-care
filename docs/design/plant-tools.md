@@ -182,7 +182,7 @@ The screens were then put through the project's `ux-designer` subagent
 
 ## 6. How we know it works
 
-Automated (green as of 2026-08-31): mobile `tsc --noEmit`, **554** vitest tests, `arch-guard` (pure/`-io`
+Automated (green as of 2026-08-31): mobile `tsc --noEmit`, **562** vitest tests, `arch-guard` (pure/`-io`
 split + no backend/cloud imports), `expo export`.
 
 Two of those tests exist specifically to guard decisions above, because a decision with no test is a
