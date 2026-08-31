@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BMC_URL, FEEDBACK_EMAIL, buildFeedbackMailto, buildPruneDebugMailto } from "./support";
+import { BMC_URL, FEEDBACK_EMAIL, buildFeedbackMailto, buildPruneDebugMailto, buildPruneVideoSearchUrl } from "./support";
 
 describe("support links", () => {
   it("points at the real Buy Me a Coffee page", () => {
@@ -63,5 +63,16 @@ describe("buildPruneDebugMailto", () => {
     });
     expect(url.length).toBeLessThan(4_000);
     expect(decodeURIComponent(url)).toContain("dropped: 3");
+  });
+});
+
+describe("buildPruneVideoSearchUrl", () => {
+  // A general search, not a specific video: nothing to go stale, nothing to
+  // endorse, and the user taps it themself (link-out, like BMC/feedback).
+  it("builds a YouTube search for the plant class", () => {
+    expect(buildPruneVideoSearchUrl("Citrus tree")).toBe(
+      "https://www.youtube.com/results?search_query=how%20to%20prune%20a%20citrus%20tree",
+    );
+    expect(buildPruneVideoSearchUrl("Rose")).toContain("how%20to%20prune%20a%20rose");
   });
 });

@@ -111,6 +111,18 @@ describe("every pack is fit to go into a prompt and onto a screen", () => {
     }
   });
 
+  it("names the cut technique its diagram should show", () => {
+    // The diagram carries what the text used to: "bud" = cut above a bud
+    // (roses, perennials, soft growth), "collar" = cut outside the branch
+    // collar (trees and woody shrubs). Every pack picks one.
+    for (const pack of packs) {
+      expect(["bud", "collar"], pack.key).toContain(pack.technique);
+    }
+    expect(PRUNING_PACKS.rose.technique).toBe("bud");
+    expect(PRUNING_PACKS.citrus.technique).toBe("collar");
+    expect(PRUNING_PACKS.tree_shrub.technique).toBe("collar");
+  });
+
   it("always says what NOT to do — the dangerous half of pruning advice", () => {
     for (const pack of packs) expect(pack.never.length, pack.key).toBeGreaterThan(0);
   });
@@ -199,6 +211,7 @@ describe("seasonVerdict is deterministic, not model output", () => {
     key: "citrus",
     label: "Citrus tree",
     authoritative: true,
+    technique: "collar",
     bestMonths: [3, 4],
     okMonths: [5, 6],
     avoidMonths: [11, 12, 1],

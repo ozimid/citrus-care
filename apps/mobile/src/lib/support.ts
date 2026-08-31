@@ -59,3 +59,11 @@ export function buildPruneDebugMailto(
   const params = new URLSearchParams({ subject: "Where to prune — run details", body });
   return `mailto:${FEEDBACK_EMAIL}?${params.toString().replace(/\+/g, "%20")}`;
 }
+
+/** YouTube SEARCH for the plant class — deliberately not a specific video:
+ * nothing to go stale, nothing to endorse. A link-out the user taps, exactly
+ * like the BMC and feedback links (D-17: the app itself sends nothing). */
+export function buildPruneVideoSearchUrl(packLabel: string): string {
+  const query = `how to prune a ${packLabel.toLowerCase()}`;
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+}

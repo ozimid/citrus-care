@@ -221,6 +221,16 @@ east of Greenwich — Sydney saw "Aug 31" for a Sep 1 window); the season card's
 durable photos (latest-photo default, retries) are no longer re-copied into storage on every run
 (`savedUri` reinstated — removed earlier as unreachable, made reachable by the latest-photo path).
 
+### Round 5 (same day): show, don't tell
+
+User feedback on the accepted implementation: the recommendations need to be SEEN, not read. Two
+additions, both nearly text-free: **`CutDiagram`** — the cut technique drawn in-app with plain Views
+(no assets, no SVG dep, theme-aware): three panels, the correct cut flanked by the two classic
+mistakes, ✓/✗ plus two words each; variant per pack (`technique: "bud" | "collar"`). And **"▶️ Watch
+how it's done"** — a link-out to a general YouTube *search* for the plant class (never a specific
+video: nothing to go stale, nothing to endorse; a user-tapped link exactly like BMC/feedback, so the
+app still transmits nothing).
+
 ## 5. Deliberately not built
 
 | Not built | Why |

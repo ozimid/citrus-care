@@ -50,6 +50,11 @@ export interface PruningPack {
   /** The CONDITION behind the window, in the grower's words. Kept short: it
    * rides inside every season verdict line. */
   seasonNote: string;
+  /** Which cut the technique diagram shows: "bud" = cut just above a bud
+   * (roses, perennials, soft growth), "collar" = cut just outside the branch
+   * collar (trees and woody shrubs). The diagram carries what a paragraph
+   * used to — the user asked for pictures, not words. */
+  technique: "bud" | "collar";
   /** Appended to the "dead, damaged or diseased wood can come off any month"
    * carve-out where that is NOT unconditional. Frost-damaged citrus is the
    * documented case: the dead material insulates what is still alive, so the
@@ -63,6 +68,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   citrus: {
     key: "citrus",
     label: "Citrus tree",
+    technique: "collar",
     authoritative: true,
     bestMonths: [3, 4, 5],
     okMonths: [2, 6, 7, 8],
@@ -97,6 +103,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   rose: {
     key: "rose",
     label: "Rose",
+    technique: "bud",
     authoritative: true,
     bestMonths: [2, 3],
     okMonths: [1, 4, 5, 6, 7, 8, 12],
@@ -126,6 +133,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   flowering_shrub: {
     key: "flowering_shrub",
     label: "Flowering shrub",
+    technique: "collar",
     authoritative: true,
     bestMonths: [3, 4, 5, 6],
     okMonths: [1, 2, 7],
@@ -155,6 +163,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   perennial: {
     key: "perennial",
     label: "Flowering perennial",
+    technique: "bud",
     authoritative: false,
     bestMonths: [4, 5, 6, 7],
     okMonths: [3, 8],
@@ -183,6 +192,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   tree_shrub: {
     key: "tree_shrub",
     label: "Tree or shrub",
+    technique: "collar",
     authoritative: true,
     bestMonths: [2, 3],
     okMonths: [1, 4, 5, 6, 7, 11, 12],
@@ -213,6 +223,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   succulent: {
     key: "succulent",
     label: "Succulent or cactus",
+    technique: "bud",
     authoritative: false,
     bestMonths: [4, 5, 6, 7, 8, 9],
     okMonths: [3, 10],
@@ -237,6 +248,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   herb: {
     key: "herb",
     label: "Herb",
+    technique: "bud",
     authoritative: false,
     bestMonths: [4, 5, 6, 7, 8],
     okMonths: [3, 9],
@@ -259,6 +271,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   vegetable: {
     key: "vegetable",
     label: "Vegetable plant",
+    technique: "bud",
     authoritative: false,
     bestMonths: [5, 6, 7, 8],
     okMonths: [4, 9],
@@ -281,6 +294,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   vine: {
     key: "vine",
     label: "Vine",
+    technique: "bud",
     authoritative: false,
     bestMonths: [12, 1, 2],
     okMonths: [3, 7, 8, 11],
@@ -303,6 +317,7 @@ export const PRUNING_PACKS: Record<PruningPackKey, PruningPack> = {
   houseplant: {
     key: "houseplant",
     label: "Houseplant",
+    technique: "bud",
     authoritative: false,
     bestMonths: [3, 4, 5, 6, 7],
     okMonths: [2, 8],

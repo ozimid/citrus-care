@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useLocalEngine } from "../components/LocalEngineProvider";
+import { CutDiagram } from "../components/CutDiagram";
 import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { bandColor } from "../lib/health";
 import { formatTimelineDate } from "../lib/plant-detail";
@@ -36,7 +37,7 @@ import {
   toggleCut,
 } from "../lib/prune-io";
 import type { PruneDebugInfo } from "../lib/prune-flow";
-import { buildPruneDebugMailto } from "../lib/support";
+import { buildPruneDebugMailto, buildPruneVideoSearchUrl } from "../lib/support";
 import { cutProgress, type StoredPrunePlan } from "../lib/prune-store";
 import {
   bestWindowLabel,
@@ -568,6 +569,10 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
           <Text style={[styles.cardLabel, { color: t.sub }]}>
             {pack.label.toUpperCase()} · SOURCED RULES
           </Text>
+          {/* The technique as a picture — ✓ flanked by the two classic
+              mistakes. Carries what a paragraph used to (user request:
+              show it, don't say it). */}
+          <CutDiagram technique={pack.technique} t={t} />
           {pack.never.map((rule) => (
             <Text key={rule} style={[styles.cutText, { color: t.danger }]}>
               • {rule}
@@ -580,6 +585,19 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
                 </Text>
               ))
             : null}
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel={`Watch how to prune a ${pack.label.toLowerCase()} on YouTube`}
+            onPress={() =>
+              Linking.openURL(buildPruneVideoSearchUrl(pack.label)).catch((e) =>
+                console.error("[PruneScreen] video link failed:", (e as Error).message),
+              )
+            }
+            hitSlop={8}
+            style={styles.remindRow}
+          >
+            <Text style={[styles.remindText, { color: t.green }]}>▶️ Watch how it&apos;s done</Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ expanded: rulesOpen }}
