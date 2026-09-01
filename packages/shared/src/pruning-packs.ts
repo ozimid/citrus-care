@@ -1,6 +1,7 @@
 // F23 rule packs — the horticultural data behind the pruning feature, split
 // out from the selection/season logic in pruning-rules.ts so the content can be
-// reviewed (and re-sourced) on its own.
+// reviewed (and re-sourced) on its own — and, since 2026-08-31, shared with
+// the web landing, whose /guides pages render these same packs.
 //
 // PROVENANCE: researched from US cooperative-extension services (UC ANR/IPM,
 // Texas A&M AgriLife, UF/IFAS, Clemson, Missouri, Illinois, Oregon State,

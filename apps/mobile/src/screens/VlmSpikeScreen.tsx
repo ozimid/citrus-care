@@ -6,11 +6,14 @@
 // native runtime (dev-build only), so ProfileScreen loads it lazily — the rest
 // of the app must keep working where the native module is absent (Expo Go).
 
+import * as Application from "expo-application";
+import * as Device from "expo-device";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,6 +28,7 @@ import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import {
   appendRun,
   classifyInit,
+  deviceCheckVerdict,
   formatMs,
   parseTally,
   runPassesBar,
@@ -40,6 +44,7 @@ import {
 } from "../lib/spike-vlm";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
+import { buildDeviceCheckMailto } from "../lib/support";
 
 initExecutorch({ resourceFetcher: ExpoResourceFetcher });
 
@@ -87,6 +92,8 @@ export function VlmSpikeScreen({ onClose }: { onClose: () => void }) {
   }, []);
 
   const tally = parseTally(runs);
+  // F32 v1 — the run log formalized: five inference runs → a shareable verdict.
+  const check = deviceCheckVerdict(runs);
 
   return (
     <View style={[styles.root, { backgroundColor: t.canvas }]}>
@@ -116,6 +123,33 @@ export function VlmSpikeScreen({ onClose }: { onClose: () => void }) {
           <SpikeSession key={session} t={t} onRecord={recordRun} onReinit={() => setSession((s) => s + 1)} />
         )}
 
+        {check.ready ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Share this Device Check result by email"
+            onPress={() =>
+              Linking.openURL(
+                buildDeviceCheckMailto(Application.nativeApplicationVersion, {
+                  pass: check.pass,
+                  parseRate: check.parseRate,
+                  medianMs: check.medianMs,
+                  device: `${Device.modelName ?? "unknown"} · Android ${Device.osVersion ?? "?"}`,
+                }),
+              ).catch((e: Error) => console.error("[VlmSpike] share failed:", e.message))
+            }
+            style={{ minHeight: 44, justifyContent: "center" }}
+          >
+            <Text style={{ color: check.pass ? t.green : t.danger, fontSize: 13, fontWeight: "700" }}>
+              Device Check: {check.pass ? "PASS" : "FAIL"} · {Math.round(check.parseRate * 100)}% parse ·
+              median {formatMs(check.medianMs)} — ✉️ share result
+            </Text>
+          </Pressable>
+        ) : !check.ready && runs.length > 0 ? (
+          <Text style={{ color: t.sub, fontSize: 13 }}>
+            Device Check: {check.runsNeeded} more inference run{check.runsNeeded === 1 ? "" : "s"} for
+            a verdict
+          </Text>
+        ) : null}
         {runs.length > 0 && (
           <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
             <Text style={[styles.label, { color: t.sub }]}>

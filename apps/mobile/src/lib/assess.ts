@@ -90,8 +90,20 @@ export interface AssessInput {
   force?: boolean;
 }
 
+/** What a run actually did, raw model text included — same channel the prune
+ * flow proved out. Stored on-phone by the caller; leaves it only inside an
+ * email the user drafts themself (#2, D-17). */
+export interface AssessDebugInfo {
+  outcome: "assessed" | "rejected" | "unreadable" | "failed" | "timeout";
+  reason?: "no-json" | "invalid-json" | "schema-mismatch";
+  raw: string;
+  elapsedMs?: number;
+}
+
 export interface AssessHooks {
   onPhase?: (phase: AssessPhase) => void;
+  /** Best-effort — a throwing sink must never break the flow. */
+  onDebug?: (info: AssessDebugInfo) => void;
   /** Fires as soon as the photo is saved locally so the caller can keep the
    * durable uri for retries. */
   onPhotoSaved?: (localUri: string) => void;
@@ -175,8 +187,10 @@ async function runLocal(
 
   // F21: don't put a non-plant in a plant's timeline unless the user says to.
   if (inference.diagnosis.subject === "not_a_plant" && !input.force) {
+    debugBestEffort(hooks, { outcome: "rejected", raw: inference.raw });
     return { status: "rejected", diagnosis: inference.diagnosis };
   }
+  debugBestEffort(hooks, { outcome: "assessed", raw: inference.raw });
 
   let assessmentId: string;
   try {
@@ -195,14 +209,23 @@ async function runLocal(
 /** The budget-wrapped diagnose step shared by the normal flow and F35's
  * diagnose-only path: 25s slow hint, 120s interrupt ceiling, honest errors,
  * schema gate. Never persists anything. */
+function debugBestEffort(hooks: AssessHooks, info: AssessDebugInfo): void {
+  try {
+    hooks.onDebug?.(info);
+  } catch (e) {
+    console.error("[runAssess] debug sink failed:", (e as Error).message);
+  }
+}
+
 async function diagnoseWithBudget(
   local: LocalAssessDeps,
   localUri: string,
   hooks: AssessHooks,
 ): Promise<{ diagnosis: AssessmentDiagnosis; raw: string }> {
   let inference: { diagnosis: AssessmentDiagnosis; raw: string } | null;
+  const startedAt = Date.now();
   try {
-    inference = await withInferenceBudget(localDiagnose(local, localUri), {
+    inference = await withInferenceBudget(localDiagnose(local, localUri, hooks), {
       slowMs: LOCAL_SLOW_THRESHOLD_MS,
       hardMs: LOCAL_HARD_CEILING_MS,
       onSlow: hooks.onSlow,
@@ -210,7 +233,13 @@ async function diagnoseWithBudget(
     });
   } catch (e) {
     console.error("[runAssess] on-device inference failed:", (e as Error).message);
-    if (e instanceof InferenceTimeoutError) throw new Error(ANALYSIS_TIMEOUT_ERROR);
+    const timedOut = e instanceof InferenceTimeoutError;
+    debugBestEffort(hooks, {
+      outcome: timedOut ? "timeout" : "failed",
+      raw: "",
+      elapsedMs: Date.now() - startedAt,
+    });
+    if (timedOut) throw new Error(ANALYSIS_TIMEOUT_ERROR);
     throw new Error(ANALYSIS_FAILED_ERROR);
   }
   // Unparseable output — the small local model has no responseSchema, so the
@@ -276,12 +305,14 @@ export async function persistDeferredAssessment(
 async function localDiagnose(
   local: LocalAssessDeps,
   localUri: string,
+  hooks: AssessHooks,
 ): Promise<{ diagnosis: AssessmentDiagnosis; raw: string } | null> {
   const imageUri = await local.prepare(localUri);
   const raw = await local.generate({ imageUri });
   const parsed = parseDiagnosisOutput(raw);
   if (!parsed.ok) {
     console.error("[runAssess] on-device output rejected:", parsed.reason);
+    debugBestEffort(hooks, { outcome: "unreadable", reason: parsed.reason, raw });
     return null;
   }
   return { diagnosis: parsed.diagnosis, raw };

@@ -54,3 +54,28 @@ export const notificationScheduler: ReminderScheduler = {
     return Notifications.getAllScheduledNotificationsAsync();
   },
 };
+
+/** #5 — once-per-night guard for weather alerts. The list re-syncs on every
+ * load, and a tonight-alert's "evening before" slot is already past, so
+ * without this mark each refresh would re-fire the notification at now+60s
+ * (adversarial critic). Best-effort on both ends. */
+const WEATHER_ALERT_MARK_KEY = "citrus.weather-alert-mark.v1";
+
+export async function loadWeatherAlertMark(): Promise<string | null> {
+  try {
+    const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+    return await AsyncStorage.getItem(WEATHER_ALERT_MARK_KEY);
+  } catch (e) {
+    console.error("[reminders-io] alert mark read failed:", (e as Error).message);
+    return null;
+  }
+}
+
+export async function saveWeatherAlertMark(mark: string): Promise<void> {
+  try {
+    const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+    await AsyncStorage.setItem(WEATHER_ALERT_MARK_KEY, mark);
+  } catch (e) {
+    console.error("[reminders-io] alert mark save failed:", (e as Error).message);
+  }
+}

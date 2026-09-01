@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import * as Application from "expo-application";
+import { useCallback, useRef, useState } from "react";
+import { ActivityIndicator, Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { RoundButton } from "../components/CaptureOverlay";
 import { useLocalEngine } from "../components/LocalEngineProvider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
@@ -19,7 +20,14 @@ import { persistLocalAssessment } from "../lib/local-engine-io";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { linkPhotoToAssessment, savePlantPhoto } from "../lib/photo-store-io";
-import { SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
+import { buildDiagnosisContext, SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
+import { saveLastAssessDebug } from "../lib/assess-debug-io";
+import { buildAssessDebugMailto } from "../lib/support";
+import type { AssessDebugInfo } from "../lib/assess";
+import { fetchPlantDetail } from "../lib/plants-io";
+import { getWateringLog } from "../lib/watering-io";
+import { lastWateredAt, parseStoredCareProfile } from "../lib/watering";
+import { cachedLocalConditions } from "../lib/weather-io";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -63,6 +71,15 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
   /** F21: the model read a non-plant and nothing was saved. The photo is
    * still on the phone; the user decides whether to keep the assessment. */
   const [rejection, setRejection] = useState<RejectedResult | null>(null);
+  /** #4 — the plant's own record, folded into the diagnosis prompt so the
+   * model ranks causes with triage pre-answered (empty for snap-first). */
+  const contextRef = useRef("");
+  /** Synchronous re-entry guard: analyze() now awaits the context load before
+   * any phase fires, which opened a multi-frame double-tap window
+   * (adversarial critic). */
+  const inFlightRef = useRef(false);
+  /** The last run's record, for the user-tapped details share. */
+  const [debug, setDebug] = useState<AssessDebugInfo | null>(null);
   /** F35: a finished diagnosis waiting for its plant (sheet open). */
   const [deferred, setDeferred] = useState<{ diagnosis: AssessmentDiagnosis; raw: string } | null>(
     null,
@@ -91,7 +108,9 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         generate: ({ imageUri }) =>
           localEngine.generate({
             system: SPIKE_SYSTEM_PROMPT,
-            user: LOCAL_USER_PROMPT,
+            user: contextRef.current
+              ? `${LOCAL_USER_PROMPT}\n\n${contextRef.current}`
+              : LOCAL_USER_PROMPT,
             imageUri,
           }),
         interrupt: localEngine.interrupt,
@@ -102,18 +121,52 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
     [localEngine, photo.height, photo.width],
   );
 
+  /** Best-effort record assembly — a failed read just means no context. */
+  const loadContext = useCallback(async () => {
+    if (!plantId) {
+      contextRef.current = "";
+      return;
+    }
+    try {
+      const now = new Date();
+      const [detail, log] = await Promise.all([fetchPlantDetail(plantId), getWateringLog()]);
+      const { weather } = await cachedLocalConditions(detail.plant.zip_code, now);
+      const profile = parseStoredCareProfile(detail.plant.care_profile);
+      const watered = lastWateredAt(log, plantId);
+      contextRef.current = buildDiagnosisContext({
+        plantType: detail.plant.plant_type,
+        species: detail.plant.species,
+        wateringIntervalDays: profile?.base_watering_interval_days,
+        lastWateredDaysAgo: watered
+          ? Math.round((now.getTime() - new Date(watered).getTime()) / 86_400_000)
+          : null,
+        recentRainMm: weather?.recentPrecipMm ?? null,
+        maxTempC: weather?.maxTempC ?? null,
+        // No lastScore/lastTrend on purpose: a prior score in the prompt would
+        // prime the score the deterministic trend is computed from.
+      });
+    } catch (e) {
+      console.error("[ReviewScreen] context load failed:", (e as Error).message);
+      contextRef.current = "";
+    }
+  }, [plantId]);
+
   const analyze = useCallback(async (force = false) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setError(null);
     setRejection(null);
     setSlow(false);
+    setDebug(null);
     try {
+      await loadContext();
       if (plantId === null) {
         // F35 snap-first: diagnose only — nothing is saved until the user
         // confirms the AI-drafted plant in the sheet.
         const result = await runDiagnoseOnly(
           buildDeps(),
           { photoUri: photo.uri, force },
-          { onPhase: setPhase, onSlow: () => setSlow(true) },
+          { onPhase: setPhase, onSlow: () => setSlow(true), onDebug: (d) => { setDebug(d); void saveLastAssessDebug(d); } },
         );
         if (result.status === "rejected") {
           setRejection({ status: "rejected", diagnosis: result.diagnosis, localUri: photo.uri });
@@ -125,7 +178,15 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       const result = await runAssess(
         buildDeps(),
         { plantId, photoUri: photo.uri, savedUri, force },
-        { onPhase: setPhase, onPhotoSaved: setSavedUri, onSlow: () => setSlow(true) },
+        {
+          onPhase: setPhase,
+          onPhotoSaved: setSavedUri,
+          onSlow: () => setSlow(true),
+          onDebug: (d) => {
+            setDebug(d);
+            void saveLastAssessDebug(d);
+          },
+        },
       );
       if (result.status === "rejected") {
         setRejection(result);
@@ -136,10 +197,11 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       // Details were logged where they occurred; the UI gets only the friendly string.
       setError(friendlyAssessError(e));
     } finally {
+      inFlightRef.current = false;
       setPhase(null);
       setSlow(false);
     }
-  }, [buildDeps, onAssessed, photo.uri, plantId, savedUri]);
+  }, [buildDeps, loadContext, onAssessed, photo.uri, plantId, savedUri]);
 
   /** F35: the user saved the drafted plant — now persist photo + assessment. */
   const completeDeferred = useCallback(
@@ -189,6 +251,21 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       </View>
       <View style={styles.bottomArea}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error && debug ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Email the run details to feedback"
+            onPress={() =>
+              Linking.openURL(
+                buildAssessDebugMailto(Application.nativeApplicationVersion, debug),
+              ).catch((e) => console.error("[ReviewScreen] mailto failed:", (e as Error).message))
+            }
+            hitSlop={8}
+            style={styles.saveAnyway}
+          >
+            <Text style={styles.saveAnywayText}>✉️ Send the details — helps fix it</Text>
+          </Pressable>
+        ) : null}
         {rejection && !busy ? (
           <View style={styles.rejection}>
             <Text style={styles.rejectionTitle}>That doesn&apos;t look like a plant</Text>

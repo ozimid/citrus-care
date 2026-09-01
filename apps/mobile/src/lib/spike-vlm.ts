@@ -26,7 +26,7 @@ Rules:
 - Yellow leaves are ambiguous: consider overwatering, root rot, pH lockout, pests, cold, and light before nutrient deficiency.
 - For a cut: a correct cut is just outside the branch collar; a flush cut (too close to the trunk) or a long stub both heal badly. Look for decay, borer holes, or callous forming over the edges.
 - For "not_a_plant": health_score 0, say what you see in the summary, leave the lists empty.
-- At most 3 symptoms, 3 causes, 3 recommendations (priority 1 = most important). Be concrete and concise; summary <= 250 characters.
+- At most 3 symptoms, 3 causes ordered most likely first, 3 recommendations (priority 1 = most important). Be concrete and concise; summary <= 250 characters.
 "plant_guess" (OPTIONAL: only if you are reasonably confident what plant this is): {"plant_type": one of tree|shrub|flower|succulent|vegetable|herb|vine|other, "species": common name in plain words}. Omit plant_guess entirely when unsure.
 
 Respond with VALID JSON ONLY — no prose, no markdown fences — exactly this shape:
@@ -92,4 +92,41 @@ export function parseDiagnosisOutput(text: string): DiagnosisParseResult {
   const parsed = assessmentDiagnosisSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, reason: "schema-mismatch" };
   return { ok: true, diagnosis: parsed.data };
+}
+
+/** What the diagnosis may know about the plant beyond the photo (#4). All
+ * optional: a snap-first photo has none of it. Assembled by the caller from
+ * the on-device stores — the one triage source a cloud one-shot app lacks. */
+export interface DiagnosisContext {
+  plantType?: string;
+  species?: string | null;
+  wateringIntervalDays?: number;
+  lastWateredDaysAgo?: number | null;
+  recentRainMm?: number | null;
+  maxTempC?: number | null;
+  // Deliberately NO lastScore/lastTrend: a prior score in the prompt primes
+  // the score the deterministic trend is computed from — a self-reinforcing
+  // loop in the north-star metric (adversarial critic, 2026-08-31). The
+  // cause-ranking value lives in the watering/weather lines.
+}
+
+export function buildDiagnosisContext(context: DiagnosisContext | null): string {
+  if (!context) return "";
+  const lines: string[] = [];
+  if (context.species) lines.push(`Plant: ${context.species} (${context.plantType ?? "plant"})`);
+  else if (context.plantType) lines.push(`Plant type: ${context.plantType}`);
+  if (typeof context.wateringIntervalDays === "number") {
+    const watered =
+      typeof context.lastWateredDaysAgo === "number"
+        ? `, last watered ${context.lastWateredDaysAgo} days ago`
+        : "";
+    lines.push(`Watering baseline: every ${context.wateringIntervalDays} days${watered}`);
+  }
+  if (typeof context.recentRainMm === "number") lines.push(`Recent rain: ${context.recentRainMm} mm`);
+  if (typeof context.maxTempC === "number") lines.push(`Recent high: ${context.maxTempC}°C`);
+  if (lines.length === 0) return "";
+  return [
+    "KNOWN ABOUT THIS PLANT — background for ranking the causes only. Judge the photo on what you see; this must never raise or lower the health score:",
+    ...lines,
+  ].join("\n");
 }

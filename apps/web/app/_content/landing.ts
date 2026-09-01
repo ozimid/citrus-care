@@ -11,7 +11,9 @@ export const landingContent = {
   stats: [
     { value: "On-device", label: "AI — photos never leave your phone" },
     { value: "No account", label: "nothing to sign up for" },
-    { value: "Free", label: "no servers, no fees" },
+    // #6 (2026-08-31): the category's loudest documented complaint is
+    // subscription traps — name the difference where it scans.
+    { value: "No subscription", label: "free — no trial, no auto-charge, ever" },
   ],
   workflow: [
     {

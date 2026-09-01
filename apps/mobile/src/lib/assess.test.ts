@@ -454,3 +454,55 @@ describe("persistDeferredAssessment (F35)", () => {
     ).resolves.toBeTruthy();
   });
 });
+
+// #2 — the diagnosis gets the same diagnostics channel the prune flow proved
+// out: every run reports outcome + raw text to a best-effort sink, so a bad
+// diagnosis is debuggable from the phone without telemetry.
+describe("runAssess onDebug", () => {
+  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reports a successful diagnosis with its raw text", async () => {
+    const debugs: Array<{ outcome?: string; raw?: string }> = [];
+    const { deps } = makeDeps();
+    await runAssess(deps, INPUT, { onDebug: (d) => debugs.push(d) });
+    expect(debugs).toHaveLength(1);
+    expect(debugs[0].outcome).toBe("assessed");
+    expect(debugs[0].raw).toBe(LOCAL_JSON);
+  });
+
+  it("reports unreadable output with the parse reason", async () => {
+    const { local } = makeLocal({ generate: async () => "no json here" });
+    const { deps } = makeDeps({ local });
+    const debugs: Array<{ outcome?: string; reason?: string }> = [];
+    await expect(
+      runAssess(deps, INPUT, { onDebug: (d) => debugs.push(d) }),
+    ).rejects.toThrow(ANALYSIS_UNREADABLE_ERROR);
+    expect(debugs[0]).toMatchObject({ outcome: "unreadable", reason: "no-json" });
+  });
+
+  it("reports a crash as failed, with elapsed time and empty raw", async () => {
+    const { local } = makeLocal({
+      generate: async () => {
+        throw new Error("native OOM");
+      },
+    });
+    const { deps } = makeDeps({ local });
+    const debugs: Array<{ outcome?: string; raw?: string; elapsedMs?: number }> = [];
+    await expect(
+      runAssess(deps, INPUT, { onDebug: (d) => debugs.push(d) }),
+    ).rejects.toThrow(ANALYSIS_FAILED_ERROR);
+    expect(debugs[0]).toMatchObject({ outcome: "failed", raw: "" });
+    expect(typeof debugs[0].elapsedMs).toBe("number");
+  });
+
+  it("never lets a throwing sink break the flow", async () => {
+    const { deps } = makeDeps();
+    const result = await runAssess(deps, INPUT, {
+      onDebug: () => {
+        throw new Error("sink exploded");
+      },
+    });
+    expect(result.status).toBe("assessed");
+  });
+});

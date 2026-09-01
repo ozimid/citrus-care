@@ -67,3 +67,38 @@ export function buildPruneVideoSearchUrl(packLabel: string): string {
   const query = `how to prune a ${packLabel.toLowerCase()}`;
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
 }
+
+/** mailto: draft carrying what a DIAGNOSIS run actually did — same channel as
+ * the prune one, different subject line. */
+export function buildAssessDebugMailto(
+  appVersion: string | null,
+  info: { outcome: string; reason?: string; raw: string },
+): string {
+  const body = [
+    "Analysis run details (auto-filled — add what you saw):",
+    "",
+    `outcome: ${info.outcome}${info.reason ? ` (${info.reason})` : ""}`,
+    `app version: ${appVersion ?? "—"}`,
+    "",
+    "model output:",
+    info.raw.slice(0, DEBUG_RAW_MAX),
+  ].join("\n");
+  const params = new URLSearchParams({ subject: "Analysis — run details", body });
+  return `mailto:${FEEDBACK_EMAIL}?${params.toString().replace(/\+/g, "%20")}`;
+}
+
+/** mailto: draft sharing a Device Check verdict — the D-17-compatible device
+ * matrix: users volunteer their numbers, the app transmits nothing. */
+export function buildDeviceCheckMailto(
+  appVersion: string | null,
+  verdict: { pass: boolean; parseRate: number; medianMs: number; device: string },
+): string {
+  const body = [
+    `Device Check: ${verdict.pass ? "PASS" : "FAIL"}`,
+    `parse rate: ${Math.round(verdict.parseRate * 100)}% · median inference: ${verdict.medianMs} ms`,
+    `device: ${verdict.device}`,
+    `app version: ${appVersion ?? "—"}`,
+  ].join("\n");
+  const params = new URLSearchParams({ subject: "Device Check result", body });
+  return `mailto:${FEEDBACK_EMAIL}?${params.toString().replace(/\+/g, "%20")}`;
+}

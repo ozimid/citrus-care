@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BMC_URL, FEEDBACK_EMAIL, buildFeedbackMailto, buildPruneDebugMailto, buildPruneVideoSearchUrl } from "./support";
+import { BMC_URL, FEEDBACK_EMAIL, buildFeedbackMailto, buildPruneDebugMailto, buildPruneVideoSearchUrl, buildDeviceCheckMailto } from "./support";
 
 describe("support links", () => {
   it("points at the real Buy Me a Coffee page", () => {
@@ -74,5 +74,21 @@ describe("buildPruneVideoSearchUrl", () => {
       "https://www.youtube.com/results?search_query=how%20to%20prune%20a%20citrus%20tree",
     );
     expect(buildPruneVideoSearchUrl("Rose")).toContain("how%20to%20prune%20a%20rose");
+  });
+});
+
+describe("buildDeviceCheckMailto", () => {
+  it("carries the verdict numbers the user chooses to share", () => {
+    const url = buildDeviceCheckMailto("0.1.7", {
+      pass: true,
+      parseRate: 0.8,
+      medianMs: 12000,
+      device: "SM-S911B · Android 14",
+    });
+    const decoded = decodeURIComponent(url);
+    expect(url.startsWith(`mailto:${FEEDBACK_EMAIL}?`)).toBe(true);
+    expect(decoded).toContain("PASS");
+    expect(decoded).toContain("12000");
+    expect(decoded).toContain("SM-S911B");
   });
 });

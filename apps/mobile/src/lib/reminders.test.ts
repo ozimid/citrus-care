@@ -13,6 +13,9 @@ import {
   reminderDate,
   scheduleReminder,
   schedulePruneReminder,
+  scheduleWeatherAlert,
+  reminderRationale,
+  suggestedReminderInterval,
   scheduleWateringReminder,
   syncWateringReminder,
   wateringReminderContent,
@@ -60,6 +63,39 @@ describe("reminderContent", () => {
     const content = reminderContent("Meyer Lemon");
     expect(content.title).toBe("Meyer Lemon is due for a check 🍋");
     expect(content.body).toBe("Snap a quick photo to see how it's doing.");
+  });
+});
+
+// #3 north-star loop: the re-check interval is DERIVED from how the plant is
+// doing, and offered as the default — a struggling plant gets a sooner nudge.
+describe("suggestedReminderInterval", () => {
+  it("asks a struggling plant to come back sooner", () => {
+    expect(suggestedReminderInterval(35, null)).toBe("1w");
+    expect(suggestedReminderInterval(80, "worse")).toBe("1w");
+    expect(suggestedReminderInterval(55, null)).toBe("2w");
+    expect(suggestedReminderInterval(85, "same")).toBe("2w");
+    expect(suggestedReminderInterval(85, null)).toBe("1m");
+    expect(suggestedReminderInterval(85, "better")).toBe("1m");
+  });
+});
+
+// The derivation must be VISIBLE to feel intentional: without the why, "in 1
+// week" reads exactly like the old hard-coded default (designer finding).
+describe("reminderRationale", () => {
+  it("explains each branch in the user's terms", () => {
+    expect(reminderRationale(80, "worse")).toBe("Sooner, because it's worse than last time.");
+    expect(reminderRationale(35, null)).toBe("Sooner, because today's score is Poor.");
+    expect(reminderRationale(55, null)).toBe("Two weeks is enough to see a trend.");
+    expect(reminderRationale(85, null)).toBe("It's doing well — a month is fine.");
+  });
+
+  it("agrees with the interval it explains", () => {
+    for (const [score, delta] of [[35, null], [80, "worse"], [55, null], [85, null]] as const) {
+      const interval = suggestedReminderInterval(score, delta);
+      const why = reminderRationale(score, delta);
+      if (interval === "1w") expect(why).toContain("Sooner");
+      if (interval === "1m") expect(why).toContain("month");
+    }
   });
 });
 
@@ -504,5 +540,48 @@ describe("schedulePruneReminder", () => {
     });
     expect(await schedulePruneReminder(scheduler, INPUT)).toEqual({ ok: false, reason: "permission-denied" });
     expect(scheduled).toHaveLength(0);
+  });
+});
+
+// #5 — night-before frost/heat alerts. Same machinery: permission flow,
+// replace-don't-stack (kind "weather"), and an evening fire time.
+describe("scheduleWeatherAlert", () => {
+  const INPUT = {
+    kind: "frost" as const,
+    plantNames: ["Mr Lemon", "Rosa"],
+    tempC: -2,
+    /** The night being warned about (local midnight). */
+    night: new Date(2026, 10, 12),
+    now: new Date(2026, 10, 11, 10, 0),
+  };
+
+  it("fires the EVENING BEFORE, names the plants and the temperature", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    const outcome = await scheduleWeatherAlert(scheduler, INPUT);
+    expect(outcome.ok).toBe(true);
+    const req = scheduled[0] as { content: { title: string; body: string; data: Record<string, unknown> }; trigger: { date: Date } };
+    expect([req.trigger.date.getMonth(), req.trigger.date.getDate(), req.trigger.date.getHours()]).toEqual([10, 11, 18]);
+    expect(req.content.body).toContain("Mr Lemon");
+    expect(req.content.body).toContain("Rosa");
+    expect(req.content.title).toContain("-2");
+    expect(req.content.data).toMatchObject({ kind: "weather" });
+  });
+
+  it("falls forward to one minute from now when the evening slot has passed", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    await scheduleWeatherAlert(scheduler, { ...INPUT, now: new Date(2026, 10, 11, 20, 30) });
+    const date = (scheduled[0] as { trigger: { date: Date } }).trigger.date;
+    expect(date.getTime()).toBeGreaterThan(new Date(2026, 10, 11, 20, 30).getTime());
+  });
+
+  it("replaces previous weather alerts instead of stacking", async () => {
+    const existing = [
+      { identifier: "old-weather", content: { data: { kind: "weather" } } },
+      { identifier: "watering", content: { data: { kind: "watering", plantId: "p1" } } },
+    ];
+    const { scheduler, scheduled, cancelled } = makeScheduler({ getScheduled: async () => existing });
+    await scheduleWeatherAlert(scheduler, INPUT);
+    expect(cancelled).toEqual(["old-weather"]);
+    expect(scheduled).toHaveLength(1);
   });
 });

@@ -108,3 +108,22 @@ export async function cachedLocalConditions(
     return { weather: null, hemisphere: null };
   }
 }
+
+/** Daily forecasts for a set of ZIPs, straight from the cache — called right
+ * after the list's weather pass has populated it, so no network and no
+ * freshness dance. Missing entries are simply absent. */
+export async function cachedDailyByZip(
+  zips: string[],
+): Promise<Record<string, import("./weather").DailyWeather[]>> {
+  const result: Record<string, import("./weather").DailyWeather[]> = {};
+  try {
+    const cache = await weatherDeps.loadCache();
+    for (const zip of zips) {
+      const entry = cache[zip];
+      if (entry) result[zip] = entry.daily;
+    }
+  } catch (e) {
+    console.error("[weather-io] daily cache read failed:", (e as Error).message);
+  }
+  return result;
+}

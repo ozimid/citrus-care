@@ -231,6 +231,29 @@ how it's done"** — a link-out to a general YouTube *search* for the plant clas
 video: nothing to go stale, nothing to endorse; a user-tapped link exactly like BMC/feedback, so the
 app still transmits nothing).
 
+### Round 6 (2026-08-31): the strategy batch
+
+The competitive review's eight recommendations, built with the same loops (designer + adversarial
+critic, findings verified then fixed). New contracts worth recording:
+- **The diagnosis prompt now carries the plant's record** (species, watering interval, days since
+  watered, recent rain/heat) — framed as background for ranking causes, with an explicit fence, and
+  **deliberately WITHOUT the prior score/trend**: the critic showed a prior score primes the score the
+  deterministic trend is computed from — a self-reinforcing loop in the north-star metric.
+- **Weather alerts are meteorologically bounded:** "Frost" only at ≤ 2°C; a breach of the AI-generated
+  comfort floor above that is an honest "cold night" — because `temp_min_c` is hallucinable, and the
+  schema now rejects inverted ranges outright. Alerts fire once per kind+night (persisted mark), only
+  when notification permission already exists.
+- **The re-check reminder derives from severity and SAYS WHY** ("Sooner, because it's worse than last
+  time") — the derivation was invisible and read as arbitrary (designer).
+- **Diagnosis has the same debug channel as pruning** (on-phone record + user-tapped mailto), and the
+  spike screen is a formal **Device Check** (5 runs → PASS/FAIL → shareable result with device model —
+  the D-17-compatible device matrix).
+- **The garden trend line never renders stability as failure** ("All 2 plants holding steady", never
+  "0 of 2 improving").
+- Web: `/guides` renders the four authoritative packs (shared source of truth) with the hemisphere
+  stated on every surface including meta descriptions, the Never-list in a red card, and CTAs that
+  claim application, not precision.
+
 ## 5. Deliberately not built
 
 | Not built | Why |

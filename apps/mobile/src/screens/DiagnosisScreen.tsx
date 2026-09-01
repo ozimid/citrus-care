@@ -3,7 +3,13 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { bandColor, healthBand, type HealthBandKey } from "../lib/health";
 import { subjectLabel } from "../lib/plant-detail";
-import { formatReminderDate, scheduleReminder } from "../lib/reminders";
+import {
+  REMINDER_INTERVALS,
+  formatReminderDate,
+  reminderRationale,
+  scheduleReminder,
+  suggestedReminderInterval,
+} from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -46,6 +52,14 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, onDone }: Props
   const [reminder, setReminder] = useState<ReminderState>({ kind: "idle" });
 
   const band = healthBand(diagnosis.health_score);
+  // #3 north-star loop: the re-check interval is derived from how the plant is
+  // doing — a struggling plant is asked back sooner. The metric this app is
+  // named for needs a second assessment; this is what produces one.
+  const interval = suggestedReminderInterval(
+    diagnosis.health_score,
+    diagnosis.comparison?.delta ?? null,
+  );
+  const rationale = reminderRationale(diagnosis.health_score, diagnosis.comparison?.delta ?? null);
   const color = bandColor(band.key, scheme);
   const recommendations = diagnosis.recommendations.slice().sort((a, b) => a.priority - b.priority);
 
@@ -55,7 +69,7 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, onDone }: Props
       const outcome = await scheduleReminder(notificationScheduler, {
         plantId,
         plantName,
-        interval: "2w",
+        interval,
       });
       if (outcome.ok) {
         setReminder({ kind: "set", dateLabel: formatReminderDate(outcome.date) });
@@ -190,7 +204,7 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, onDone }: Props
         ) : (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Remind me in 2 weeks"
+            accessibilityLabel={`Remind me ${REMINDER_INTERVALS[interval].label}. ${rationale}`}
             disabled={reminder.kind === "setting"}
             onPress={remindMe}
             style={[styles.remind, { borderColor: t.green, opacity: reminder.kind === "setting" ? 0.6 : 1 }]}
@@ -198,10 +212,13 @@ export function DiagnosisScreen({ diagnosis, plantId, plantName, onDone }: Props
             {reminder.kind === "setting" ? (
               <ActivityIndicator color={t.green} />
             ) : (
-              <Text style={[styles.remindText, { color: t.green }]}>🔔 Remind me in 2 weeks</Text>
+              <Text style={[styles.remindText, { color: t.green }]}>🔔 Remind me {REMINDER_INTERVALS[interval].label}</Text>
             )}
           </Pressable>
         )}
+        {reminder.kind === "idle" || reminder.kind === "setting" ? (
+          <Text style={[styles.reminderNote, { color: t.sub }]}>{rationale}</Text>
+        ) : null}
         {reminder.kind === "note" ? (
           <Text style={[styles.reminderNote, { color: t.sub }]}>{reminder.message}</Text>
         ) : null}

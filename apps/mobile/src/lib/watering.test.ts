@@ -441,3 +441,22 @@ describe("monthsLabel", () => {
     expect(monthsLabel(undefined)).toBeNull();
   });
 });
+
+describe("parseStoredCareProfile rejects an inverted temperature range", () => {
+  it("degrades min>=max to null — no profile beats poisoned math", () => {
+    // Each bound is individually valid; together they would make every cool
+    // night a "frost" and every warm day "heat stress" (adversarial critic).
+    expect(
+      parseStoredCareProfile({
+        base_watering_interval_days: 7,
+        water_amount_note: "x",
+        sun: "full",
+        temp_min_c: 35,
+        temp_max_c: 5,
+        drought_tolerance: "medium",
+        indoor_ok: false,
+        notes: "x",
+      }),
+    ).toBeNull();
+  });
+});

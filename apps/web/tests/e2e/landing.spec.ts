@@ -35,3 +35,12 @@ test("/plants no longer exists (404)", async ({ page }) => {
   expect(res?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: /page not found/i })).toBeVisible();
 });
+
+test("pruning guides render from the shared packs", async ({ page }) => {
+  await page.goto("/guides");
+  await expect(page.getByRole("heading", { name: /when — and where — to prune/i })).toBeVisible();
+  await page.getByRole("link", { name: /how to prune a citrus tree/i }).click();
+  await expect(page.getByRole("heading", { name: /how to prune a citrus tree/i })).toBeVisible();
+  await expect(page.getByText(/branch collar/i).first()).toBeVisible();
+  await expect(page.getByText(/Mar–May/).first()).toBeVisible();
+});

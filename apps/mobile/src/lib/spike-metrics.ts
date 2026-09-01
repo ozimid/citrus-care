@@ -118,3 +118,31 @@ export function formatMs(ms: number): string {
   const seconds = Math.round((ms % 60_000) / 1_000);
   return `${minutes}m ${seconds}s`;
 }
+
+/** F32 v1 — the run log formalized into a user-runnable verdict. Ready after
+ * five INFERENCE runs; pass = parses reliably (>=4/5) AND median inference
+ * inside 30s. The latency bar is deliberately looser than the 25s slow hint:
+ * slow-but-honest is usable, unparseable is not. Log is newest-first. */
+export const DEVICE_CHECK_RUNS = 5;
+export const DEVICE_CHECK_MEDIAN_MS = 30_000;
+
+export type DeviceCheckVerdict =
+  | { ready: false; runsNeeded: number }
+  | { ready: true; pass: boolean; parseRate: number; medianMs: number };
+
+export function deviceCheckVerdict(log: SpikeRun[]): DeviceCheckVerdict {
+  const recent = log.filter((run) => run.kind === "inference").slice(0, DEVICE_CHECK_RUNS);
+  if (recent.length < DEVICE_CHECK_RUNS) {
+    return { ready: false, runsNeeded: DEVICE_CHECK_RUNS - recent.length };
+  }
+  const parsed = recent.filter((run) => run.parseOk === true).length;
+  const sorted = recent.map((run) => run.ms).sort((a, b) => a - b);
+  const medianMs = sorted[Math.floor(sorted.length / 2)];
+  const parseRate = parsed / recent.length;
+  return {
+    ready: true,
+    pass: parseRate >= 0.8 && medianMs <= DEVICE_CHECK_MEDIAN_MS,
+    parseRate,
+    medianMs,
+  };
+}

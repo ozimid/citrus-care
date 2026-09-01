@@ -87,5 +87,8 @@ export const careProfileSchema: z.ZodType<CareProfile> = z.object({
   flowering_months: z.array(z.number().int().min(1).max(12)).max(12).optional(),
   fruiting_months: z.array(z.number().int().min(1).max(12)).max(12).optional(),
   notes: z.string().max(600),
-});
+})
+  .refine((profile) => profile.temp_min_c < profile.temp_max_c, {
+    message: "temp_min_c must be below temp_max_c",
+  });
 

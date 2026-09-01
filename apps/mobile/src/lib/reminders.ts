@@ -13,6 +13,34 @@ export const REMINDER_INTERVALS: Record<ReminderInterval, { label: string; days:
   "1m": { label: "in 1 month", days: 30 },
 };
 
+/**
+ * #3 north-star loop — the re-check interval DERIVED from how the plant is
+ * doing, offered as the default on the diagnosis screen. A plant doing badly
+ * (low score, or trending worse) gets a sooner nudge; the metric this app is
+ * named for needs a second assessment, and nothing used to produce one.
+ */
+export function suggestedReminderInterval(
+  score: number,
+  delta: "better" | "same" | "worse" | "unknown" | null,
+): ReminderInterval {
+  if (score < 40 || delta === "worse") return "1w";
+  if (score < 70 || delta === "same") return "2w";
+  return "1m";
+}
+
+/** The WHY behind the derived interval, said in the user's terms — without it
+ * the derivation is invisible and "in 1 week" reads as an arbitrary default
+ * (designer finding). Branches mirror suggestedReminderInterval exactly. */
+export function reminderRationale(
+  score: number,
+  delta: "better" | "same" | "worse" | "unknown" | null,
+): string {
+  if (delta === "worse") return "Sooner, because it's worse than last time.";
+  if (score < 40) return "Sooner, because today's score is Poor.";
+  if (score < 70 || delta === "same") return "Two weeks is enough to see a trend.";
+  return "It's doing well — a month is fine.";
+}
+
 export function reminderDate(from: Date, interval: ReminderInterval): Date {
   return new Date(from.getTime() + REMINDER_INTERVALS[interval].days * 24 * 60 * 60 * 1000);
 }
@@ -414,6 +442,87 @@ export async function schedulePruneReminder(
         fireDate: date.toISOString(),
         kind: PRUNE_REMINDER_KIND,
       },
+    },
+    trigger: { type: "date", date },
+  });
+  return { ok: true, id, date };
+}
+
+// ------------------------------------------------------------------
+// #5 — night-before frost/heat alerts. The DECISION is pure and lives in
+// weather-alerts.ts (which plants, which night, what temperature); this half
+// owns only the notification mechanics — one digest notification per sync,
+// replace-don't-stack (kind "weather"), evening-before fire time.
+// ------------------------------------------------------------------
+
+export const WEATHER_ALERT_KIND = "weather";
+const WEATHER_ALERT_HOUR = 18;
+
+export interface ScheduleWeatherAlertInput {
+  kind: "frost" | "cold" | "heat";
+  plantNames: string[];
+  /** The forecast extreme being warned about. */
+  tempC: number;
+  /** The night in question (local midnight of its date). */
+  night: Date;
+  now?: Date;
+}
+
+export function weatherAlertContent(input: ScheduleWeatherAlertInput): { title: string; body: string } {
+  const names = input.plantNames.join(", ");
+  if (input.kind === "frost") {
+    return {
+      title: `Frost coming: ${input.tempC}°C ❄️`,
+      body: `Bring in or cover ${names} before tonight.`,
+    };
+  }
+  if (input.kind === "cold") {
+    // Honest words: below the plant's comfort range, but NOT freezing.
+    return {
+      title: `Cold night coming: ${input.tempC}°C 🥶`,
+      body: `${names} will be below their comfort range — consider covering or moving them.`,
+    };
+  }
+  return {
+    title: `Heat spike coming: ${input.tempC}°C 🥵`,
+    body: `Shade and water ${names} — it will be above their comfort range.`,
+  };
+}
+
+/** One weather digest at a time: re-syncing replaces the previous alert, and
+ * never touches watering/prune/re-check reminders. */
+export async function scheduleWeatherAlert(
+  scheduler: ReminderScheduler,
+  input: ScheduleWeatherAlertInput,
+): Promise<ScheduleOutcome> {
+  let permission = await scheduler.getPermissions();
+  if (!permission.granted) {
+    if (!permission.canAskAgain) return { ok: false, reason: "permission-denied" };
+    permission = await scheduler.requestPermissions();
+    if (!permission.granted) return { ok: false, reason: "permission-denied" };
+  }
+
+  const now = input.now ?? new Date();
+  // Evening BEFORE the night in question; if that slot has passed, fire soon —
+  // a frost warning delivered late still beats one never delivered.
+  const evening = new Date(input.night);
+  evening.setDate(evening.getDate() - 1);
+  evening.setHours(WEATHER_ALERT_HOUR, 0, 0, 0);
+  const date = evening.getTime() > now.getTime() ? evening : new Date(now.getTime() + 60_000);
+
+  try {
+    const existing = await scheduler.getScheduled();
+    for (const req of existing) {
+      if ((req.content.data ?? {}).kind === WEATHER_ALERT_KIND) await scheduler.cancel(req.identifier);
+    }
+  } catch (e) {
+    console.error("[scheduleWeatherAlert] could not clear old alerts:", (e as Error).message);
+  }
+
+  const id = await scheduler.schedule({
+    content: {
+      ...weatherAlertContent(input),
+      data: { kind: WEATHER_ALERT_KIND, fireDate: date.toISOString() },
     },
     trigger: { type: "date", date },
   });

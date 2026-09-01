@@ -17,8 +17,9 @@
 //  3. EVERY MONTH IS CLASSIFIED. An unclassified month used to fall through to
 //     "no opinion", which reads as permission.
 
-import type { PruningPackKey } from "./pruning-rules-packs";
-import { PRUNING_PACKS, type PruningPack } from "./pruning-rules-packs";
+// The packs moved to @citrus/shared (2026-08-31) so the web landing's guide
+// pages render the same sourced content the app ships — one source of truth.
+import { PRUNING_PACKS, type PruningPack, type PruningPackKey } from "@citrus/shared";
 import { monthsLabel } from "./watering";
 
 export { PRUNING_PACKS };

@@ -31,6 +31,10 @@ export type PlantRow = Pick<
 export interface PlantListItem {
   id: string;
   name: string;
+  /** Pack selection (Today card's prune-window check) needs the real
+   * identity, not the pet name. */
+  plantType: string;
+  species: string | null;
   subLabel: string;
   latestScore: number | null;
   /** Card trend chip: "Better"/"Same"/"Worse"/"Unknown" from the latest
@@ -97,6 +101,8 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
   return (rows ?? []).map((row) => ({
     id: row.id,
     name: row.name,
+    plantType: row.plant_type,
+    species: row.species,
     subLabel: plantSubLabel(row),
     latestScore: latestScore(row.assessments),
     trend: latestTrend(row.assessments),
@@ -129,4 +135,39 @@ export function attachCoverPhotos(items: PlantListItem[], index: PhotoIndex): Pl
       null;
     return { ...item, coverUri: fallback?.localUri ?? null };
   });
+}
+
+export interface GardenTrend {
+  improving: number;
+  /** Plants with a real directional trend (Better/Same/Worse — >= 2 assessments). */
+  compared: number;
+  line: string;
+}
+
+/**
+ * #3 — the north star made visible, phrased so a healthy garden never reads
+ * as failure (designer finding: "0 of 2 improving" punished stability):
+ * decline is named when present, all-steady is celebrated, and Unknown is not
+ * a trend. Null until at least one plant has a real trend.
+ */
+export function gardenTrend(items: PlantListItem[]): GardenTrend | null {
+  const compared = items.filter(
+    (item) => item.trend === "Better" || item.trend === "Same" || item.trend === "Worse",
+  );
+  if (compared.length === 0) return null;
+  const improving = compared.filter((item) => item.trend === "Better").length;
+  const declining = compared.filter((item) => item.trend === "Worse").length;
+  const noun = compared.length === 1 ? "plant" : "plants";
+
+  let line: string;
+  if (improving > 0 && declining > 0) {
+    line = `${improving} improving · ${declining} getting worse`;
+  } else if (declining > 0) {
+    line = `${declining} of ${compared.length} ${noun} getting worse`;
+  } else if (improving === 0) {
+    line = `All ${compared.length} ${noun} holding steady`;
+  } else {
+    line = `${improving} of ${compared.length} ${noun} improving`;
+  }
+  return { improving, compared: compared.length, line };
 }

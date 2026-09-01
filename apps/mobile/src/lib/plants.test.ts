@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CareProfile } from "@citrus/shared";
 import {
   attachCoverPhotos,
+  gardenTrend,
   latestAssessedAt,
   latestScore,
   latestTrend,
@@ -157,6 +158,8 @@ describe("mapPlantRows", () => {
     expect(items[0]).toEqual({
       id: "plant-1",
       name: "Backyard Meyer",
+      plantType: "tree",
+      species: "Citrus × meyeri",
       subLabel: "Tree · Citrus × meyeri · Meyer Lemon · Patio",
       latestScore: 91,
       trend: "Better",
@@ -243,5 +246,41 @@ describe("attachCoverPhotos", () => {
     expect(attached.name).toBe(source.name);
     // Pure: the input item was not mutated.
     expect("coverUri" in source ? source.coverUri : null).toBeNull();
+  });
+});
+
+// #3 — the north star made visible: "3 of 5 improving". Only plants with a
+// real comparison (>= 2 assessments) count; a First assessment is not a trend.
+describe("gardenTrend", () => {
+  function withTrend(id: string, trend: string | null) {
+    const [item] = mapPlantRows([row({ id })]);
+    return { ...item, trend };
+  }
+
+  it("leads with improvement when there is any", () => {
+    const items = [withTrend("a", "Better"), withTrend("b", "Worse"), withTrend("c", "Better")];
+    expect(gardenTrend(items)?.line).toBe("2 improving · 1 getting worse");
+  });
+
+  it("celebrates stability instead of calling it zero improvement", () => {
+    // "0 of 2 improving" rendered a healthy stable garden as failure
+    // (designer finding). Steady is the success state it is.
+    const items = [withTrend("a", "Same"), withTrend("b", "Same")];
+    expect(gardenTrend(items)?.line).toBe("All 2 plants holding steady");
+  });
+
+  it("names decline plainly when that is all there is", () => {
+    expect(gardenTrend([withTrend("a", "Worse"), withTrend("b", "Same"), withTrend("c", "Worse")])?.line).toBe(
+      "2 of 3 plants getting worse",
+    );
+  });
+
+  it("shows the north-star fraction when only improvement and steadiness exist", () => {
+    const items = [withTrend("a", "Better"), withTrend("b", "Same"), withTrend("c", "Same")];
+    expect(gardenTrend(items)?.line).toBe("1 of 3 plants improving");
+  });
+
+  it("ignores Unknown and First — neither is a trend", () => {
+    expect(gardenTrend([withTrend("a", "Unknown"), withTrend("b", "First assessment")])).toBeNull();
   });
 });

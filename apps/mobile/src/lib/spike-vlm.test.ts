@@ -4,6 +4,7 @@ import {
   SPIKE_USER_PROMPT,
   extractJsonCandidate,
   parseDiagnosisOutput,
+  buildDiagnosisContext,
 } from "./spike-vlm";
 
 const VALID_DIAGNOSIS_JSON = JSON.stringify({
@@ -132,5 +133,62 @@ describe("plant_guess (F35)", () => {
   it("the prompt asks for it, framed as only-when-confident", () => {
     expect(SPIKE_SYSTEM_PROMPT).toMatch(/plant_guess/);
     expect(SPIKE_SYSTEM_PROMPT).toMatch(/confident|sure|omit/i);
+  });
+});
+
+// #4 — differential diagnosis: the model gets the plant's own record so the
+// classic ambiguities (over- vs under-watering) resolve from data the cloud
+// apps do not have, and causes come back RANKED.
+describe("buildDiagnosisContext", () => {
+  it("packs the record into a short block", () => {
+    const context = buildDiagnosisContext({
+      plantType: "tree",
+      species: "Meyer lemon",
+      wateringIntervalDays: 7,
+      lastWateredDaysAgo: 12,
+      recentRainMm: 0,
+      maxTempC: 38,
+    });
+    expect(context).toContain("Meyer lemon");
+    expect(context).toContain("12");
+    expect(context).toContain("38");
+    expect(context.split("\n").length).toBeLessThanOrEqual(7);
+  });
+
+  it("tells the model the photo is primary", () => {
+    expect(buildDiagnosisContext({ plantType: "tree", maxTempC: 30 }).toLowerCase()).toContain(
+      "photo",
+    );
+  });
+
+  // The adversarial critic's finding, kept as a guard: the prior score/trend
+  // PRIME the output that the deterministic trend is computed from — prompt
+  // says "worse" → lower score → delta "worse" → next prompt says "worse".
+  // A self-reinforcing loop in the app's own north-star metric. The context
+  // type simply has no slot for them anymore.
+  it("has no slot for the previous score or trend", () => {
+    const keys = Object.keys({
+      plantType: 1, species: 1, wateringIntervalDays: 1, lastWateredDaysAgo: 1,
+      recentRainMm: 1, maxTempC: 1,
+    });
+    // Compile-time is the real guard; this pins the intent for readers.
+    expect(keys).not.toContain("lastScore");
+    expect(keys).not.toContain("lastTrend");
+  });
+
+  it("omits unknowns instead of printing null", () => {
+    const context = buildDiagnosisContext({ plantType: "tree" });
+    expect(context).not.toContain("null");
+    expect(context).not.toContain("undefined");
+  });
+
+  it("is empty for a snap-first photo with no plant yet", () => {
+    expect(buildDiagnosisContext(null)).toBe("");
+  });
+});
+
+describe("ranked causes in the system prompt", () => {
+  it("asks for causes ordered most-likely first", () => {
+    expect(SPIKE_SYSTEM_PROMPT.toLowerCase()).toMatch(/most likely first|most to least likely/);
   });
 });

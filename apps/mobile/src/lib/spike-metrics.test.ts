@@ -11,6 +11,7 @@ import {
   runPassesBar,
   serializeRunLog,
   type SpikeRun,
+  deviceCheckVerdict,
 } from "./spike-metrics";
 
 function run(kind: SpikeRun["kind"], ms: number, parseOk?: boolean): SpikeRun {
@@ -152,5 +153,50 @@ describe("formatMs", () => {
   it("renders minutes + whole seconds from a minute up", () => {
     expect(formatMs(92_000)).toBe("1m 32s");
     expect(formatMs(60_000)).toBe("1m 0s");
+  });
+});
+
+// F32 v1 — the spike log formalized into a user-runnable verdict, built on
+// the REAL run model: newest-first log, inference runs with a parseOk flag.
+describe("deviceCheckVerdict", () => {
+  const inf = (ms: number, parseOk: boolean) => ({
+    at: "2026-08-31T10:00:00Z",
+    kind: "inference" as const,
+    ms,
+    parseOk,
+  });
+  const init = { at: "2026-08-31T10:00:00Z", kind: "init-warm" as const, ms: 4000 };
+
+  it("needs five inference runs before it will say anything", () => {
+    expect(deviceCheckVerdict([inf(9000, true), init, inf(9000, true)])).toEqual({
+      ready: false,
+      runsNeeded: 3,
+    });
+  });
+
+  it("passes a phone that parses reliably and answers in time", () => {
+    const verdict = deviceCheckVerdict([
+      inf(8000, true), inf(9000, true), inf(12000, true), inf(15000, true), inf(9000, false),
+    ]);
+    expect(verdict).toMatchObject({ ready: true, pass: true });
+  });
+
+  it("fails a phone that cannot parse or is far too slow", () => {
+    const slow = deviceCheckVerdict([
+      inf(80000, true), inf(90000, true), inf(95000, true), inf(99000, true), inf(85000, true),
+    ]);
+    expect(slow).toMatchObject({ ready: true, pass: false });
+    const junk = deviceCheckVerdict([
+      inf(9000, false), inf(9000, false), inf(9000, false), inf(9000, true), inf(9000, false),
+    ]);
+    expect(junk).toMatchObject({ ready: true, pass: false });
+  });
+
+  it("judges the five NEWEST inference runs (log is newest-first)", () => {
+    const log = [
+      inf(9000, true), inf(9000, true), inf(9000, true), inf(9000, true), inf(9000, true),
+      inf(90000, false), inf(90000, false), inf(90000, false), inf(90000, false), inf(90000, false),
+    ];
+    expect(deviceCheckVerdict(log)).toMatchObject({ ready: true, pass: true });
   });
 });

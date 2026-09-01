@@ -15,7 +15,17 @@ import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { bandColor, healthBand } from "../lib/health";
-import { type PlantListItem } from "../lib/plants";
+import { gardenTrend, type PlantListItem } from "../lib/plants";
+import { todayDigest } from "../lib/today-digest";
+import { weatherAlertsFor, type WeatherAlert } from "../lib/weather-alerts";
+import { scheduleWeatherAlert } from "../lib/reminders";
+import {
+  loadWeatherAlertMark,
+  notificationScheduler,
+  saveWeatherAlertMark,
+} from "../lib/reminders-io";
+import { pruningPackFor, seasonVerdict, type Hemisphere } from "../lib/pruning-rules";
+import { cachedDailyByZip, cachedLocalConditions } from "../lib/weather-io";
 import { fetchPlants } from "../lib/plants-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -43,6 +53,11 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const [detailId, setDetailId] = useState<string | null>(null);
   /** Full-screen photo (tap a card's thumbnail). */
   const [viewing, setViewing] = useState<{ uri: string; caption?: string } | null>(null);
+  /** #5/#8 — tonight's weather alert (if any), for the Today card + a local
+   * notification. Deterministic; scheduled only when permission already
+   * granted (a list view must never throw a permission prompt). */
+  const [alert, setAlert] = useState<WeatherAlert | null>(null);
+  const [hemisphere, setHemisphere] = useState<Hemisphere>("northern");
 
   /**
    * F20 chips, computed for the whole list in one pass AFTER the plants render.
@@ -60,6 +75,41 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
       weatherByZip[zip] = resolved[i]?.summary ?? null;
     });
     setPlans(wateringPlansFor(plants, weatherByZip, await getWateringLog(), now));
+
+    // #5 — frost/heat: cross the just-fetched forecast with each plant's own
+    // comfort range. Notification is replace-don't-stack and only fires when
+    // permission was ALREADY granted.
+    try {
+      if (zips[0]) {
+        const { hemisphere: detected } = await cachedLocalConditions(zips[0], now);
+        if (detected) setHemisphere(detected);
+      }
+      const daily = await cachedDailyByZip(zips);
+      const alerts = weatherAlertsFor(
+        plants.map((p) => ({
+          id: p.id,
+          name: p.name,
+          location: p.location,
+          careProfile: p.careProfile,
+          zipCode: p.zipCode,
+        })),
+        daily,
+        now,
+      );
+      setAlert(alerts[0] ?? null);
+      if (alerts[0] && (await notificationScheduler.getPermissions()).granted) {
+        // Once per kind+night: the list reloads constantly and a same-night
+        // alert's evening slot is already past, so an unguarded sync would
+        // re-fire the notification on every refresh.
+        const mark = `${alerts[0].kind}:${alerts[0].night.toDateString()}`;
+        if ((await loadWeatherAlertMark()) !== mark) {
+          await scheduleWeatherAlert(notificationScheduler, { ...alerts[0], now });
+          await saveWeatherAlertMark(mark);
+        }
+      }
+    } catch (e) {
+      console.error("[PlantsScreen] weather alerts failed:", (e as Error).message);
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -101,6 +151,10 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           <Text style={[styles.addButtonText, { color: t.onGreen }]}>＋ Add plant</Text>
         </Pressable>
       </View>
+      {/* #3 — the north star, visible: "2 of 3 plants improving". */}
+      {items && gardenTrend(items) ? (
+        <Text style={[styles.trendLine, { color: t.sub }]}>{gardenTrend(items)!.line}</Text>
+      ) : null}
       {error ? <Text style={[styles.errorBanner, { color: t.danger }]}>{error}</Text> : null}
       {items === null ? (
         <View style={styles.center}>
@@ -114,7 +168,12 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.green} />
           }
-          ListHeaderComponent={<LocalEngineSetupCard />}
+          ListHeaderComponent={
+            <>
+              <TodayCard items={items} plans={plans} alert={alert} hemisphere={hemisphere} t={t} />
+              <LocalEngineSetupCard />
+            </>
+          }
           ListEmptyComponent={
             error ? null : <EmptyState t={t} onAdd={() => setAdding(true)} />
           }
@@ -155,6 +214,65 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           />
         ) : null}
       </Modal>
+    </View>
+  );
+}
+
+/** #8 (honest v1) — what needs doing TODAY, from deterministic signals only:
+ * a weather alert, watering due, an open prune window. Empty day = no card. */
+function TodayCard({
+  items,
+  plans,
+  alert,
+  hemisphere,
+  t,
+}: {
+  items: PlantListItem[];
+  plans: Record<string, WateringPlan>;
+  alert: WeatherAlert | null;
+  hemisphere: Hemisphere;
+  t: Tokens;
+}) {
+  const month = new Date().getMonth() + 1;
+  const lines = todayDigest({
+    alert: alert ? { kind: alert.kind, tempC: alert.tempC, plantNames: alert.plantNames } : null,
+    dueWater: items.filter((item) => plans[item.id]?.isDue === true).map((item) => item.name),
+    // Real identity, real hemisphere — a pet name must not pick the pack, and
+    // a southern grower must not get northern windows (D-P5).
+    pruneWindowOpen: items
+      .filter(
+        (item) =>
+          seasonVerdict(
+            pruningPackFor({
+              name: item.name,
+              plant_type: item.plantType,
+              species: item.species,
+              cultivar: null,
+            }),
+            month,
+            hemisphere,
+          ).status === "best",
+      )
+      .map((item) => item.name),
+  });
+  if (lines.length === 0) return null;
+  return (
+    <View style={[styles.todayCard, { backgroundColor: t.card, borderColor: t.border }]}>
+      <Text style={[styles.todayLabel, { color: t.sub }]}>TODAY</Text>
+      {lines.map((line) => (
+        <Text
+          key={line.text}
+          style={[
+            styles.todayLine,
+            // The most urgent thing should LOOK like it — the ranking used to
+            // exist only in source order (designer finding). The word carries
+            // the meaning; the colour just stops it whispering.
+            line.kind === "alert" ? { color: t.danger, fontWeight: "600" } : { color: t.text },
+          ]}
+        >
+          {line.text}
+        </Text>
+      ))}
     </View>
   );
 }
@@ -316,6 +434,16 @@ const styles = StyleSheet.create({
   },
   addButtonText: { fontSize: 13, fontWeight: "600" },
   errorBanner: { fontSize: 13, paddingHorizontal: 20, marginBottom: 8 },
+  trendLine: { fontSize: 13, fontWeight: "600", paddingHorizontal: 20, marginTop: -6, marginBottom: 8 },
+  todayCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: RADIUS,
+    padding: 14,
+    gap: 6,
+    marginBottom: 10,
+  },
+  todayLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
+  todayLine: { fontSize: 13, lineHeight: 19 },
   listContent: { paddingHorizontal: 20, paddingBottom: 24, gap: 10 },
   emptyGrow: { flexGrow: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 8 },
