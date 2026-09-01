@@ -27,35 +27,35 @@ export const landingContent = {
         "The on-device model returns a scored summary, likely causes, symptom severity, and prioritized next steps.",
     },
     {
-      title: "Track recovery",
+      title: "Track recovery — and ask questions",
       description:
-        "Compare follow-up photos, see whether a plant is better, same, or worse, and keep the timeline intact.",
+        "Compare follow-up photos, see whether a plant is better, same, or worse — and chat about it: answers come from that plant's own record, on your phone.",
     },
   ],
   careModes: [
     {
       icon: "leaf",
-      title: "Leaf and stem checks",
+      title: "Diagnosis that knows your plant",
       description:
-        "Spot chlorosis, pest patterns, watering stress, and nutrient issues across citrus and other garden plants.",
+        "Causes come back ranked using your plant's own record — when you watered, recent heat and rain, its species — not generic guesses.",
     },
     {
       icon: "scissors",
-      title: "Branch wound diagnostics",
+      title: "Where to prune",
       description:
-        "Evaluate pruning cuts, collar preservation, dieback risk, and recovery recommendations after trimming.",
+        "Photograph the plant and get likely cut areas marked on your photo, over pruning rules sourced from university extension services — with the right season window for your hemisphere.",
     },
     {
       icon: "shield",
-      title: "Quarantine alerts",
+      title: "Frost, heat and quarantine alerts",
       description:
-        "Flag riskier findings quickly so sensitive plants can be separated while you treat or monitor symptoms.",
+        "The night before a frost or heat spike, a notification names which plants to bring in or shade. Citrus in an HLB quarantine ZIP gets flagged too.",
     },
     {
       icon: "history",
-      title: "Weather-aware watering",
+      title: "Watering, reminders and a Today view",
       description:
-        "Each plant gets a watering rhythm that adjusts to your local forecast, with a gentle reminder when it's due.",
+        "Each plant gets a forecast-adjusted watering rhythm, smart re-check reminders, and one Today card saying what actually needs doing.",
     },
   ],
   focusAreas: [

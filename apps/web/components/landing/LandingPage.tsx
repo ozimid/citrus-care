@@ -207,6 +207,16 @@ function CareModesSection({ content }: { content: LandingContent }) {
             );
           })}
         </div>
+        <p className="mt-6 text-sm text-neutral-600 dark:text-neutral-300">
+          Prefer to read first?{" "}
+          <Link
+            href="/guides"
+            className="font-semibold text-emerald-700 hover:underline dark:text-emerald-400"
+          >
+            The pruning guides are free on this site
+          </Link>{" "}
+          — sourced from university extension services, no app needed.
+        </p>
       </div>
     </section>
   );
