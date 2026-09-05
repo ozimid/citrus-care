@@ -1,19 +1,20 @@
 export const landingContent = {
   hero: {
-    eyebrow: "Private, on-device plant care",
-    title: "Citrus Care",
+    eyebrow: "A little help for everything you grow",
+    title: "Plant care,",
+    titleAccent: "one photo at a time.",
     // Problem-first, plain words (friend feedback 2026-07-16: "write it like
     // for dummies — otherwise it's not clear").
     description:
-      "Is your plant dying? Take a photo — the app tells you what's wrong and exactly what to do about it, then reminds you to check back. Like a pet-care app, but for plants. Free, no account, and the AI runs on your phone.",
+      "Yellowing leaves? A plant that’s looking a little tired? Take a photo to explore likely causes, find your next care step, and follow its progress. All on your phone.",
     primaryCta: { label: "Download for Android", href: "#get-the-app" },
   },
   stats: [
-    { value: "On-device", label: "AI — photos never leave your phone" },
-    { value: "No account", label: "nothing to sign up for" },
+    { value: "On-device", label: "Your photos stay with you" },
+    { value: "No account", label: "Just you and your plants" },
     // #6 (2026-08-31): the category's loudest documented complaint is
     // subscription traps — name the difference where it scans.
-    { value: "No subscription", label: "free — no trial, no auto-charge, ever" },
+    { value: "No subscription", label: "Free. No trial. No auto-charge." },
   ],
   workflow: [
     {
@@ -22,9 +23,9 @@ export const landingContent = {
         "Use the in-app camera to frame a leaf, whole plant, or pruning wound in good light — one shutter, no modes.",
     },
     {
-      title: "Get structured diagnosis",
+      title: "Find your next care step",
       description:
-        "The on-device model returns a scored summary, likely causes, symptom severity, and prioritized next steps.",
+        "Get a health summary, likely causes, and suggested next steps. AI can be wrong, so use the suggestions alongside what you can see and feel.",
     },
     {
       title: "Track recovery — and ask questions",
@@ -67,9 +68,9 @@ export const landingContent = {
     "Repeat assessments",
   ],
   proof: [
-    "Native Android app built with Expo",
-    "Everything stays on your phone — no account, nothing synced",
-    "On-device AI — your photos are never uploaded",
+    "A photo history for each plant, from the first concern to the next check-in",
+    "Care suggestions informed by your plant’s own record",
+    "Questions, watering, and reminders in one place",
   ],
   getApp: {
     title: "Get the app",
@@ -84,14 +85,14 @@ export const landingContent = {
       // the warning honestly and let skeptics verify the code themselves.
       note: "Installs directly — no Play Store yet. Your browser will warn about apps from outside the store; that's normal for a direct download.",
       source: {
-        label: "Don't trust it? The full source code is public — check it on GitHub",
+        label: "Explore the source code on GitHub",
         href: "https://github.com/ozimid/citrus-care",
       },
     },
     requirements: [
-      "A recent Android phone with about 2 GB of free storage",
+      "A recent Android phone with at least 6 GB RAM and about 2 GB of free storage",
       "A one-time ~1.3 GB download for the on-device AI model, over Wi-Fi",
-      "No graphics card or VRAM involved — the AI shares your phone's normal memory. 6 GB+ RAM recommended; weaker devices get an honest “can’t run it” message instead of a broken experience",
+      "The app checks your device before the AI download. Compatibility and assessment speed depend on your phone.",
     ],
     installSteps: [
       "Download the APK from the button above.",
@@ -100,9 +101,9 @@ export const landingContent = {
     ],
   },
   privacy: {
-    title: "What leaves your phone: nothing",
+    title: "Your plants. Your photos. Your business.",
     body:
-      "There is no account and no server. Photos are analyzed by AI running on the device itself, and your plants and history are stored only on the phone. That also means losing or resetting the phone loses the data — so the app lets you export a backup file whenever you like.",
+      "Your photos and plant records stay on your phone. The AI works there too, with no account or cloud uploads. There’s no automatic sync, so export a backup to keep a copy of your garden. Setup downloads the AI model; optional weather lookups use your plant’s location.",
   },
   support: {
     title: "Support the app",

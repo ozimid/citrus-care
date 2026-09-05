@@ -1,7 +1,6 @@
 import { getDevLanOrigins } from "@/app/_lib/dev-lan-origins";
 
-/** Dev-only strip: the LAN URL a phone on the same Wi‑Fi can reach (the
- * mobile app's API origin routes through this host's /api rewrite in dev). */
+/** Dev-only strip: the website preview URL a phone on the same Wi-Fi can reach. */
 export function DevLanBanner() {
   if (process.env.NODE_ENV !== "development") return null;
 
@@ -17,12 +16,12 @@ export function DevLanBanner() {
       {lanOrigins.map((origin, i) => (
         <span key={origin}>
           {i > 0 ? " or " : ""}
-          <a href={origin} className="font-mono underline">
+          <a href={origin} className="break-all font-mono underline">
             {origin}
           </a>
         </span>
       ))}{" "}
-      on the same Wi‑Fi — the mobile app&apos;s API origin points here.
+      on the same Wi-Fi. Open it on your phone to preview the website.
     </div>
   );
 }

@@ -1,14 +1,17 @@
-// Citrus Care — minimal service worker.
-// App-shell caching only. Never caches /api/* or Supabase data.
+// Citrus Care — fresh pages online, previously visited pages offline.
+// Only documents, the manifest, and immutable Next assets are cached.
 
-const CACHE = "citrus-shell-v1";
-const SHELL = ["/", "/login", "/signup", "/manifest.json"];
+const CACHE_PREFIX = "citrus-shell-";
+const CACHE = `${CACHE_PREFIX}v2`;
+const SHELL = ["/", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(SHELL)).catch(() => null),
+    caches.open(CACHE)
+      .then((cache) => cache.addAll(SHELL))
+      .catch(() => null)
+      .then(() => self.skipWaiting()),
   );
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -16,11 +19,42 @@ self.addEventListener("activate", (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))),
-      ),
+        Promise.all(
+          keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE)
+            .map((key) => caches.delete(key)),
+        ),
+      )
+      .then(() => self.clients.claim()),
   );
-  self.clients.claim();
 });
+
+async function cachedResponse(request) {
+  return caches.open(CACHE)
+    .then((cache) => cache.match(request))
+    .catch(() => undefined);
+}
+
+async function fetchAndCache(request) {
+  const response = await fetch(request);
+  if (response.ok) {
+    const copy = response.clone();
+    // Storage failures must not prevent a successful network response.
+    await caches.open(CACHE)
+      .then((cache) => cache.put(request, copy))
+      .catch(() => null);
+  }
+  return response;
+}
+
+async function networkFirst(request) {
+  try {
+    return await fetchAndCache(request);
+  } catch (error) {
+    const cached = await cachedResponse(request);
+    if (cached) return cached;
+    throw error;
+  }
+}
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
@@ -31,17 +65,12 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/")) return;
   if (url.pathname.startsWith("/_next/data")) return;
 
-  if (SHELL.includes(url.pathname) || url.pathname.startsWith("/_next/static")) {
+  if (req.mode === "navigate" || url.pathname === "/manifest.json") {
+    // App Router RSC/prefetch requests are not document navigations.
+    event.respondWith(networkFirst(req));
+  } else if (url.pathname.startsWith("/_next/static/")) {
     event.respondWith(
-      caches.match(req).then(
-        (cached) =>
-          cached ||
-          fetch(req).then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => null);
-            return res;
-          }),
-      ),
+      cachedResponse(req).then((cached) => cached || fetchAndCache(req)),
     );
   }
 });

@@ -1,7 +1,5 @@
-import Image from "next/image";
 import Link from "next/link";
 import {
-  Camera,
   CheckCircle2,
   Coffee,
   Download,
@@ -11,12 +9,12 @@ import {
   Scissors,
   ShieldAlert,
   Smartphone,
-  Sparkles,
 } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import type { LandingContent } from "@/app/_content/landing";
+import { LandingHero, type LandingHeroProps } from "./LandingHero";
 
 const modeIcons = {
   leaf: Leaf,
@@ -25,20 +23,15 @@ const modeIcons = {
   history: History,
 } as const;
 
-interface LandingPageProps {
-  content: LandingContent;
-  lanOrigin?: string;
-  showLanBookmark?: boolean;
-}
-
 export function LandingPage({
   content,
   lanOrigin,
   showLanBookmark = false,
-}: LandingPageProps) {
+}: LandingHeroProps) {
   return (
-    <main className="bg-background text-foreground">
-      <HeroSection content={content} lanOrigin={lanOrigin} showLanBookmark={showLanBookmark} />
+    <main id="main-content" className="landing-page bg-background text-foreground">
+      <a href="#how-it-works" className="landing-skip-link">Skip to content</a>
+      <LandingHero content={content} lanOrigin={lanOrigin} showLanBookmark={showLanBookmark} />
       <WorkflowSection content={content} />
       <CareModesSection content={content} />
       <FocusSection content={content} />
@@ -50,113 +43,29 @@ export function LandingPage({
   );
 }
 
-function HeroSection({
-  content,
-  lanOrigin,
-  showLanBookmark,
-}: LandingPageProps) {
-  const { hero } = content;
-
-  return (
-    <section className="relative isolate flex min-h-[76svh] overflow-hidden">
-      <Image
-        src="/landing-citrus-assessment.png"
-        alt="Citrus Care assessment shown on a phone beside citrus leaves and pruning tools"
-        fill
-        priority
-        sizes="100vw"
-        className="absolute inset-0 -z-20 size-full object-cover"
-      />
-      <div className="absolute inset-0 -z-10 bg-neutral-950/48" />
-
-      <div className="mx-auto flex w-full max-w-6xl flex-col px-5 py-5 text-white sm:px-8 lg:px-10">
-        <nav className="flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2 text-sm font-semibold">
-            <span className="flex size-8 items-center justify-center rounded-md bg-white/14 ring-1 ring-white/25">
-              <Leaf className="size-4" aria-hidden="true" />
-            </span>
-            Citrus Care
-          </Link>
-          <a
-            href={hero.primaryCta.href}
-            className={cn(
-              buttonVariants({ size: "sm" }),
-              "bg-white text-neutral-950 hover:bg-white/90",
-            )}
-          >
-            {hero.primaryCta.label}
-          </a>
-        </nav>
-
-        <div className="flex flex-1 flex-col justify-center py-16 sm:py-20 lg:max-w-3xl">
-          <p className="mb-4 inline-flex w-fit items-center gap-2 rounded-md bg-white/14 px-3 py-1 text-sm font-medium ring-1 ring-white/20">
-            <Sparkles className="size-4" aria-hidden="true" />
-            {hero.eyebrow}
-          </p>
-          <h1 className="text-5xl font-semibold leading-none sm:text-6xl lg:text-7xl">
-            {hero.title}
-          </h1>
-          <p className="mt-5 max-w-2xl text-base leading-7 text-white/86 sm:text-lg">
-            {hero.description}
-          </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a
-              href={hero.primaryCta.href}
-              className={cn(
-                buttonVariants({ size: "lg" }),
-                "bg-lime-300 text-neutral-950 hover:bg-lime-200",
-              )}
-            >
-              <Camera className="size-4" aria-hidden="true" />
-              {hero.primaryCta.label}
-            </a>
-          </div>
-
-          {showLanBookmark && lanOrigin ? (
-            <p className="mt-5 text-sm text-white/76">
-              Phone bookmark:{" "}
-              <a href={lanOrigin} className="font-mono underline">
-                {lanOrigin}
-              </a>
-            </p>
-          ) : null}
-        </div>
-
-        <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md bg-white/18 ring-1 ring-white/18">
-          {content.stats.map((stat) => (
-            <div key={stat.label} className="bg-neutral-950/38 p-3 sm:p-4">
-              <dt className="text-xl font-semibold sm:text-2xl">{stat.value}</dt>
-              <dd className="mt-1 text-xs leading-5 text-white/78 sm:text-sm">
-                {stat.label}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </div>
-    </section>
-  );
-}
-
 function WorkflowSection({ content }: { content: LandingContent }) {
   return (
-    <section className="border-b bg-white py-14 dark:bg-background sm:py-18">
+    <section id="how-it-works" tabIndex={-1} className="border-b bg-background py-16 sm:py-22">
       <div className="mx-auto grid max-w-6xl gap-8 px-5 sm:px-8 lg:grid-cols-[0.85fr_1.15fr] lg:px-10">
         <div>
           <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
-            Care loop
+            Small steps, over time
           </p>
           <h2 className="mt-3 max-w-md text-3xl font-semibold leading-tight sm:text-4xl">
             From symptom photo to recovery record.
           </h2>
+          <p className="mt-5 max-w-sm text-base leading-7 text-muted-foreground">
+            Plant care is a conversation you come back to. Keep the photos, the questions, and the little changes together.
+          </p>
         </div>
         <div className="grid gap-3">
           {content.workflow.map((step, index) => (
             <article
               key={step.title}
-              className="grid gap-3 rounded-md border bg-background p-4 sm:grid-cols-[3rem_1fr] sm:p-5"
+              className="grid grid-cols-[2.5rem_1fr] gap-4 border-b py-5 first:pt-0 last:border-0"
             >
-              <div className="flex size-10 items-center justify-center rounded-md bg-emerald-100 text-sm font-semibold text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
-                {index + 1}
+              <div className="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
+                0{index + 1}
               </div>
               <div>
                 <h3 className="font-semibold">{step.title}</h3>
@@ -179,23 +88,23 @@ function CareModesSection({ content }: { content: LandingContent }) {
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
-              Diagnostic modes
+              A little everyday support
             </p>
             <h2 className="mt-3 max-w-2xl text-3xl font-semibold leading-tight sm:text-4xl">
-              Built for the messy middle of plant care.
+              More ways to help your garden thrive.
             </h2>
           </div>
-          <a href="#get-the-app" className={buttonVariants({ variant: "outline" })}>
+          <a href="#get-the-app" className={cn(buttonVariants({ variant: "outline" }), "landing-button min-h-12 px-5")}>
             Get the app
           </a>
         </div>
 
-        <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
           {content.careModes.map((mode) => {
             const Icon = modeIcons[mode.icon];
 
             return (
-              <article key={mode.title} className="rounded-md border bg-background p-5">
+              <article key={mode.title} className="rounded-lg border bg-background p-6 sm:p-7">
                 <div className="flex size-10 items-center justify-center rounded-md bg-lime-100 text-lime-900 dark:bg-lime-400/15 dark:text-lime-200">
                   <Icon className="size-5" aria-hidden="true" />
                 </div>
@@ -227,11 +136,11 @@ function FocusSection({ content }: { content: LandingContent }) {
     <section className="border-b bg-background py-14 sm:py-18">
       <div className="mx-auto grid max-w-6xl gap-8 px-5 sm:px-8 lg:grid-cols-[1fr_0.8fr] lg:px-10">
         <div>
-          <p className="text-sm font-medium text-red-700 dark:text-red-300">
-            Practical coverage
+          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+            Every plant has a story
           </p>
           <h2 className="mt-3 max-w-2xl text-3xl font-semibold leading-tight sm:text-4xl">
-            Keep the everyday observations close to the diagnosis.
+            From your windowsill to your little patch of garden.
           </h2>
           <div className="mt-6 flex flex-wrap gap-2">
             {content.focusAreas.map((area) => (
@@ -247,10 +156,10 @@ function FocusSection({ content }: { content: LandingContent }) {
 
         <div className="rounded-md border bg-muted/25 p-5">
           <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-md bg-red-100 text-red-900 dark:bg-red-400/15 dark:text-red-200">
+            <div className="flex size-10 items-center justify-center rounded-md bg-emerald-100 text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
               <CheckCircle2 className="size-5" aria-hidden="true" />
             </div>
-            <h3 className="font-semibold">Production-minded foundation</h3>
+            <h3 className="font-semibold">Your garden, all together</h3>
           </div>
           <ul className="mt-5 space-y-3">
             {content.proof.map((item) => (
@@ -297,7 +206,7 @@ function GetAppSection({ content }: { content: LandingContent }) {
               href={getApp.download.href}
               className={cn(
                 buttonVariants({ size: "lg" }),
-                "mt-5 w-full bg-emerald-600 text-white hover:bg-emerald-500",
+                "landing-button mt-5 min-h-12 w-full whitespace-normal bg-emerald-800 px-3 py-3 text-white hover:bg-emerald-900 dark:bg-emerald-300 dark:text-emerald-950 dark:hover:bg-emerald-200",
               )}
             >
               <Download className="size-4" aria-hidden="true" />
@@ -385,7 +294,7 @@ function SupportSection({ content }: { content: LandingContent }) {
             href={support.cta.href}
             target="_blank"
             rel="noreferrer"
-            className={cn(buttonVariants({ size: "lg" }), "w-fit bg-amber-400 text-neutral-950 hover:bg-amber-300")}
+            className={cn(buttonVariants({ size: "lg" }), "landing-button min-h-12 w-fit bg-amber-400 px-5 text-neutral-950 hover:bg-amber-300")}
           >
             <Coffee className="size-4" aria-hidden="true" />
             {support.cta.label}
@@ -408,12 +317,12 @@ function SupportSection({ content }: { content: LandingContent }) {
 function Footer() {
   return (
     <footer className="border-t bg-background">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-6 sm:px-8 lg:px-10">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-6 sm:px-8 lg:px-10">
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Leaf className="size-4" aria-hidden="true" />
           Citrus Care
         </p>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <Link href="/privacy" className="text-sm text-muted-foreground underline">
             Privacy
           </Link>

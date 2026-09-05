@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// An explicit origin exercises an already-running production preview or live site.
+const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
@@ -7,13 +10,13 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:3002",
+    baseURL: externalBaseURL ?? "http://localhost:3002",
     trace: "on-first-retry",
     // Vibe Coding template §7: e2e runs double as demo recordings.
     video: "on",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
+  webServer: externalBaseURL ? undefined : {
     command: "npm run dev",
     url: "http://localhost:3002",
     reuseExistingServer: !process.env.CI,

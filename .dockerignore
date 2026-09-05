@@ -1,0 +1,24 @@
+# The remote build needs only the web workspace and its shared package.
+**
+!Dockerfile
+!.dockerignore
+!fly.toml
+!package.json
+!package-lock.json
+!apps/
+!apps/web/
+!apps/web/**
+!packages/
+!packages/shared/
+!packages/shared/**
+
+# Never upload local configuration, installed packages, or build/test output.
+**/node_modules
+**/.next
+**/.env*
+**/test-results
+**/playwright-report
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+**/.DS_Store
