@@ -1,4 +1,69 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+const apkDownloadUrl = "https://github.com/ozimid/citrus-care/releases/latest/download/citrus-care.apk";
+const guideRoutes = [
+  "/guides",
+  "/guides/citrus-tree",
+  "/guides/roses",
+  "/guides/flowering-shrubs",
+  "/guides/trees-and-shrubs",
+];
+
+async function expectDirectApkDownload(page: Page, route: string) {
+  // Exercise the browser's real download behavior with a small attachment,
+  // without fetching the production APK for every guide regression check.
+  await page.route(apkDownloadUrl, (request) => request.fulfill({
+    status: 200,
+    contentType: "application/vnd.android.package-archive",
+    headers: { "Content-Disposition": "attachment; filename=\"citrus-care.apk\"" },
+    body: "Citrus Care APK download regression fixture",
+  }));
+  await page.goto(route);
+  const guideUrl = page.url();
+  const downloadLink = page.getByRole("link", { name: "Download for Android", exact: true });
+  await expect(downloadLink).toHaveAttribute("href", apkDownloadUrl);
+  await downloadLink.scrollIntoViewIfNeeded();
+  const target = (await downloadLink.boundingBox())!;
+  expect(target.height).toBeGreaterThanOrEqual(44);
+  expect(target.width).toBeGreaterThanOrEqual(44);
+  expect(target.x).toBeGreaterThanOrEqual(0);
+  expect(target.x + target.width).toBeLessThanOrEqual(320);
+
+  if (route === "/guides") await downloadLink.focus();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    route === "/guides" ? page.keyboard.press("Enter") : downloadLink.click(),
+  ]);
+  expect(download.url()).toBe(apkDownloadUrl);
+  expect(download.suggestedFilename()).toBe("citrus-care.apk");
+  expect(await download.failure()).toBeNull();
+  await expect(page).toHaveURL(guideUrl);
+  await page.getByRole("link", { name: "Installation instructions", exact: true }).click();
+  await expect(page).toHaveURL(/\/#get-the-app$/);
+  await expect(page.getByRole("heading", { name: "Get the app", exact: true })).toBeInViewport();
+}
+
+for (const route of guideRoutes) {
+  test(`Download for Android downloads the APK directly from ${route}`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 740 });
+    await expectDirectApkDownload(page, route);
+  });
+}
+
+test("guide APK downloads work without JavaScript", async ({ browser }) => {
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: 320, height: 740 },
+  });
+  try {
+    const page = await context.newPage();
+    for (const route of ["/guides", "/guides/citrus-tree"]) {
+      await expectDirectApkDownload(page, route);
+    }
+  } finally {
+    await context.close();
+  }
+});
 
 test("pruning guides provide a keyboard-accessible route back to the home page", async ({ page }) => {
   await page.goto("/");

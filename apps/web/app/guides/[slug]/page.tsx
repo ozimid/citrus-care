@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { landingContent } from "@/app/_content/landing";
 import { notFound } from "next/navigation";
 import { GuideNavigation } from "@/components/guides/GuideNavigation";
 import { allGuideSlugs, monthRange, packForSlug } from "../_lib";
@@ -85,11 +86,18 @@ export default async function GuidePage({ params }: { params: Promise<{ slug: st
           The Citrus Care app runs entirely on your phone — free, no account, no subscription, and
           your photos never leave the device.
         </p>
-        <Link
-          href="/#get-the-app"
-          className="mt-3 inline-block rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+        <a
+          href={landingContent.getApp.download.href}
+          className="mt-3 inline-flex min-h-11 items-center rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
         >
           Download for Android
+        </a>
+        <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">Direct APK download · 161 MB · Android only</p>
+        <Link
+          href="/#get-the-app"
+          className="mt-1 inline-flex min-h-11 items-center text-sm text-emerald-700 underline underline-offset-4 dark:text-emerald-400"
+        >
+          Installation instructions
         </Link>
       </div>
       <GuideNavigation includeAllGuides position="bottom" />
