@@ -2,7 +2,6 @@
 
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Camera, Droplets, Leaf } from "lucide-react";
-import { BotanicalScene } from "./BotanicalScene";
 
 const steps = ["Photo", "Insights", "Progress"] as const;
 
@@ -36,7 +35,10 @@ export function CareWalkthrough() {
 
   return (
     <div className="overflow-hidden rounded-[10px] border border-stone-200 bg-[#fffdf8] shadow-xl shadow-emerald-950/5 dark:border-stone-700 dark:bg-[#1c241e]">
-      <BotanicalScene />
+      <div className="border-b border-stone-200 px-4 py-4 dark:border-stone-700 sm:px-5">
+        <p className="text-base font-semibold text-emerald-900 dark:text-emerald-200">Example plant care journey</p>
+        <p className="mt-1 text-sm leading-6 text-stone-600 dark:text-stone-300">Sample data, not a live analysis.</p>
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-5">
         <div className="flex items-center gap-2.5">

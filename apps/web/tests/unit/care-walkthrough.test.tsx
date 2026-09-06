@@ -4,13 +4,13 @@ import { describe, expect, it } from "vitest";
 import { CareWalkthrough } from "@/components/landing/CareWalkthrough";
 
 describe("CareWalkthrough", () => {
-  it("opens with an explicitly illustrative photo example and one tabbable tab", () => {
+  it("opens with a clearly labeled sample journey and one tabbable tab", () => {
     render(<CareWalkthrough />);
 
-    expect(screen.getByText("Illustrative walkthrough")).toBeVisible();
+    expect(screen.getByText("Example plant care journey")).toBeVisible();
+    expect(screen.getByText("Sample data, not a live analysis.")).toBeVisible();
     expect(screen.getByText("Meyer lemon")).toBeVisible();
     expect(screen.getByText(/sample plant/i)).toBeVisible();
-    expect(screen.getByRole("img")).toHaveAccessibleName(/illustration/i);
     expect(screen.getByRole("tablist", { name: "Explore the care loop" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Photo" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Photo" })).toHaveAttribute("tabindex", "0");

@@ -146,14 +146,6 @@
   --border: #2d3b2c;
 }
 
-.landing-hero {
-  background: #f4f5ec;
-}
-
-.dark .landing-hero {
-  background: #151e16;
-}
-
 .landing-page section[id] {
   scroll-margin-top: 1.5rem;
 }
@@ -191,14 +183,6 @@
 @media (prefers-reduced-motion: no-preference) {
   html:has(.landing-page) {
     scroll-behavior: smooth;
-  }
-
-  .landing-hero-copy {
-    animation: landing-enter 600ms ease-out both;
-  }
-
-  .landing-hero-preview {
-    animation: landing-enter 700ms 100ms ease-out both;
   }
 
   .care-demo-panel {

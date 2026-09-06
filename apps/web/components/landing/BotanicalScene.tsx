@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Pause, Play } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import styles from "./BotanicalScene.module.css";
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
@@ -20,7 +20,7 @@ function prefersReducedMotion() {
 
 const clamp = (value: number) => Math.max(-1, Math.min(1, value));
 
-export function BotanicalScene() {
+export function BotanicalScene({ children }: { children: ReactNode }) {
   const sceneRef = useRef<HTMLElement>(null);
   const [paused, setPaused] = useState(false);
   // A still image is the safe server/no-JavaScript default.
@@ -102,20 +102,19 @@ export function BotanicalScene() {
   }, [motionEnabled]);
 
   return (
-    <figure ref={sceneRef} aria-label="Plant care illustration" data-motion={motionEnabled ? "on" : "off"} className={styles.scene}>
-      <div className={styles.backplate} aria-hidden="true" />
-      <div className={styles.frame}>
-        <div className={styles.photoWindow}>
-          <Image
-            src="/landing-citrus-assessment.png"
-            alt="Illustration of a phone showing plant care beside citrus leaves and pruning tools"
-            fill
-            preload
-            sizes="(min-width: 1024px) 500px, (min-width: 640px) 540px, 100vw"
-            className={styles.photo}
-          />
-        </div>
+    <section ref={sceneRef} aria-label="Plant care introduction" data-motion={motionEnabled ? "on" : "off"} className={styles.scene}>
+      <div className={styles.background}>
+        <Image
+          src="/landing-citrus-assessment.png"
+          alt="Illustration of a phone showing plant care beside citrus leaves and pruning tools"
+          fill
+          preload
+          sizes="100vw"
+          className={styles.photo}
+        />
       </div>
+      <div className={styles.shade} aria-hidden="true" />
+      {children}
       <button
         type="button"
         aria-label="Image motion"
@@ -127,7 +126,6 @@ export function BotanicalScene() {
       >
         {motionEnabled ? <Pause size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}
       </button>
-      <figcaption className={styles.caption}>Illustrative walkthrough</figcaption>
-    </figure>
+    </section>
   );
 }

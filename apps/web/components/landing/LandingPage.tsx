@@ -15,6 +15,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import type { LandingContent } from "@/app/_content/landing";
 import { LandingHero, type LandingHeroProps } from "./LandingHero";
+import { CareWalkthrough } from "./CareWalkthrough";
 
 const modeIcons = {
   leaf: Leaf,
@@ -57,24 +58,27 @@ function WorkflowSection({ content }: { content: LandingContent }) {
           <p className="mt-5 max-w-sm text-base leading-7 text-muted-foreground">
             Plant care is a conversation you come back to. Keep the photos, the questions, and the little changes together.
           </p>
+          <div className="mt-7 grid gap-3">
+            {content.workflow.map((step, index) => (
+              <article
+                key={step.title}
+                className="grid grid-cols-[2.5rem_1fr] gap-4 border-b py-5 first:pt-0 last:border-0"
+              >
+                <div className="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
+                  0{index + 1}
+                </div>
+                <div>
+                  <h3 className="font-semibold">{step.title}</h3>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    {step.description}
+                  </p>
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
-        <div className="grid gap-3">
-          {content.workflow.map((step, index) => (
-            <article
-              key={step.title}
-              className="grid grid-cols-[2.5rem_1fr] gap-4 border-b py-5 first:pt-0 last:border-0"
-            >
-              <div className="flex size-10 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200">
-                0{index + 1}
-              </div>
-              <div>
-                <h3 className="font-semibold">{step.title}</h3>
-                <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  {step.description}
-                </p>
-              </div>
-            </article>
-          ))}
+        <div className="min-w-0 lg:pt-2">
+          <CareWalkthrough />
         </div>
       </div>
     </section>

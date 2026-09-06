@@ -32,7 +32,8 @@ test("care walkthrough can be explored with a keyboard", async ({ page }) => {
   await page.keyboard.press("End");
   await expect(page.getByRole("tab", { name: /progress/i })).toBeFocused();
   await expect(page.getByRole("tabpanel")).toContainText("See what changes over time");
-  await expect(page.getByText("Illustrative walkthrough", { exact: true })).toBeVisible();
+  await expect(page.getByText("Example plant care journey", { exact: true })).toBeVisible();
+  await expect(page.getByText("Sample data, not a live analysis.", { exact: true })).toBeVisible();
 });
 
 test("small screens retain navigation and an unobstructed download", async ({ page }, testInfo) => {
