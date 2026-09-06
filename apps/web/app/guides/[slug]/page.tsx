@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { GuideNavigation } from "@/components/guides/GuideNavigation";
 import { allGuideSlugs, monthRange, packForSlug } from "../_lib";
 
 export function generateStaticParams() {
@@ -21,12 +22,8 @@ export default async function GuidePage({ params }: { params: Promise<{ slug: st
   if (!pack) notFound();
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-16">
-      <p className="text-sm">
-        <Link href="/guides" className="text-emerald-700 hover:underline dark:text-emerald-400">
-          ← All pruning guides
-        </Link>
-      </p>
+    <main className="mx-auto max-w-2xl px-6 py-8 sm:py-12">
+      <GuideNavigation includeAllGuides />
       <h1 className="mt-4 text-3xl font-semibold">How to prune a {pack.label.toLowerCase()}</h1>
 
       <div className="mt-6 rounded-xl border border-emerald-600/40 bg-emerald-600/5 p-5">
@@ -95,6 +92,7 @@ export default async function GuidePage({ params }: { params: Promise<{ slug: st
           Download for Android
         </Link>
       </div>
+      <GuideNavigation includeAllGuides position="bottom" />
     </main>
   );
 }

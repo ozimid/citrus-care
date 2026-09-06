@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { GuideNavigation } from "@/components/guides/GuideNavigation";
 import { authoritativePacks, guideSlug, guideSummary } from "./_lib";
 
 export const metadata = {
@@ -11,7 +12,8 @@ export const metadata = {
 // ships (@citrus/shared), one source of truth.
 export default function GuidesIndex() {
   return (
-    <main className="mx-auto max-w-2xl px-6 py-16">
+    <main className="mx-auto max-w-2xl px-6 py-8 sm:py-12">
+      <GuideNavigation />
       <p className="text-sm font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
         Pruning guides
       </p>
@@ -50,6 +52,7 @@ export default function GuidesIndex() {
           Download for Android
         </Link>
       </div>
+      <GuideNavigation position="bottom" />
     </main>
   );
 }

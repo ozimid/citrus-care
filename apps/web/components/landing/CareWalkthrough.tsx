@@ -1,8 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Camera, Droplets, Leaf } from "lucide-react";
+import { BotanicalScene } from "./BotanicalScene";
 
 const steps = ["Photo", "Insights", "Progress"] as const;
 
@@ -36,19 +36,7 @@ export function CareWalkthrough() {
 
   return (
     <div className="overflow-hidden rounded-[10px] border border-stone-200 bg-[#fffdf8] shadow-xl shadow-emerald-950/5 dark:border-stone-700 dark:bg-[#1c241e]">
-      <div className="relative aspect-[16/9] overflow-hidden bg-stone-100 dark:bg-stone-800">
-        <Image
-          src="/landing-citrus-assessment.png"
-          alt="Illustration of a phone showing plant care beside citrus leaves and pruning tools"
-          fill
-          preload
-          sizes="(min-width: 1024px) 500px, (min-width: 640px) 540px, 100vw"
-          className="object-cover"
-        />
-        <p className="absolute left-3 right-3 top-3 w-fit rounded-[6px] border border-white/50 bg-[#fffdf8]/95 px-2.5 py-1.5 text-xs font-medium text-stone-700 shadow-sm">
-          Illustrative walkthrough
-        </p>
-      </div>
+      <BotanicalScene />
 
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-5">
         <div className="flex items-center gap-2.5">
