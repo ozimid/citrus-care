@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import type { LandingContent } from "@/app/_content/landing";
 import { LandingHero, type LandingHeroProps } from "./LandingHero";
 import { CareWalkthrough } from "./CareWalkthrough";
+import { TutorialVideo } from "./TutorialVideo";
 
 const modeIcons = {
   leaf: Leaf,
@@ -76,9 +77,12 @@ function WorkflowSection({ content }: { content: LandingContent }) {
               </article>
             ))}
           </div>
+          <div className="mt-8">
+            <CareWalkthrough />
+          </div>
         </div>
         <div className="min-w-0 lg:pt-2">
-          <CareWalkthrough />
+          <TutorialVideo />
         </div>
       </div>
     </section>

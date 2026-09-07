@@ -1,8 +1,9 @@
 // Citrus Care — fresh pages online, previously visited pages offline.
 // Only documents, the manifest, and immutable Next assets are cached.
+// Tutorial media uses the browser's HTTP cache and native byte-range requests.
 
 const CACHE_PREFIX = "citrus-shell-";
-const CACHE = `${CACHE_PREFIX}v2`;
+const CACHE = `${CACHE_PREFIX}v3`;
 const SHELL = ["/", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
@@ -62,6 +63,9 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  // Opening a video URL directly is also a navigation. Keep media out of the
+  // shell cache and let the browser handle streaming and seeking itself.
+  if (url.pathname.startsWith("/media/")) return;
   if (url.pathname.startsWith("/api/")) return;
   if (url.pathname.startsWith("/_next/data")) return;
 

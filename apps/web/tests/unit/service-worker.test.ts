@@ -83,8 +83,8 @@ function createWorker() {
   return { caches, fetch, dispatch };
 }
 
-function navigation(path: string) {
-  const request = new Request(new URL(path, origin));
+function navigation(path: string, headers?: HeadersInit) {
+  const request = new Request(new URL(path, origin), { headers });
   // Node's Request constructor does not accept the browser-only navigate mode.
   Object.defineProperty(request, "mode", { value: "navigate" });
   return request;
@@ -154,9 +154,43 @@ describe("production service worker", () => {
     },
   );
 
+  it.each([
+    { mode: "media", range: false },
+    { mode: "media", range: true },
+    { mode: "navigation", range: false },
+    { mode: "navigation", range: true },
+  ])("bypasses video requests in $mode mode (range: $range)", async ({ mode, range }) => {
+    const worker = await installedWorker();
+    const path = "/media/citrus-care-tutorial-v1.mp4";
+    const headers = range ? { Range: "bytes=0-1023" } : undefined;
+    const request = mode === "navigation"
+      ? navigation(path, headers)
+      : new Request(new URL(path, origin), { headers });
+    const openCache = vi.spyOn(worker.caches, "open");
+
+    expect(await worker.dispatch("fetch", request)).toBeUndefined();
+    expect(worker.fetch).not.toHaveBeenCalled();
+    expect(openCache).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "/media/citrus-care-tutorial-v1.mp4?download=1",
+    "/media/citrus-care-tutorial-v1.webp",
+    "/media/citrus-care-tutorial-v1.vtt",
+  ])("bypasses direct navigation to %s", async (path) => {
+    const worker = await installedWorker();
+    const openCache = vi.spyOn(worker.caches, "open");
+
+    expect(await worker.dispatch("fetch", navigation(path))).toBeUndefined();
+    expect(worker.fetch).not.toHaveBeenCalled();
+    expect(openCache).not.toHaveBeenCalled();
+  });
+
   it("removes old Citrus shell caches while preserving unrelated caches", async () => {
     const worker = await installedWorker();
     await worker.caches.open("citrus-shell-v1");
+    const previousCache = await worker.caches.open("citrus-shell-v2");
+    await previousCache.put("/media/citrus-care-tutorial-v1.mp4", new Response("Previously cached video"));
     await worker.caches.open("other-application-cache");
 
     await worker.dispatch("activate");
@@ -166,6 +200,8 @@ describe("production service worker", () => {
       "other-application-cache",
     ]);
     expect(await worker.caches.keys()).not.toContain("citrus-shell-v1");
+    expect(await worker.caches.keys()).not.toContain("citrus-shell-v2");
+    expect(await worker.caches.match("/media/citrus-care-tutorial-v1.mp4")).toBeUndefined();
   });
 
   it("reuses immutable Next static assets from the current cache", async () => {
