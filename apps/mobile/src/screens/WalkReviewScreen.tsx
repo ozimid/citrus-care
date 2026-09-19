@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { useLocalEngine } from "../components/LocalEngineProvider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
@@ -19,7 +19,7 @@ import {
 } from "../components/WalkReviewSections";
 import { applyPlantToRun } from "../lib/photo-import";
 import type { QueuedPhoto } from "../lib/photo-queue";
-import { assignQueuedPhoto, queuedPhotoUri, removeQueuedPhoto } from "../lib/photo-queue-io";
+import { assignQueuedPhoto, loadDurations, queuedPhotoUri, removeQueuedPhoto } from "../lib/photo-queue-io";
 import { useTheme } from "../lib/theme-io";
 
 // F39 review screen (D-W3, D-W7): every queued photo's plant is visible and
@@ -31,8 +31,6 @@ import { useTheme } from "../lib/theme-io";
 // renders and calls the io.
 
 const GENERIC_UPDATE_ERROR = "Couldn't update that photo. Please try again.";
-/** Phase 1 stands in for the batch runner; the review is complete without it. */
-export const BATCH_ANALYSIS_STUB_NOTICE = "Batch analysis arrives in the next step.";
 
 interface Props {
   /** Null = every queued photo, whatever walk it came from. */
@@ -74,6 +72,18 @@ export function WalkReviewScreen({
   const [runOn, setRunOn] = useState(false);
   const [newPlantFor, setNewPlantFor] = useState<QueuedPhoto | null>(null);
   const [viewing, setViewing] = useState<{ uri: string; caption?: string } | null>(null);
+  /** D-W8: the measured durations ring behind the footer's "about N min". */
+  const [ring, setRing] = useState<number[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadDurations().then((r) => {
+      if (!cancelled) setRing(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const analyze = useCallback(() => onAnalyze(runnable), [onAnalyze, runnable]);
 
@@ -223,6 +233,7 @@ export function WalkReviewScreen({
         <WalkReviewFooter
           summary={summary}
           runnable={runnable.length}
+          ring={ring}
           needsPlant={needsPlant}
           engine={engine.kind}
           guardReason={guardReason}

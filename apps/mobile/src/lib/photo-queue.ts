@@ -230,9 +230,15 @@ function pendingAgain(item: QueuedPhoto): QueuedPhoto {
   return { ...item, status: "pending", startedAt: null, error: null, timedOut: false };
 }
 
-/** Back to waiting; the attempt count is kept (it is what caps automation). */
-export function markPending(q: PhotoQueue, id: string): PhotoQueue {
-  return patch(q, id, pendingAgain);
+/** Back to waiting. The attempt count is kept (it is what caps automation)
+ * unless `attempts` says otherwise: 0 for the user's Retry (a deliberate tap
+ * starts the count over, D-W2), or the pre-mark count when markAnalyzing
+ * counted an attempt the engine never ran. */
+export function markPending(q: PhotoQueue, id: string, attempts?: number): PhotoQueue {
+  return patch(q, id, (item) => {
+    const next = pendingAgain(item);
+    return attempts === undefined ? next : { ...next, attempts: Math.max(0, attempts) };
+  });
 }
 
 // ---- Assignment (D-W3) ----
@@ -299,11 +305,30 @@ export interface QueueRelink {
   basename: string;
 }
 
-/** After a kill mid-run: an `analyzing` record whose assessment DID land
- * (same plant, created at or after `startedAt`) is done — drop it, and ask the
- * io to write the photo-index link if the kill came before that write. One
- * that has no such assessment goes back to pending, attempts unchanged. Each
- * assessment settles at most one record. */
+/** The trailing segment of a stored uri — the basename the record keeps. */
+function uriBasename(uri: string): string {
+  return uri.slice(uri.lastIndexOf("/") + 1);
+}
+
+/** The assessment whose photo-index entry names this record's file (the
+ * runner passes the queued file as the assessment's savedUri, so a landed walk
+ * photo is linked under its queue basename). Null when none does. */
+function indexOwnerOf(index: PhotoIndex, plantId: string, basename: string, claimed: Set<string>): string | null {
+  for (const [assessmentId, entry] of Object.entries(index)) {
+    if (!claimed.has(assessmentId) && entry.plantId === plantId && uriBasename(entry.localUri) === basename) return assessmentId;
+  }
+  return null;
+}
+
+/** After a kill mid-run: an `analyzing` record whose assessment DID land is
+ * done — drop it. Landed means, first, that a photo-index entry for the plant
+ * names the record's file (the file is owned, whatever the clocks say); else
+ * that a same-plant assessment created at or after `startedAt` has NO index
+ * entry at all (the kill hit between the store write and the link) — then the
+ * io is asked to write that link. An assessment whose index entry names a
+ * different file is somebody else's photo (a single-shot taken after the
+ * kill) and never settles a record. One with no landed assessment goes back
+ * to pending, attempts unchanged. Each assessment settles at most one record. */
 export function reconcileInterrupted(
   q: PhotoQueue,
   assessments: AssessmentStore,
@@ -315,10 +340,20 @@ export function reconcileInterrupted(
   const claimed = new Set<string>();
   for (const item of Object.values(q).filter((i) => i.status === "analyzing").sort(byRunOrder)) {
     const { plantId, startedAt } = item;
+    if (plantId === null) {
+      changed[item.id] = pendingAgain(item);
+      continue;
+    }
+    const owner = indexOwnerOf(index, plantId, item.basename, claimed);
+    if (owner !== null) {
+      claimed.add(owner);
+      removed.add(item.id);
+      continue;
+    }
     const match =
-      plantId !== null && startedAt !== null
+      startedAt !== null
         ? Object.values(assessments)
-            .filter((a) => a.plantId === plantId && a.createdAt >= startedAt && !claimed.has(a.id))
+            .filter((a) => a.plantId === plantId && a.createdAt >= startedAt && !claimed.has(a.id) && !index[a.id])
             .sort((a, b) => cmp(a.createdAt, b.createdAt) || cmp(a.id, b.id))[0]
         : undefined;
     if (!match) {
@@ -327,7 +362,7 @@ export function reconcileInterrupted(
     }
     claimed.add(match.id);
     removed.add(item.id);
-    if (!index[match.id] && plantId !== null) relink.push({ assessmentId: match.id, plantId, basename: item.basename });
+    relink.push({ assessmentId: match.id, plantId, basename: item.basename });
   }
   if (removed.size === 0 && Object.keys(changed).length === 0) return { queue: q, relink };
   const queue: PhotoQueue = {};

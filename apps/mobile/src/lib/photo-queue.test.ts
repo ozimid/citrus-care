@@ -275,6 +275,14 @@ describe("mark transitions", () => {
     expect(q[qid(1)]).toMatchObject({ status: "pending", error: null, timedOut: false, attempts: 1, startedAt: null });
   });
 
+  it("markPending with an explicit count stores it — 0 for the user's Retry, the pre-mark count when the engine was never reached", () => {
+    const marked = markAnalyzing(build(queued({ attempts: 1 })), qid(1), at(10), at(5));
+    expect(marked[qid(1)].attempts).toBe(2);
+    expect(markPending(marked, qid(1), 0)[qid(1)]).toMatchObject({ status: "pending", attempts: 0 });
+    expect(markPending(marked, qid(1), 1)[qid(1)]).toMatchObject({ status: "pending", attempts: 1 });
+    expect(markPending(marked, qid(1))[qid(1)].attempts).toBe(2);
+  });
+
   it("every mark is a no-op on an unknown id", () => {
     const q = build(queued());
     expect(markAnalyzing(q, "nope", at(1), at(1))).toEqual(q);
@@ -437,8 +445,10 @@ describe("propagateWithinGroup (rung 4, bounded)", () => {
 describe("reconcileInterrupted (kill mid-item, D-W2)", () => {
   const started = at(100);
   const analyzing = queued({ id: qid(1), status: "analyzing", startedAt: started, attempts: 2, runAnchorIso: at(90) });
+  // The runner passes the queued file as the assessment's savedUri, so the
+  // index entry of a landed walk photo names the queue basename.
   const index: PhotoIndex = {
-    ["a1-00000001"]: { localUri: "file:///x.jpg", plantId: P1, engine: "on-device", createdAt: at(150) },
+    ["a1-00000001"]: { localUri: `file:///data/photos/${P1}/${FILE}`, plantId: P1, engine: "on-device", createdAt: at(150) },
   };
 
   it("leaves a queue with nothing analyzing untouched", () => {
@@ -453,6 +463,13 @@ describe("reconcileInterrupted (kill mid-item, D-W2)", () => {
     expect(result.relink).toEqual([]);
   });
 
+  it("an index entry naming the queued file settles the record even when the clock disagrees — the file is owned", () => {
+    const assessments: AssessmentStore = { ["a1-00000001"]: assessment("a1-00000001", P1, at(20)) };
+    const result = reconcileInterrupted(build(analyzing), assessments, index);
+    expect(result.queue).toEqual({});
+    expect(result.relink).toEqual([]);
+  });
+
   it("removes the record AND asks the io to relink when the index lacks the entry", () => {
     const assessments: AssessmentStore = { ["a1-00000001"]: assessment("a1-00000001", P1, at(150)) };
     const result = reconcileInterrupted(build(analyzing), assessments, {});
@@ -460,17 +477,31 @@ describe("reconcileInterrupted (kill mid-item, D-W2)", () => {
     expect(result.relink).toEqual([{ assessmentId: "a1-00000001", plantId: P1, basename: FILE }]);
   });
 
+  it("a same-plant assessment made after the kill whose index entry names ANOTHER file never settles the record", () => {
+    // The single-shot flow after a kill: its own photo, its own index entry.
+    const other: PhotoIndex = {
+      ["a1-00000001"]: { localUri: `file:///data/photos/${P1}/y9-00000001.jpg`, plantId: P1, engine: "on-device", createdAt: at(150) },
+    };
+    const assessments: AssessmentStore = { ["a1-00000001"]: assessment("a1-00000001", P1, at(150)) };
+    const result = reconcileInterrupted(build(analyzing), assessments, other);
+    expect(result.queue[qid(1)]).toMatchObject({ status: "pending", attempts: 2, runAnchorIso: at(90) });
+    expect(result.relink).toEqual([]);
+  });
+
   it("an assessment older than startedAt does not match — the item goes back to pending", () => {
     const assessments: AssessmentStore = { ["a1-00000001"]: assessment("a1-00000001", P1, at(99)) };
-    const result = reconcileInterrupted(build(analyzing), assessments, index);
+    const result = reconcileInterrupted(build(analyzing), assessments, {});
     expect(result.queue[qid(1)]).toMatchObject({ status: "pending", attempts: 2, error: null, timedOut: false });
     expect(result.relink).toEqual([]);
   });
 
-  it("an assessment for another plant does not match", () => {
+  it("an assessment for another plant does not match, even when its index entry shares the basename", () => {
     const assessments: AssessmentStore = { ["a1-00000001"]: assessment("a1-00000001", P2, at(150)) };
-    const result = reconcileInterrupted(build(analyzing), assessments, index);
-    expect(result.queue[qid(1)].status).toBe("pending");
+    const otherPlant: PhotoIndex = {
+      ["a1-00000001"]: { localUri: `file:///data/photos/${P2}/${FILE}`, plantId: P2, engine: "on-device", createdAt: at(150) },
+    };
+    expect(reconcileInterrupted(build(analyzing), assessments, otherPlant).queue[qid(1)].status).toBe("pending");
+    expect(reconcileInterrupted(build(analyzing), assessments, {}).queue[qid(1)].status).toBe("pending");
   });
 
   it("with no assessments the item goes back to pending, attempts unchanged, anchor kept for the retry", () => {

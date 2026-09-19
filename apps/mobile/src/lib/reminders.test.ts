@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { WalkSummaryRow } from "./walk-runner";
 import {
+  RECHECK_REMINDER_KIND,
   REMINDER_INTERVALS,
   WATERING_WINDOW_END_HOUR,
+  batchReminderPlan,
   WATERING_WINDOW_START_HOUR,
   cancelReminder,
   cancelWateringReminders,
@@ -134,10 +137,57 @@ describe("scheduleReminder", () => {
           plantId: "plant-1",
           plantName: "Meyer Lemon",
           fireDate: "2026-07-28T10:00:00.000Z",
+          kind: RECHECK_REMINDER_KIND,
         },
       },
       trigger: { type: "date", date: new Date("2026-07-28T10:00:00.000Z") },
     });
+  });
+
+  // D-W10 replace-don't-stack: a bulk "Remind me to re-check these N plants"
+  // after a walk must not pile a second nudge on a plant that already has one.
+  it("replaces the plant's existing re-check reminders — kind-less legacy ones included — and leaves every other kind alone", async () => {
+    const existing: ScheduledReminderRequest[] = [
+      { identifier: "legacy-recheck", content: { data: { plantId: "plant-1", plantName: "Meyer Lemon", fireDate: "2026-07-20T10:00:00.000Z" } } },
+      { identifier: "recheck", content: { data: { plantId: "plant-1", kind: RECHECK_REMINDER_KIND, fireDate: "2026-07-21T10:00:00.000Z" } } },
+      { identifier: "watering", content: { data: { plantId: "plant-1", kind: "watering", fireDate: "2026-07-16T09:00:00.000Z" } } },
+      { identifier: "prune", content: { data: { plantId: "plant-1", kind: "prune", fireDate: "2026-08-01T09:00:00.000Z" } } },
+      { identifier: "weather", content: { data: { kind: "weather", fireDate: "2026-07-15T18:00:00.000Z" } } },
+      { identifier: "other-plant", content: { data: { plantId: "plant-2", fireDate: "2026-07-22T10:00:00.000Z" } } },
+      { identifier: "other-plant-recheck", content: { data: { plantId: "plant-2", kind: RECHECK_REMINDER_KIND, fireDate: "2026-07-23T10:00:00.000Z" } } },
+      { identifier: "not-ours", content: {} },
+    ];
+    const { scheduler, scheduled, cancelled } = makeScheduler({ getScheduled: async () => existing });
+
+    const outcome = await scheduleReminder(scheduler, INPUT);
+
+    expect(outcome.ok).toBe(true);
+    expect(cancelled.sort()).toEqual(["legacy-recheck", "recheck"]);
+    expect(scheduled).toHaveLength(1);
+  });
+
+  it("still schedules when the lookup of existing reminders throws — de-dupe is best-effort", async () => {
+    const { scheduler, scheduled, cancelled } = makeScheduler({
+      getScheduled: async () => {
+        throw new Error("notifications unavailable");
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const outcome = await scheduleReminder(scheduler, INPUT);
+
+    expect(outcome.ok).toBe(true);
+    expect(scheduled).toHaveLength(1);
+    expect(cancelled).toEqual([]);
+    errors.mockRestore();
+  });
+
+  it("tags the new request as a re-check so the next replace can find it", async () => {
+    const { scheduler, scheduled } = makeScheduler();
+    await scheduleReminder(scheduler, INPUT);
+    const req = scheduled[0] as { content: { data: Record<string, unknown> } };
+    expect(RECHECK_REMINDER_KIND).toBe("recheck");
+    expect(req.content.data.kind).toBe("recheck");
   });
 
   it("asks for permission at tap time (contextual opt-in) and proceeds on grant", async () => {
@@ -175,6 +225,53 @@ describe("scheduleReminder", () => {
     });
     expect(await scheduleReminder(scheduler, INPUT)).toEqual({ ok: false, reason: "permission-denied" });
     expect(asked).toBe(0);
+  });
+});
+
+describe("batchReminderPlan (D-W10)", () => {
+  function row(overrides: Partial<WalkSummaryRow>): WalkSummaryRow {
+    return {
+      plantId: "plant-1",
+      plantName: "Meyer Lemon",
+      count: 1,
+      latestScore: 78,
+      latestBand: "Good",
+      delta: null,
+      anchorDate: null,
+      rejected: 0,
+      failed: 0,
+      timedOut: 0,
+      ...overrides,
+    };
+  }
+
+  it("plans one re-check per plant that got a score, at the interval its score and trend suggest", () => {
+    const plan = batchReminderPlan([
+      row({ plantId: "p-good", plantName: "Meyer Lemon", latestScore: 85, delta: "better" }),
+      row({ plantId: "p-fair", plantName: "Lime", latestScore: 55, delta: null }),
+      row({ plantId: "p-poor", plantName: "Kumquat", latestScore: 30, delta: "same" }),
+      row({ plantId: "p-worse", plantName: "Yuzu", latestScore: 90, delta: "worse" }),
+    ]);
+    expect(plan).toEqual([
+      { plantId: "p-good", plantName: "Meyer Lemon", interval: "1m" },
+      { plantId: "p-fair", plantName: "Lime", interval: "2w" },
+      { plantId: "p-poor", plantName: "Kumquat", interval: "1w" },
+      { plantId: "p-worse", plantName: "Yuzu", interval: "1w" },
+    ]);
+    for (const p of plan) {
+      const r = [85, 55, 30, 90][plan.indexOf(p)];
+      const d = (["better", null, "same", "worse"] as const)[plan.indexOf(p)];
+      expect(p.interval).toBe(suggestedReminderInterval(r, d));
+    }
+  });
+
+  it("skips plants with no score — nothing to re-check against", () => {
+    const plan = batchReminderPlan([
+      row({ plantId: "p-none", latestScore: null, latestBand: null, rejected: 1 }),
+      row({ plantId: "p-ok", plantName: "Lime", latestScore: 72 }),
+    ]);
+    expect(plan).toEqual([{ plantId: "p-ok", plantName: "Lime", interval: "1m" }]);
+    expect(batchReminderPlan([])).toEqual([]);
   });
 });
 

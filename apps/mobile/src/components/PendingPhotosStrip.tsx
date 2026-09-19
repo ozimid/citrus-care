@@ -3,15 +3,19 @@
 // record) and D-W1 keeps them out of the assessment store, so the strip is the
 // only place a plant's pending shots are visible. Tap → full screen; long
 // press → remove (the one confirm); Review → the sectioned review, narrowed
-// to this plant.
+// to this plant, whose "Analyze these" swaps in WalkRunScreen inside the same
+// Modal (D-W5: one at a time) and reloads the detail once, at the end.
 
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { queuedForPlant, type QueuedPhoto } from "../lib/photo-queue";
 import { loadPhotoQueue, queuedPhotoUri, removeQueuedPhoto } from "../lib/photo-queue-io";
+import type { PlantListItem } from "../lib/plants";
+import { fetchPlants } from "../lib/plants-io";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
-import { BATCH_ANALYSIS_STUB_NOTICE, WalkReviewScreen } from "../screens/WalkReviewScreen";
+import { WalkReviewScreen } from "../screens/WalkReviewScreen";
+import { WalkRunScreen } from "../screens/WalkRunScreen";
 import { PhotoViewer } from "./PhotoViewer";
 import { byWalkOrder } from "./WalkReviewSections";
 
@@ -30,7 +34,8 @@ export function PendingPhotosStrip({ plantId, onChanged, refreshToken = 0 }: Pro
   const [items, setItems] = useState<QueuedPhoto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  /** The review handed off to the run: its runnable photos and the plants they name. */
+  const [run, setRun] = useState<{ items: QueuedPhoto[]; plants: PlantListItem[] } | null>(null);
   const [viewing, setViewing] = useState<{ uri: string; caption?: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -68,12 +73,24 @@ export function PendingPhotosStrip({ plantId, onChanged, refreshToken = 0 }: Pro
 
   const closeReview = useCallback(() => {
     setReviewing(false);
-    setNotice(null);
+    setRun(null);
     void load();
     onChanged();
   }, [load, onChanged]);
 
-  if (items.length === 0) return null;
+  const startRun = useCallback(async (items: QueuedPhoto[]) => {
+    let plants: PlantListItem[] = [];
+    try {
+      plants = await fetchPlants();
+    } catch {
+      // fetchPlants already logged; the run names what it can.
+    }
+    setRun({ items, plants });
+  }, []);
+
+  // Never while the modal is up: the run removes records as it goes, and a
+  // reload landing at zero must not unmount the screen doing the work.
+  if (items.length === 0 && !reviewing) return null;
 
   return (
     <View style={styles.wrap}>
@@ -107,14 +124,16 @@ export function PendingPhotosStrip({ plantId, onChanged, refreshToken = 0 }: Pro
       <Text style={[styles.hint, { color: t.sub }]}>Not scored yet · not in a backup until analyzed</Text>
 
       <PhotoViewer photo={viewing} onClose={() => setViewing(null)} />
-      <Modal visible={reviewing} animationType="slide" onRequestClose={closeReview}>
-        {reviewing ? (
+      {/* While the run is up, WalkRunScreen's own Modal owns the hardware back
+          (stop after this photo) — this one must not close underneath it. */}
+      <Modal visible={reviewing} animationType="slide" onRequestClose={run ? () => {} : closeReview}>
+        {reviewing && run ? (
+          <WalkRunScreen items={run.items} plants={run.plants} onFinished={() => {}} onClose={closeReview} />
+        ) : reviewing ? (
           <WalkReviewScreen
             walkId={null}
             plantFilter={plantId}
-            notice={notice}
-            // Phase 1: the batch runner lands next; items stay pending.
-            onAnalyze={() => setNotice(BATCH_ANALYSIS_STUB_NOTICE)}
+            onAnalyze={(items) => void startRun(items)}
             onLater={closeReview}
             onClose={closeReview}
             onChanged={load}

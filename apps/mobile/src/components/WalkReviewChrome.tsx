@@ -10,15 +10,15 @@ import type { LocalEngineState } from "../lib/local-engine";
 import type { QueuedPhoto } from "../lib/photo-queue";
 import { queuedPhotoUri } from "../lib/photo-queue-io";
 import { RADIUS, type Tokens } from "../lib/theme";
+import { expectedCopy } from "../lib/walk-runner";
 import { LocalEngineSetupCard } from "./LocalEngineSetupCard";
 
-/** D-W8: the commitment is stated as a TOTAL before the wait, not a per-photo
- * number the user multiplies herself; the leave sentence is D-W18's contracted
- * behaviour. An upper bound under the 120 s ceiling. */
-function waitLine(runnable: number): string {
+/** D-W8: the commitment before the wait — "about N min" measured from the last
+ * runs once there is history, else the per-photo ceiling in plain words
+ * (expectedCopy, tested; never a multiple of the 120 s kill). */
+function waitLine(runnable: number, ring: number[]): string {
   if (runnable === 0) return "Each photo takes up to 2 minutes to analyze on this phone.";
-  if (runnable === 1) return "One photo takes up to 2 minutes to analyze on this phone. Keep Citrus Care open while it runs.";
-  return `${runnable} photos · up to about ${runnable * 2} minutes on this phone. Keep Citrus Care open — leaving pauses the run after the photo it is on.`;
+  return expectedCopy(runnable, ring);
 }
 function staysWaitingLine(needsPlant: number): string {
   return needsPlant === 1
@@ -133,12 +133,14 @@ interface FooterProps {
   summary: string;
   /** runnableItems(...).length — what Analyze now would start. */
   runnable: number;
+  /** The measured per-photo durations (loadDurations) behind the estimate. */
+  ring: number[];
   /** Photos Analyze now leaves behind — said in words, not inferred from a count. */
   needsPlant: number;
   engine: LocalEngineState["kind"];
   /** canRunBatch's reason when the record store is too full; null when ok. */
   guardReason: string | null;
-  /** A one-line, user-safe message from the parent (import partial, stub). */
+  /** A one-line, user-safe message from the parent (e.g. a partial import). */
   notice: string | null;
   busy: boolean;
   onAnalyze: () => void;
@@ -149,6 +151,7 @@ interface FooterProps {
 export function WalkReviewFooter({
   summary,
   runnable,
+  ring,
   needsPlant,
   engine,
   guardReason,
@@ -168,7 +171,7 @@ export function WalkReviewFooter({
       <Text style={[styles.summary, { color: t.text }]} accessibilityLiveRegion="polite">
         {summary}
       </Text>
-      {engineDown ? null : <Text style={[styles.wait, { color: t.sub }]}>{waitLine(runnable)}</Text>}
+      {engineDown ? null : <Text style={[styles.wait, { color: t.sub }]}>{waitLine(runnable, ring)}</Text>}
       {notice ? (
         <Text
           style={[styles.notice, { color: t.text, borderColor: t.green }]}

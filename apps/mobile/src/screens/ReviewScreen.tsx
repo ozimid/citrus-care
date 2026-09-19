@@ -22,6 +22,7 @@ import { prefillFromDiagnosis } from "../lib/new-plant";
 import type { PreparedPhoto } from "../lib/photo-io";
 import { loadDiagnosisContext } from "../lib/plants-io";
 import { buildAssessDebugMailto } from "../lib/support";
+import { phaseLabel } from "../lib/walk-runner";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -35,14 +36,6 @@ import { useTheme } from "../lib/theme-io";
 // wiring lives in components/assess-deps.ts and the prompt context loader in
 // plants-io.ts so a batch runner can reuse both per photo.
 
-const PHASE_LABEL: Record<AssessPhase, string> = {
-  saving: "Saving photo…",
-  analyzing: "Analyzing on this phone…",
-};
-
-// First inference on a cold model is legitimately slow — say so rather than
-// leaving the user staring at a spinner (there is no cloud to fall back to).
-const SLOW_LABEL = "Still analyzing — the first one takes longer…";
 const SAVE_LATER_ERROR = "Couldn't save that photo. Please try again.";
 
 interface Props {
@@ -95,7 +88,7 @@ export function ReviewScreen({
   const busy = phase !== null;
   /** Nothing else may start while either the analysis or the save runs. */
   const locked = busy || saving;
-  const busyLabel = slow ? SLOW_LABEL : phase ? PHASE_LABEL[phase] : "";
+  const busyLabel = phaseLabel(phase, slow);
 
   // A 25-120 s run against a 30 s screen timeout: hold the screen while the
   // phone works (tagged so it never fights the download's or pruning's hold).

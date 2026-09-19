@@ -4,15 +4,20 @@
 // because "Analyze now / Later" is asked on the screen that shows what the
 // answer spends the next twenty minutes on (D-W7), never from here. Owns the
 // Modal that hosts the review screen (the PlantToolsCard pattern) — Plants
-// only learns "something changed" when the modal closes.
+// only learns "something changed" when the modal closes. "Analyze now" on the
+// review swaps in WalkRunScreen inside the same Modal; it runs the photos one
+// at a time (D-W5) and the card reloads once, when the run's summary closes.
 
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { pendingCount } from "../lib/photo-queue";
+import { pendingCount, type QueuedPhoto } from "../lib/photo-queue";
 import { loadPhotoQueue } from "../lib/photo-queue-io";
+import type { PlantListItem } from "../lib/plants";
+import { fetchPlants } from "../lib/plants-io";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
-import { BATCH_ANALYSIS_STUB_NOTICE, WalkReviewScreen } from "../screens/WalkReviewScreen";
+import { WalkReviewScreen } from "../screens/WalkReviewScreen";
+import { WalkRunScreen } from "../screens/WalkRunScreen";
 
 interface Props {
   /** The review modal closed — the list may need a reload. */
@@ -25,7 +30,8 @@ export function PendingWalkCard({ onChanged, refreshToken = 0 }: Props) {
   const { t } = useTheme();
   const [count, setCount] = useState(0);
   const [open, setOpen] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  /** The review handed off to the run: its runnable photos and the plants they name. */
+  const [run, setRun] = useState<{ items: QueuedPhoto[]; plants: PlantListItem[] } | null>(null);
 
   const load = useCallback(async () => {
     // loadPhotoQueue degrades to {} — a read failure hides the card, never
@@ -39,12 +45,24 @@ export function PendingWalkCard({ onChanged, refreshToken = 0 }: Props) {
 
   const close = useCallback(() => {
     setOpen(false);
-    setNotice(null);
+    setRun(null);
     void load();
     onChanged();
   }, [load, onChanged]);
 
-  if (count === 0) return null;
+  const startRun = useCallback(async (items: QueuedPhoto[]) => {
+    let plants: PlantListItem[] = [];
+    try {
+      plants = await fetchPlants();
+    } catch {
+      // fetchPlants already logged; the run names what it can.
+    }
+    setRun({ items, plants });
+  }, []);
+
+  // Never while the modal is up: the run removes records as it goes, and a
+  // reload landing at zero must not unmount the screen doing the work.
+  if (count === 0 && !open) return null;
   const line = count === 1 ? "1 photo is waiting to be analyzed" : `${count} photos are waiting to be analyzed`;
 
   return (
@@ -65,13 +83,15 @@ export function PendingWalkCard({ onChanged, refreshToken = 0 }: Props) {
         </Text>
       </Pressable>
 
-      <Modal visible={open} animationType="slide" onRequestClose={close}>
-        {open ? (
+      {/* While the run is up, WalkRunScreen's own Modal owns the hardware back
+          (stop after this photo) — this one must not close underneath it. */}
+      <Modal visible={open} animationType="slide" onRequestClose={run ? () => {} : close}>
+        {open && run ? (
+          <WalkRunScreen items={run.items} plants={run.plants} onFinished={() => {}} onClose={close} />
+        ) : open ? (
           <WalkReviewScreen
             walkId={null}
-            notice={notice}
-            // Phase 1: the batch runner lands next; items stay pending.
-            onAnalyze={() => setNotice(BATCH_ANALYSIS_STUB_NOTICE)}
+            onAnalyze={(items) => void startRun(items)}
             onLater={close}
             onClose={close}
             onChanged={load}

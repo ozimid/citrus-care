@@ -15,7 +15,7 @@ import type { AssessedResult } from "../lib/assess";
 import { preselectedPlantId } from "../lib/capture-modes";
 import { loadSnapTipsSeen, markSnapTipsSeen } from "../lib/capture-modes-io";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
-import { MAX_IMPORT, type AssignEvidence } from "../lib/photo-queue";
+import { MAX_IMPORT, type AssignEvidence, type QueuedPhoto } from "../lib/photo-queue";
 import {
   enqueueWalkShot,
   IMPORT_NO_SPACE_ERROR,
@@ -28,7 +28,8 @@ import { fetchPlants } from "../lib/plants-io";
 import { RADIUS } from "../lib/theme";
 import { DiagnosisScreen } from "./DiagnosisScreen";
 import { ReviewScreen } from "./ReviewScreen";
-import { BATCH_ANALYSIS_STUB_NOTICE, WalkReviewScreen } from "./WalkReviewScreen";
+import { WalkReviewScreen } from "./WalkReviewScreen";
+import { WalkRunScreen } from "./WalkRunScreen";
 
 // Full-screen capture flow (design doc §3/§6), opened from the tab-bar FAB:
 // camera with one neutral guide, gallery import at equal prominence, plant
@@ -41,8 +42,10 @@ import { BATCH_ANALYSIS_STUB_NOTICE, WalkReviewScreen } from "./WalkReviewScreen
 // new-plant form from the photo (ReviewScreen owns that deferred flow).
 // F39: the gallery picks up to MAX_IMPORT photos. One photo is the flow above,
 // unchanged; several go into the durable photo queue (D-W2) and open the
-// review screen, which asks "Analyze now / Later" every time (D-W7). "Save for
-// later" on the review screen queues a single camera shot the same way and
+// review screen, which asks "Analyze now / Later" every time (D-W7); "Analyze
+// now" hands the runnable photos to WalkRunScreen, which runs them one at a
+// time (D-W5) and reports once, at the end, how many assessments landed. "Save
+// for later" on the review screen queues a single camera shot the same way and
 // returns to the viewfinder — the next tree is one shutter tap away, not a
 // full capture re-entry. (Phase 3's walk mode owns the stay-in-camera loop
 // proper; this is the honest minimum until then.)
@@ -86,6 +89,9 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const [importing, setImporting] = useState<ImportProgress | null>(null);
   /** The import landed; showing the review with its one-line notice. */
   const [walkReview, setWalkReview] = useState<{ notice: string | null } | null>(null);
+  /** "Analyze now": the runnable photos plus the plants they name (re-read at
+   * the tap — the review may have created one). */
+  const [walkRun, setWalkRun] = useState<{ items: QueuedPhoto[]; plants: PlantListItem[] } | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -135,6 +141,16 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     onAssessed?.();
     onClose();
   }, [onAssessed, onClose]);
+
+  const startWalkRun = useCallback(async (items: QueuedPhoto[]) => {
+    let named: PlantListItem[] = plants ?? [];
+    try {
+      named = await fetchPlants();
+    } catch {
+      // fetchPlants already logged; the run names what it can.
+    }
+    setWalkRun({ items, plants: named });
+  }, [plants]);
 
   // The saved-for-later toast is read on the viewfinder, then fades; the
   // camera stays up for the next tree.
@@ -273,13 +289,26 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     );
   }
 
+  if (walkRun) {
+    return (
+      <WalkRunScreen
+        items={walkRun.items}
+        plants={walkRun.plants}
+        // One Plants refresh for the whole run, not one per photo — and always
+        // one: even a run with no new assessment changed the queue the
+        // pending-walk card counts (rejected / exhausted photos stop waiting).
+        onFinished={() => onAssessed?.()}
+        onClose={onClose}
+      />
+    );
+  }
+
   if (walkReview) {
     return (
       <WalkReviewScreen
         walkId={walkId}
         notice={walkReview.notice}
-        // Phase 1 stub: the batch runner lands next; items stay pending.
-        onAnalyze={() => setWalkReview({ notice: BATCH_ANALYSIS_STUB_NOTICE })}
+        onAnalyze={(items) => void startWalkRun(items)}
         onLater={finishWalk}
         onClose={finishWalk}
       />

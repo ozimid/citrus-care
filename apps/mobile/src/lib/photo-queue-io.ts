@@ -13,14 +13,16 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { File, Paths } from "expo-file-system";
 import type { ImagePickerAsset } from "expo-image-picker";
 import { Image } from "react-native";
+import type { AssessmentDiagnosis } from "@citrus/shared";
 import { loadAssessmentStore } from "./assessment-store-io";
 import { newLocalId } from "./local-id";
 import { orderImportedPhotos, takenAtFromAsset } from "./photo-import";
 import { downscalePhoto } from "./photo-io";
 import {
-  assignGroups, assignQueued, IMPORT_BYTES_PER_PHOTO, INBOX_SWEEP_MIN_AGE_MS, parsePhotoQueue,
-  PHOTO_QUEUE_STORAGE_KEY, propagateWithinGroup, queuedDirName, reconcileInterrupted,
-  removePlantQueued, removeQueued, serializePhotoQueue, upsertQueued,
+  assignGroups, assignQueued, IMPORT_BYTES_PER_PHOTO, INBOX_SWEEP_MIN_AGE_MS, markAnalyzing,
+  markFailed, markPending, markRejected, parseDurations, parsePhotoQueue, PHOTO_QUEUE_STORAGE_KEY,
+  propagateWithinGroup, pushDuration, queuedDirName, reconcileInterrupted, removePlantQueued,
+  removeQueued, serializeDurations, serializePhotoQueue, upsertQueued, WALK_DURATIONS_KEY,
   type AssignEvidence, type PhotoQueue, type QueuedPhoto, type QueueRelink,
 } from "./photo-queue";
 import { PHOTO_INBOX_DIR, photoFileName } from "./photo-store";
@@ -52,7 +54,7 @@ let recovered = false;
 let runActive = false;
 let enqueueInFlight = 0;
 
-/** The batch runner (Phase 2) flips this around a run. */
+/** WalkRunScreen flips this around a run. */
 export function setRunActive(active: boolean): void {
   runActive = active;
 }
@@ -328,6 +330,61 @@ export async function removeQueuedPhoto(id: string): Promise<void> {
     console.error("[photo-queue-io] remove failed:", (e as Error).message);
     throw new Error(REMOVE_PHOTO_ERROR);
   }
+}
+
+// ---- The run's writes (Phase 2) ----
+// Thin wrappers the WalkRunScreen's runner deps call. Each is one
+// read-modify-write of the queue through the pure mark; a write failure throws
+// and the runner ends the run as "storage-error" (D-W18). A record that is not
+// in the loaded queue throws too — loadPhotoQueue degrades an unreadable blob
+// to {}, and a silent no-op there would let the model run on a photo whose
+// `analyzing` mark never landed (D-W2).
+
+async function markQueued(id: string, change: (q: PhotoQueue) => PhotoQueue): Promise<void> {
+  await updateQueue((q) => {
+    if (!q[id]) throw new Error(`queued photo not found: ${id}`);
+    return change(q);
+  });
+}
+
+export async function markAnalyzingIo(id: string, nowIso: string, anchorIso: string): Promise<void> {
+  await markQueued(id, (q) => markAnalyzing(q, id, nowIso, anchorIso));
+}
+
+export async function markRejectedIo(id: string, diagnosis: AssessmentDiagnosis): Promise<void> {
+  await markQueued(id, (q) => markRejected(q, id, diagnosis));
+}
+
+export async function markFailedIo(id: string, error: string, timedOut: boolean): Promise<void> {
+  await markQueued(id, (q) => markFailed(q, id, error, timedOut));
+}
+
+/** Back to waiting. `attempts` overrides the kept count: 0 is the user's
+ * Retry (D-W2 caps automatic re-runs at three; a deliberate tap starts that
+ * count over), the runner's pre-mark count is an attempt the engine never ran. */
+export async function markPendingIo(id: string, options?: { attempts?: number }): Promise<void> {
+  await markQueued(id, (q) => markPending(q, id, options?.attempts));
+}
+
+/** D-W1: the record leaves the store the moment its assessment lands — file
+ * ownership passes to the photo index, which the assess flow linked. */
+export async function completeQueued(id: string): Promise<void> {
+  await updateQueue((q) => removeQueued(q, id));
+}
+
+/** D-W8: the ring of the last 30 per-photo durations behind "about N min".
+ * Read degrades to empty (no history is a supported state). */
+export async function loadDurations(): Promise<number[]> {
+  try {
+    return parseDurations(await AsyncStorage.getItem(WALK_DURATIONS_KEY));
+  } catch (e) {
+    console.error("[photo-queue-io] durations load failed:", (e as Error).message);
+    return [];
+  }
+}
+
+export async function recordDuration(ms: number): Promise<void> {
+  await AsyncStorage.setItem(WALK_DURATIONS_KEY, serializeDurations(pushDuration(await loadDurations(), ms)));
 }
 
 /** Cascade on plant delete: records only — the files die with the plant's

@@ -5,6 +5,8 @@
 // reminders-io.ts. Permission is requested at the "remind me" tap, never at
 // launch (design doc open question 2: contextual opt-in).
 
+import type { WalkSummaryRow } from "./walk-runner";
+
 export type ReminderInterval = "1w" | "2w" | "1m";
 
 export const REMINDER_INTERVALS: Record<ReminderInterval, { label: string; days: number }> = {
@@ -104,6 +106,24 @@ export interface ScheduleReminderInput {
   now?: Date;
 }
 
+/** Marks a re-check (re-assessment) reminder in its payload. Reminders from
+ * before this kind existed carry no kind at all — and nothing else was ever
+ * kind-less — so a legacy kind-less request IS a re-check for the replace
+ * rule below (D-W10). */
+export const RECHECK_REMINDER_KIND = "recheck";
+
+/** This plant's re-check reminders only: tagged "recheck" or legacy untagged.
+ * Watering, prune and weather kinds are somebody else's. */
+function isRecheckReminderFor(req: ScheduledReminderRequest, plantId: string): boolean {
+  const data = req.content.data ?? {};
+  return data.plantId === plantId && (data.kind === undefined || data.kind === RECHECK_REMINDER_KIND);
+}
+
+/**
+ * (Re)schedule a plant's re-check reminder. Replace-don't-stack (D-W10): a
+ * walk's bulk "Remind me to re-check these N plants" would otherwise pile a
+ * second nudge on a plant that already has one from its diagnosis screen.
+ */
 export async function scheduleReminder(
   scheduler: ReminderScheduler,
   input: ScheduleReminderInput,
@@ -115,15 +135,45 @@ export async function scheduleReminder(
     if (!permission.granted) return { ok: false, reason: "permission-denied" };
   }
 
+  // Best-effort de-dupe: a failed lookup must not block the reminder.
+  try {
+    const existing = await scheduler.getScheduled();
+    for (const req of existing) {
+      if (isRecheckReminderFor(req, input.plantId)) await scheduler.cancel(req.identifier);
+    }
+  } catch (e) {
+    console.error("[scheduleReminder] could not clear old reminders:", (e as Error).message);
+  }
+
   const date = reminderDate(input.now ?? new Date(), input.interval);
   const id = await scheduler.schedule({
     content: {
       ...reminderContent(input.plantName),
-      data: { plantId: input.plantId, plantName: input.plantName, fireDate: date.toISOString() },
+      data: {
+        plantId: input.plantId,
+        plantName: input.plantName,
+        fireDate: date.toISOString(),
+        kind: RECHECK_REMINDER_KIND,
+      },
     },
     trigger: { type: "date", date },
   });
   return { ok: true, id, date };
+}
+
+/** F39 (D-W10): the summary's one bulk "Remind me to re-check these N plants"
+ * — one re-check per plant that got a score this walk, at the interval its
+ * score and trend suggest (the same derivation the diagnosis screen offers).
+ * The runner itself never schedules anything; the screen calls
+ * scheduleReminder per entry, which replaces rather than stacks. */
+export function batchReminderPlan(
+  rows: WalkSummaryRow[],
+): { plantId: string; plantName: string; interval: ReminderInterval }[] {
+  return rows.flatMap((row) =>
+    row.latestScore === null
+      ? []
+      : [{ plantId: row.plantId, plantName: row.plantName, interval: suggestedReminderInterval(row.latestScore, row.delta) }],
+  );
 }
 
 export async function cancelReminder(scheduler: ReminderScheduler, id: string): Promise<void> {
