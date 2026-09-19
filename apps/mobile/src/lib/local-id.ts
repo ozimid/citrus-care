@@ -12,3 +12,31 @@ export function newLocalId(nowMs: number, random: number): string {
     .padStart(8, "0");
   return `${time}-${rand}`;
 }
+
+// D-W16: ids double as photo directory names, so anything that reaches a
+// parser (AsyncStorage blob, backup file) is gated here before it can name a
+// path. Two shapes only: newLocalId output, and the RFC-4122 UUIDs the
+// Gemini-era rows still carry — dropping those would lose legacy thumbnails.
+const LOCAL_ID_RE = /^[0-9a-z]{1,16}-[0-9a-z]{8}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True only for an id this app could have minted (local or legacy UUID). */
+export function isSafeRecordId(id: unknown): id is string {
+  return typeof id === "string" && id.length <= 64 && (LOCAL_ID_RE.test(id) || UUID_RE.test(id));
+}
+
+/** True only for a photo-store `photoFileName` — the one basename shape the
+ * app ever writes, so nothing else can be joined onto a plant directory. */
+export function isSafeBasename(name: unknown): name is string {
+  return typeof name === "string" && /^[0-9a-z]{1,16}-[0-9a-z]{8}\.jpg$/.test(name);
+}
+
+/** The ONE "newest first" ordering: createdAt desc, then the record key desc.
+ * Ids double as the tiebreak, so the timeline, the photo index, the comparison
+ * anchor and the backup carrier all agree on "newest" when a walk lands two
+ * shots of one plant in the same second — whatever order the JSON map came
+ * back in. Callers pass their own key (assessment id, index key). */
+export function newestFirst(aAt: string, aKey: string, bAt: string, bKey: string): number {
+  if (aAt !== bAt) return aAt < bAt ? 1 : -1;
+  return aKey < bKey ? 1 : aKey > bKey ? -1 : 0;
+}

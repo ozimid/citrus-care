@@ -7,6 +7,7 @@
 // dropped, never thrown. IO wiring is the thin assessment-store-io.ts.
 
 import type { AssessmentDiagnosis } from "@citrus/shared";
+import { isSafeRecordId, newestFirst } from "./local-id";
 
 /** On-device assessment record. `engine` is always "on-device" now — there is
  * only one engine — kept as a field so a future second engine has a home and
@@ -41,8 +42,11 @@ export function removePlantAssessments(store: AssessmentStore, plantId: string):
   return next;
 }
 
-function byCreatedAtDesc(a: StoredAssessment, b: StoredAssessment): number {
-  return a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0;
+/** Newest first; on a shared second the higher id wins. The tiebreak is what
+ * lets the timeline, the comparison anchor and the cover agree on "newest"
+ * when a walk lands two photos of one plant in the same second. */
+export function byCreatedAtDesc(a: StoredAssessment, b: StoredAssessment): number {
+  return newestFirst(a.createdAt, a.id, b.createdAt, b.id);
 }
 
 /** A plant's assessments, newest-first (timeline order). */
@@ -59,16 +63,33 @@ export function latestAssessmentId(store: AssessmentStore, plantId: string): str
 }
 
 export function allAssessments(store: AssessmentStore): StoredAssessment[] {
-  return Object.values(store);
+  return Object.values(store).sort(byCreatedAtDesc);
 }
 
+/** What the next assessment of this plant is compared against (D-W6). With
+ * no `beforeIso` it is simply the newest — the single-shot flow, unchanged. A
+ * walk passes the instant its first photo of the plant started, so a second
+ * angle taken 40 s later measures against the PRE-walk state, never against
+ * its sibling ("Worse" between two angles of one tree is noise, not a trend). */
+export function comparisonAnchor(
+  store: AssessmentStore,
+  plantId: string,
+  beforeIso?: string,
+): StoredAssessment | null {
+  const rows = assessmentsForPlant(store, plantId);
+  if (beforeIso === undefined) return rows[0] ?? null;
+  return rows.find((a) => a.createdAt < beforeIso) ?? null;
+}
+
+/** id keys the photo index and plantId names a directory (D-W16): both must
+ * be ids this app could have minted. */
 function isValidStoredAssessment(value: unknown): value is StoredAssessment {
   if (typeof value !== "object" || value === null) return false;
   const a = value as Record<string, unknown>;
   const diagnosis = a.diagnosis as Record<string, unknown> | null | undefined;
   return (
-    typeof a.id === "string" &&
-    typeof a.plantId === "string" &&
+    isSafeRecordId(a.id) &&
+    isSafeRecordId(a.plantId) &&
     typeof a.createdAt === "string" &&
     (a.comparedToId === null || typeof a.comparedToId === "string") &&
     typeof diagnosis === "object" &&
@@ -90,7 +111,7 @@ export function parseAssessmentStore(json: string | null): AssessmentStore {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   const store: AssessmentStore = {};
   for (const [id, assessment] of Object.entries(raw)) {
-    if (isValidStoredAssessment(assessment)) store[id] = assessment;
+    if (isValidStoredAssessment(assessment) && assessment.id === id) store[id] = assessment;
   }
   return store;
 }

@@ -239,6 +239,18 @@ describe("attachCoverPhotos", () => {
     expect(lonely.coverUri).toBeNull();
   });
 
+  it("picks the same fallback for photos taken in the same second, in either index order", () => {
+    // A walk can land two shots of one plant in one second; the card must not
+    // flip between them on every reload. Higher index key wins the tie.
+    const same = "2026-08-01T00:00:00Z";
+    const a = { localUri: "file:///photos/plant-1/a.jpg", plantId: "plant-1", engine: "on-device" as const, createdAt: same };
+    const b = { localUri: "file:///photos/plant-1/b.jpg", plantId: "plant-1", engine: "on-device" as const, createdAt: same };
+    const forward: PhotoIndex = { "assess-a": a, "assess-b": b };
+    const backward: PhotoIndex = { "assess-b": b, "assess-a": a };
+    expect(attachCoverPhotos([item({ cover_assessment_id: null })], forward)[0].coverUri).toBe(b.localUri);
+    expect(attachCoverPhotos([item({ cover_assessment_id: null })], backward)[0].coverUri).toBe(b.localUri);
+  });
+
   it("is null (placeholder) with an empty index and leaves items otherwise untouched", () => {
     const source = item();
     const [attached] = attachCoverPhotos([source], {});

@@ -24,11 +24,15 @@ import { attachCoverPhotos, mapPlantRows, type PlantListItem } from "./plants";
 import { allPlants, getPlant, type PlantStore } from "./plant-store";
 import { deletePlantRecord, loadPlantStore, putPlant } from "./plant-store-io";
 import { deleteLocalPlantPhotos, loadPhotoIndex } from "./photo-store-io";
+import { buildDiagnosisContext } from "./spike-vlm";
 import {
   plantDetailRowFromStore,
   plantRowsFromStore,
   timelineRowsFromStore,
 } from "./store-adapters";
+import { lastWateredAt, parseStoredCareProfile } from "./watering";
+import { getWateringLog } from "./watering-io";
+import { cachedLocalConditions } from "./weather-io";
 
 async function loadStores(): Promise<{ plants: PlantStore; assessments: AssessmentStore }> {
   const [plants, assessments] = await Promise.all([loadPlantStore(), loadAssessmentStore()]);
@@ -55,6 +59,35 @@ export async function fetchPlantDetail(plantId: string): Promise<PlantDetailData
     plant: plantDetailRowFromStore(plant),
     timeline: mapTimelineRows(timelineRowsFromStore(allAssessments(assessments), plantId)),
   };
+}
+
+/** #4 — the plant's own record (type, species, watering interval, days since
+ * the last watering, recent rain, heat) folded into the diagnosis prompt so
+ * the model ranks causes with triage pre-answered. Best-effort by design: any
+ * failed read means no context ("") — never a blocked assessment. Shared so a
+ * batch runner can load it per photo. */
+export async function loadDiagnosisContext(plantId: string, now: Date = new Date()): Promise<string> {
+  try {
+    const [detail, log] = await Promise.all([fetchPlantDetail(plantId), getWateringLog()]);
+    const { weather } = await cachedLocalConditions(detail.plant.zip_code, now);
+    const profile = parseStoredCareProfile(detail.plant.care_profile);
+    const watered = lastWateredAt(log, plantId);
+    return buildDiagnosisContext({
+      plantType: detail.plant.plant_type,
+      species: detail.plant.species,
+      wateringIntervalDays: profile?.base_watering_interval_days,
+      lastWateredDaysAgo: watered
+        ? Math.round((now.getTime() - new Date(watered).getTime()) / 86_400_000)
+        : null,
+      recentRainMm: weather?.recentPrecipMm ?? null,
+      maxTempC: weather?.maxTempC ?? null,
+      // No lastScore/lastTrend on purpose: a prior score in the prompt would
+      // prime the score the deterministic trend is computed from.
+    });
+  } catch (e) {
+    console.error("[loadDiagnosisContext] context load failed:", (e as Error).message);
+    return "";
+  }
 }
 
 /** Create a plant on the phone; returns its new id (care_profile null — the

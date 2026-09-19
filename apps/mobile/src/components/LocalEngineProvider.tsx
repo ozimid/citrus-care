@@ -1,7 +1,8 @@
 // Owns the on-device engine's opt-in setting and, when enabled, the lazily
 // mounted executorch session (D-15 Stage 2). Sits above the tabs so the model
 // loads once and survives tab switches and the capture modal — Profile drives
-// the toggle, ReviewScreen reads isReady()/generate() for the assess router.
+// the toggle, ReviewScreen reads isReady()/generate() for the assess router,
+// and a batch runner (F39) reads whenIdle() to wait out the FIFO tail.
 //
 // This file must NOT import react-native-executorch statically: the native
 // runtime only exists in dev/EAS builds, so the session is a lazy import
@@ -22,7 +23,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { useKeepAwakeWhile } from "../lib/keep-awake-io";
 import {
   armLoadSentinel,
   clearLoadSentinel,
@@ -43,7 +44,7 @@ const LocalEngineSession = lazy(() =>
   import("./LocalEngineSession").then((m) => ({ default: m.LocalEngineSession })),
 );
 
-interface LocalEngineContextValue {
+export interface LocalEngineContextValue {
   state: LocalEngineState;
   settings: LocalEngineSettings;
   setEnabled: (enabled: boolean) => void;
@@ -66,6 +67,13 @@ interface LocalEngineContextValue {
   /** Interrupt the in-flight inference (assess flow's hard ceiling). No-op
    * when nothing is running. */
   interrupt: () => void;
+  /** Resolves once every request enqueued so far has settled — fulfilled,
+   * rejected or interrupted. The read side of the same FIFO: a batch runner
+   * awaits it before its first item and after any timeout, because an
+   * interrupt() only makes the native generate() return once it honours the
+   * stop, so the next item's clock must not start while a killed request may
+   * still hold the session (F39 / D-W5). Never rejects. */
+  whenIdle: () => Promise<void>;
 }
 
 const OFF_CONTEXT: LocalEngineContextValue = {
@@ -78,6 +86,7 @@ const OFF_CONTEXT: LocalEngineContextValue = {
     throw new Error("local engine not available");
   },
   interrupt: () => {},
+  whenIdle: () => Promise.resolve(),
 };
 
 const LocalEngineContext = createContext<LocalEngineContextValue>(OFF_CONTEXT);
@@ -117,15 +126,7 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
 
   // Screen-off suspends the app's network and kills the 1.3 GB model download
   // (user report 2026-07-16) — hold the screen awake for the download only.
-  // Tagged so it can't fight other keep-awake users; best-effort on both ends.
-  useEffect(() => {
-    const TAG = "model-download";
-    if (state.kind !== "downloading") return;
-    activateKeepAwakeAsync(TAG).catch(() => {});
-    return () => {
-      deactivateKeepAwake(TAG).catch(() => {});
-    };
-  }, [state.kind]);
+  useKeepAwakeWhile(state.kind === "downloading", "model-download");
   // Read by the router's isReady() at tap time, not at render time.
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -209,6 +210,8 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
         return run;
       },
       interrupt: () => interruptRef.current?.(),
+      // The tail already swallows errors; settle to void either way.
+      whenIdle: () => generateTailRef.current.then(() => undefined, () => undefined),
     }),
     [state, settings, setEnabled, retry],
   );

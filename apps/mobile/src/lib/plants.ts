@@ -5,7 +5,7 @@
 // tests, are unchanged.
 
 import type { Assessment, CareProfile, Plant } from "@citrus/shared";
-import { photoForAssessment, photosForPlant, type PhotoIndex } from "./photo-store";
+import { latestPhotoForPlant, photoForAssessment, type PhotoIndex } from "./photo-store";
 import { comparisonDelta } from "./plant-detail";
 import { parseStoredCareProfile } from "./watering";
 
@@ -121,18 +121,15 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
 /** Join each card to its photo (same shape as plant-detail's attachLocalPhotos):
  * the cover assessment's photo when this phone has it, else the plant's newest
  * photo — pre-cover rows and restores land there — else null for the
- * placeholder. Pure; a plant is never shown another plant's picture. */
+ * placeholder. "Newest" is the photo store's own ordering (createdAt, then the
+ * index key), so two same-second walk shots never make the card flip between
+ * reloads. Pure; a plant is never shown another plant's picture. */
 export function attachCoverPhotos(items: PlantListItem[], index: PhotoIndex): PlantListItem[] {
   return items.map((item) => {
     const cover = item.coverAssessmentId
       ? photoForAssessment(index, item.coverAssessmentId)
       : null;
-    const fallback =
-      cover ??
-      photosForPlant(index, item.id).sort((a, b) =>
-        a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
-      )[0] ??
-      null;
+    const fallback = cover ?? latestPhotoForPlant(index, item.id);
     return { ...item, coverUri: fallback?.localUri ?? null };
   });
 }

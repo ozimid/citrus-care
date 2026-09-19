@@ -1,5 +1,4 @@
 import * as Application from "expo-application";
-import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -16,6 +15,7 @@ import { useLocalEngine } from "../components/LocalEngineProvider";
 import { CutDiagram } from "../components/CutDiagram";
 import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { bandColor } from "../lib/health";
+import { useKeepAwakeWhile } from "../lib/keep-awake-io";
 import { formatTimelineDate } from "../lib/plant-detail";
 import { PruneOverlay } from "../components/PruneOverlay";
 import { downscalePhoto } from "../lib/photo-io";
@@ -304,13 +304,7 @@ export function PruneScreen({ plant, onClose, onChanged }: Props) {
   // A 25-120s run against a 30s screen timeout, with both hands full of
   // secateurs. The download already holds the screen awake; inference is the
   // flow where the phone actually gets put down.
-  useEffect(() => {
-    if (!busy) return;
-    activateKeepAwakeAsync("prune-analysis").catch(() => {});
-    return () => {
-      deactivateKeepAwake("prune-analysis").catch(() => {});
-    };
-  }, [busy]);
+  useKeepAwakeWhile(busy, "prune-analysis");
 
   const tick = useCallback(async (planId: string, index: number) => {
     try {

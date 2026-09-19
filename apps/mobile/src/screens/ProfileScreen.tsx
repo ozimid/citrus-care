@@ -25,6 +25,9 @@ import {
 } from "../lib/local-engine";
 import { availableDiskSpaceBytes, deviceCapabilitySnapshot } from "../lib/local-engine-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
+import { totalPhotoUsageBytes } from "../lib/photo-store-io";
+import { storageSummary } from "../lib/storage-budget";
+import { measureRecordBytes } from "../lib/storage-budget-io";
 import { cancelReminder, mapScheduledReminders, type ReminderListItem } from "../lib/reminders";
 import { notificationScheduler } from "../lib/reminders-io";
 import { BMC_URL, buildFeedbackMailto } from "../lib/support";
@@ -156,16 +159,46 @@ export function ProfileScreen() {
 
 /** D-17: with nothing synced, a manual export is the only backup. Export writes
  * a JSON of your plants + history to the share sheet; import merges one back
- * without overwriting anything already here. Photos stay on the phone. */
+ * without overwriting anything already here. Photos stay on the phone. F39
+ * (D-W17): one line says how full the phone's record store and photo folder
+ * are — the 6 MB Android AsyncStorage default is a real cliff. */
 function DataCard() {
   const { t } = useTheme();
   const [busy, setBusy] = useState<null | "export" | "import">(null);
+  /** "Records: 1.2 of 6 MB · Photos: 412 MB" — null until measured / on failure. */
+  const [storageLine, setStorageLine] = useState<string | null>(null);
+
+  const loadStorage = useCallback(async () => {
+    try {
+      const records = await measureRecordBytes();
+      setStorageLine(storageSummary(records, totalPhotoUsageBytes()));
+    } catch (e) {
+      // Best-effort: a card without the line beats a card that fails to load.
+      console.error("[ProfileScreen] storage measurement failed:", (e as Error).message);
+      setStorageLine(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStorage();
+  }, [loadStorage]);
 
   async function onExport() {
     setBusy("export");
     try {
-      const shared = await exportBackup();
-      if (!shared) Alert.alert("Backup saved", "Sharing isn't available on this device.");
+      const { shared, included, total } = await exportBackup();
+      // Honest about the byte cap (D-W11): the newest photos travel, the rest
+      // stay on this phone. Unchanged copy when everything fit.
+      const photosNote =
+        included < total ? `Backup includes ${included} of ${total} photos (the newest).` : null;
+      if (!shared) {
+        Alert.alert(
+          "Backup saved",
+          ["Sharing isn't available on this device.", photosNote].filter(Boolean).join(" "),
+        );
+      } else if (photosNote) {
+        Alert.alert("Backup exported", photosNote);
+      }
     } catch (e) {
       console.error("[ProfileScreen] export failed:", (e as Error).message);
       Alert.alert("Couldn't export", "Something went wrong creating the backup. Please try again.");
@@ -189,6 +222,7 @@ function DataCard() {
       Alert.alert("Import failed", message);
     } finally {
       setBusy(null);
+      void loadStorage();
     }
   }
 
@@ -200,6 +234,11 @@ function DataCard() {
         plants, history, photos and the questions you&apos;ve asked about each plant, so you can
         restore it all later. The file is yours: it isn&apos;t sent anywhere.
       </Text>
+      {storageLine ? (
+        <Text style={[styles.dataBody, { color: t.sub }]} accessibilityLabel={`Storage: ${storageLine}`}>
+          {storageLine}
+        </Text>
+      ) : null}
       <View style={styles.dataRow}>
         <Pressable
           accessibilityRole="button"

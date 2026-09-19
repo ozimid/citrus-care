@@ -1,6 +1,8 @@
 import * as Application from "expo-application";
+import { File } from "expo-file-system";
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { buildAssessDeps } from "../components/assess-deps";
 import { RoundButton } from "../components/CaptureOverlay";
 import { useLocalEngine } from "../components/LocalEngineProvider";
 import { NewPlantSheet } from "../components/NewPlantSheet";
@@ -9,25 +11,17 @@ import {
   persistDeferredAssessment,
   runAssess,
   runDiagnoseOnly,
-  type AssessDeps,
+  type AssessDebugInfo,
   type AssessPhase,
   type AssessedResult,
   type RejectedResult,
 } from "../lib/assess";
-import { prefillFromDiagnosis } from "../lib/new-plant";
-import { LOCAL_USER_PROMPT } from "../lib/local-engine";
-import { persistLocalAssessment } from "../lib/local-engine-io";
-import { SPIKE_MAX_DIMENSION } from "../lib/photo";
-import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
-import { linkPhotoToAssessment, savePlantPhoto } from "../lib/photo-store-io";
-import { buildDiagnosisContext, SPIKE_SYSTEM_PROMPT } from "../lib/spike-vlm";
 import { saveLastAssessDebug } from "../lib/assess-debug-io";
+import { useKeepAwakeWhile } from "../lib/keep-awake-io";
+import { prefillFromDiagnosis } from "../lib/new-plant";
+import type { PreparedPhoto } from "../lib/photo-io";
+import { loadDiagnosisContext } from "../lib/plants-io";
 import { buildAssessDebugMailto } from "../lib/support";
-import type { AssessDebugInfo } from "../lib/assess";
-import { fetchPlantDetail } from "../lib/plants-io";
-import { getWateringLog } from "../lib/watering-io";
-import { lastWateredAt, parseStoredCareProfile } from "../lib/watering";
-import { cachedLocalConditions } from "../lib/weather-io";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { RADIUS } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -37,7 +31,9 @@ import { useTheme } from "../lib/theme-io";
 // lib/assess.ts (local save → on-device Gemma → parsed diagnosis) and hands the
 // result up to CaptureScreen, which shows DiagnosisScreen. The saved local uri
 // is kept so a retry skips the re-save. D-17: Gemma is the only engine, so a
-// phone that can't run it gets an honest, retryable error.
+// phone that can't run it gets an honest, retryable error. The dependency
+// wiring lives in components/assess-deps.ts and the prompt context loader in
+// plants-io.ts so a batch runner can reuse both per photo.
 
 const PHASE_LABEL: Record<AssessPhase, string> = {
   saving: "Saving photo…",
@@ -71,12 +67,9 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
   /** F21: the model read a non-plant and nothing was saved. The photo is
    * still on the phone; the user decides whether to keep the assessment. */
   const [rejection, setRejection] = useState<RejectedResult | null>(null);
-  /** #4 — the plant's own record, folded into the diagnosis prompt so the
-   * model ranks causes with triage pre-answered (empty for snap-first). */
-  const contextRef = useRef("");
-  /** Synchronous re-entry guard: analyze() now awaits the context load before
-   * any phase fires, which opened a multi-frame double-tap window
-   * (adversarial critic). */
+  /** Synchronous re-entry guard: analyze() awaits the context load before any
+   * phase fires, which opened a multi-frame double-tap window (adversarial
+   * critic). */
   const inFlightRef = useRef(false);
   /** The last run's record, for the user-tapped details share. */
   const [debug, setDebug] = useState<AssessDebugInfo | null>(null);
@@ -87,69 +80,27 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
   const busy = phase !== null;
   const busyLabel = slow ? SLOW_LABEL : phase ? PHASE_LABEL[phase] : "";
 
-  const buildDeps = useCallback(
-    (): AssessDeps => ({
-      savePhoto: savePlantPhoto,
-      linkPhoto: linkPhotoToAssessment,
-      local: {
-        isReady: localEngine.isReady,
-        // 512px long edge for the local model (the saved copy has this
-        // photo's already-known dimensions).
-        prepare: async (uri) =>
-          (
-            await downscalePhoto(
-              uri,
-              { width: photo.width, height: photo.height },
-              SPIKE_MAX_DIMENSION,
-            )
-          ).uri,
-        // The diagnosis prompts live in the pure lib modules; the session
-        // is given them per call (F21: one prompt, the model reports subject).
-        generate: ({ imageUri }) =>
-          localEngine.generate({
-            system: SPIKE_SYSTEM_PROMPT,
-            user: contextRef.current
-              ? `${LOCAL_USER_PROMPT}\n\n${contextRef.current}`
-              : LOCAL_USER_PROMPT,
-            imageUri,
-          }),
-        interrupt: localEngine.interrupt,
-        // The phone inserts the row itself into the local store.
-        persist: persistLocalAssessment,
-      },
-    }),
-    [localEngine, photo.height, photo.width],
-  );
+  // A 25-120 s run against a 30 s screen timeout: hold the screen while the
+  // phone works (tagged so it never fights the download's or pruning's hold).
+  useKeepAwakeWhile(busy, "assess");
 
-  /** Best-effort record assembly — a failed read just means no context. */
-  const loadContext = useCallback(async () => {
-    if (!plantId) {
-      contextRef.current = "";
-      return;
-    }
-    try {
-      const now = new Date();
-      const [detail, log] = await Promise.all([fetchPlantDetail(plantId), getWateringLog()]);
-      const { weather } = await cachedLocalConditions(detail.plant.zip_code, now);
-      const profile = parseStoredCareProfile(detail.plant.care_profile);
-      const watered = lastWateredAt(log, plantId);
-      contextRef.current = buildDiagnosisContext({
-        plantType: detail.plant.plant_type,
-        species: detail.plant.species,
-        wateringIntervalDays: profile?.base_watering_interval_days,
-        lastWateredDaysAgo: watered
-          ? Math.round((now.getTime() - new Date(watered).getTime()) / 86_400_000)
-          : null,
-        recentRainMm: weather?.recentPrecipMm ?? null,
-        maxTempC: weather?.maxTempC ?? null,
-        // No lastScore/lastTrend on purpose: a prior score in the prompt would
-        // prime the score the deterministic trend is computed from.
-      });
-    } catch (e) {
-      console.error("[ReviewScreen] context load failed:", (e as Error).message);
-      contextRef.current = "";
-    }
-  }, [plantId]);
+  /** Once the durable copy exists, the manipulator's temp JPEG at photo.uri is
+   * cache weight only — dropped on the way out (close/retake), never before
+   * the save, so the preview and a retry always have their file. Best-effort. */
+  const leave = useCallback(
+    (next: () => void) => {
+      if (savedUri && savedUri !== photo.uri) {
+        try {
+          const temp = new File(photo.uri);
+          if (temp.exists) temp.delete();
+        } catch (e) {
+          console.error("[ReviewScreen] temp photo cleanup failed:", (e as Error).message);
+        }
+      }
+      next();
+    },
+    [photo.uri, savedUri],
+  );
 
   const analyze = useCallback(async (force = false) => {
     if (inFlightRef.current) return;
@@ -159,12 +110,15 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
     setSlow(false);
     setDebug(null);
     try {
-      await loadContext();
+      // #4 — the plant's own record, folded into the diagnosis prompt so the
+      // model ranks causes with triage pre-answered (empty for snap-first).
+      const context = plantId ? await loadDiagnosisContext(plantId) : "";
+      const deps = buildAssessDeps(localEngine, { width: photo.width, height: photo.height }, context);
       if (plantId === null) {
         // F35 snap-first: diagnose only — nothing is saved until the user
         // confirms the AI-drafted plant in the sheet.
         const result = await runDiagnoseOnly(
-          buildDeps(),
+          deps,
           { photoUri: photo.uri, force },
           { onPhase: setPhase, onSlow: () => setSlow(true), onDebug: (d) => { setDebug(d); void saveLastAssessDebug(d); } },
         );
@@ -176,7 +130,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         return;
       }
       const result = await runAssess(
-        buildDeps(),
+        deps,
         { plantId, photoUri: photo.uri, savedUri, force },
         {
           onPhase: setPhase,
@@ -201,7 +155,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       setPhase(null);
       setSlow(false);
     }
-  }, [buildDeps, loadContext, onAssessed, photo.uri, plantId, savedUri]);
+  }, [localEngine, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
 
   /** F35: the user saved the drafted plant — now persist photo + assessment. */
   const completeDeferred = useCallback(
@@ -211,7 +165,9 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
       try {
         let localUri = photo.uri;
         const assessmentId = await persistDeferredAssessment(
-          buildDeps(),
+          // No prompt context here: the diagnosis already exists, only the
+          // photo copy and the row are written.
+          buildAssessDeps(localEngine, { width: photo.width, height: photo.height }, ""),
           { plantId: newPlantId, photoUri: photo.uri, diagnosis: deferred.diagnosis, raw: deferred.raw },
           { onPhase: setPhase, onPhotoSaved: (u) => { localUri = u; } },
         );
@@ -229,7 +185,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         setPhase(null);
       }
     },
-    [buildDeps, deferred, onAssessed, photo.uri],
+    [deferred, localEngine, onAssessed, photo.height, photo.uri, photo.width],
   );
 
   return (
@@ -241,13 +197,13 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         accessibilityLabel="Captured photo"
       />
       <View style={styles.topBar}>
-        <RoundButton label="Retake" glyph="‹" disabled={busy} onPress={onRetake} />
+        <RoundButton label="Retake" glyph="‹" disabled={busy} onPress={() => leave(onRetake)} />
         <View style={styles.chip}>
           <Text style={styles.chipText} numberOfLines={1}>
             {plantName ? `🪴 ${plantName}` : "New plant ✨"}
           </Text>
         </View>
-        <RoundButton label="Close" glyph="✕" disabled={busy} onPress={onClose} />
+        <RoundButton label="Close" glyph="✕" disabled={busy} onPress={() => leave(onClose)} />
       </View>
       <View style={styles.bottomArea}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -285,7 +241,7 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
             busy ? busyLabel : rejection ? "Retake photo" : error ? "Try again" : "Analyze"
           }
           disabled={busy}
-          onPress={rejection ? onRetake : () => analyze()}
+          onPress={rejection ? () => leave(onRetake) : () => analyze()}
           style={[styles.analyze, { backgroundColor: t.green, opacity: busy ? 0.75 : 1 }]}
         >
           {busy ? (

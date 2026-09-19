@@ -6,6 +6,7 @@
 // list/detail mappers already consume, so those mappers stay verbatim.
 
 import type { CareProfile } from "@citrus/shared";
+import { isSafeRecordId } from "./local-id";
 
 /** The on-device plant record: the plants columns minus user_id (there are no
  * users anymore). care_profile is carried as-is — it is re-validated by
@@ -51,12 +52,14 @@ export function allPlants(store: PlantStore): StoredPlant[] {
 }
 
 /** care_profile is intentionally NOT validated here (it degrades to null in the
- * mapper): a bad profile must not discard an otherwise-valid plant. */
+ * mapper): a bad profile must not discard an otherwise-valid plant. The id IS
+ * gated (D-W16): it names photos/{id}/ on disk, so a stored or imported record
+ * that could not have been minted here is not a plant. */
 function isValidStoredPlant(value: unknown): value is StoredPlant {
   if (typeof value !== "object" || value === null) return false;
   const p = value as Record<string, unknown>;
   return (
-    typeof p.id === "string" &&
+    isSafeRecordId(p.id) &&
     typeof p.name === "string" &&
     typeof p.plant_type === "string" &&
     typeof p.created_at === "string" &&
@@ -81,7 +84,9 @@ export function parsePlantStore(json: string | null): PlantStore {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   const store: PlantStore = {};
   for (const [id, plant] of Object.entries(raw)) {
-    if (isValidStoredPlant(plant)) store[id] = plant;
+    // A key that disagrees with its record is a hand-edited or corrupt blob;
+    // keeping it would let two names reach one directory.
+    if (isValidStoredPlant(plant) && plant.id === id) store[id] = plant;
   }
   return store;
 }

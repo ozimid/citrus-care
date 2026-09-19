@@ -22,6 +22,7 @@ import {
 } from "react-native";
 import { initExecutorch, useLLM } from "react-native-executorch";
 import { ExpoResourceFetcher } from "react-native-executorch-expo-resource-fetcher";
+import { GardenWalkProbe } from "../components/GardenWalkProbe";
 import { LOCAL_MODEL } from "../components/LocalEngineSession";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
@@ -122,6 +123,8 @@ export function VlmSpikeScreen({ onClose }: { onClose: () => void }) {
         ) : (
           <SpikeSession key={session} t={t} onRecord={recordRun} onReinit={() => setSession((s) => s + 1)} />
         )}
+
+        <GardenWalkProbe t={t} />
 
         {check.ready ? (
           <Pressable

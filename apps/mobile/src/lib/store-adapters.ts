@@ -7,7 +7,7 @@
 
 import type { AssessmentScoreRow, PlantRow } from "./plants";
 import type { PlantDetailRow, TimelineRow } from "./plant-detail";
-import type { StoredAssessment } from "./assessment-store";
+import { byCreatedAtDesc, type StoredAssessment } from "./assessment-store";
 import type { StoredPlant } from "./plant-store";
 
 function scoreRow(assessment: StoredAssessment): AssessmentScoreRow {
@@ -59,11 +59,13 @@ export function plantDetailRowFromStore(plant: StoredPlant): PlantDetailRow {
 
 /** A plant's timeline rows, newest-first (mapTimelineRows treats the last row
  * as the earliest), with health_score / is_cut_care derived from the diagnosis
- * (F21: the cut split is the model's own subject). */
+ * (F21: the cut split is the model's own subject). Sorted by the store's own
+ * comparator so a same-second pair reads in the same order the anchor and
+ * cover logic resolved it. */
 export function timelineRowsFromStore(assessments: StoredAssessment[], plantId: string): TimelineRow[] {
   return assessments
     .filter((a) => a.plantId === plantId)
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+    .sort(byCreatedAtDesc)
     .map((assessment) => ({
       id: assessment.id,
       created_at: assessment.createdAt,

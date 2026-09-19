@@ -4,6 +4,8 @@ import {
   COMPARISON_SAME_BAND,
   allAssessments,
   assessmentsForPlant,
+  byCreatedAtDesc,
+  comparisonAnchor,
   deltaFromScores,
   latestAssessmentId,
   parseAssessmentStore,
@@ -30,6 +32,12 @@ function diagnosis(overrides: Partial<AssessmentDiagnosis> = {}): AssessmentDiag
     ...overrides,
   };
 }
+
+// D-W16 shapes for the parse tests (the parser refuses anything else).
+const P1 = "p1-00000001";
+const A1 = "a1-00000001";
+const A2 = "a2-00000001";
+const A3 = "a3-00000001";
 
 function assessment(overrides: Partial<StoredAssessment> = {}): StoredAssessment {
   return {
@@ -93,7 +101,7 @@ describe("allAssessments", () => {
 
 describe("parseAssessmentStore / serializeAssessmentStore", () => {
   it("round-trips through JSON", () => {
-    const store = upsertAssessment({}, assessment());
+    const store = upsertAssessment({}, assessment({ id: A1, plantId: P1 }));
     expect(parseAssessmentStore(serializeAssessmentStore(store))).toEqual(store);
   });
 
@@ -105,12 +113,79 @@ describe("parseAssessmentStore / serializeAssessmentStore", () => {
 
   it("skips malformed assessments but keeps valid ones (stored data is untrusted)", () => {
     const stored = JSON.stringify({
-      good: assessment(),
-      "no-diagnosis": { id: "x", plantId: "p1", createdAt: "t", comparedToId: null, engine: "on-device" },
-      "bad-score": { ...assessment(), diagnosis: { summary: "no score" } },
+      [A1]: assessment({ id: A1, plantId: P1 }),
+      [A2]: { id: A2, plantId: P1, createdAt: "t", comparedToId: null, engine: "on-device" },
+      [A3]: { ...assessment({ id: A3, plantId: P1 }), diagnosis: { summary: "no score" } },
       "not-an-object": "nope",
     });
-    expect(Object.keys(parseAssessmentStore(stored))).toEqual(["good"]);
+    expect(Object.keys(parseAssessmentStore(stored))).toEqual([A1]);
+  });
+
+  // D-W16: plantId names a directory downstream; the id keys the photo index.
+  it("drops records with an unsafe id or plantId, or whose key is not their id", () => {
+    const stored = JSON.stringify({
+      [A1]: assessment({ id: A1, plantId: P1 }),
+      [A2]: assessment({ id: A2, plantId: "../.." }),
+      "..": assessment({ id: "..", plantId: P1 }),
+      [A3]: assessment({ id: A1, plantId: P1 }),
+    });
+    expect(Object.keys(parseAssessmentStore(stored))).toEqual([A1]);
+  });
+});
+
+// Two walk photos of one plant can land in the same second; the timeline,
+// the anchor and the cover must all agree on which is "newest" regardless of
+// the order the JSON map came back in.
+describe("byCreatedAtDesc", () => {
+  it("orders newest first, then higher id first on a tie", () => {
+    const t = "2026-08-20T00:00:00Z";
+    const older = assessment({ id: "a0", createdAt: "2026-08-19T00:00:00Z" });
+    const x = assessment({ id: "ax", createdAt: t });
+    const y = assessment({ id: "ay", createdAt: t });
+    expect([older, x, y].sort(byCreatedAtDesc).map((a) => a.id)).toEqual(["ay", "ax", "a0"]);
+    expect([y, older, x].sort(byCreatedAtDesc).map((a) => a.id)).toEqual(["ay", "ax", "a0"]);
+    expect(byCreatedAtDesc(x, x)).toBe(0);
+  });
+
+  it("is what assessmentsForPlant uses (stable across Object.values order)", () => {
+    const t = "2026-08-20T00:00:00Z";
+    const forward: AssessmentStore = {
+      ax: assessment({ id: "ax", createdAt: t }),
+      ay: assessment({ id: "ay", createdAt: t }),
+    };
+    const backward: AssessmentStore = { ay: forward.ay, ax: forward.ax };
+    expect(assessmentsForPlant(forward, "p1").map((a) => a.id)).toEqual(["ay", "ax"]);
+    expect(assessmentsForPlant(backward, "p1").map((a) => a.id)).toEqual(["ay", "ax"]);
+    expect(latestAssessmentId(backward, "p1")).toBe("ay");
+    expect(allAssessments(backward).map((a) => a.id)).toEqual(["ay", "ax"]);
+  });
+});
+
+// D-W6: a walk's second angle of the same tree, 40 s after the first, must
+// compare against the plant's PRE-walk state — never against its sibling.
+describe("comparisonAnchor", () => {
+  const store: AssessmentStore = {
+    old: assessment({ id: "old", createdAt: "2026-07-01T00:00:00Z" }),
+    walk1: assessment({ id: "walk1", createdAt: "2026-08-20T10:00:00Z" }),
+    walk2: assessment({ id: "walk2", createdAt: "2026-08-20T10:00:40Z" }),
+    other: assessment({ id: "other", plantId: "p2", createdAt: "2026-08-21T00:00:00Z" }),
+  };
+
+  it("without beforeIso is the plant's newest assessment (single-shot semantics)", () => {
+    expect(comparisonAnchor(store, "p1")?.id).toBe("walk2");
+    expect(comparisonAnchor(store, "p1")).toEqual(assessmentsForPlant(store, "p1")[0]);
+    expect(comparisonAnchor(store, "p3")).toBeNull();
+  });
+
+  it("with beforeIso skips rows at or after it and returns the pre-walk one", () => {
+    expect(comparisonAnchor(store, "p1", "2026-08-20T10:00:00Z")?.id).toBe("old");
+    expect(comparisonAnchor(store, "p1", "2026-08-20T10:00:40Z")?.id).toBe("walk1");
+  });
+
+  it("is null when nothing precedes beforeIso, and never crosses plants", () => {
+    expect(comparisonAnchor(store, "p1", "2026-07-01T00:00:00Z")).toBeNull();
+    expect(comparisonAnchor(store, "p2", "2026-08-21T00:00:00Z")).toBeNull();
+    expect(comparisonAnchor(store, "p2")?.id).toBe("other");
   });
 });
 

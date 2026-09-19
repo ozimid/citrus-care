@@ -15,6 +15,7 @@ import {
   type AssessmentStore,
 } from "./assessment-store";
 import { parseChatStore, serializeChatStore, type ChatStore } from "./chat-store";
+import { isSafeBasename, isSafeRecordId, newestFirst } from "./local-id";
 import { parsePhotoIndex, serializePhotoIndex, type PhotoIndex } from "./photo-store";
 import { parsePlantStore, serializePlantStore, type PlantStore } from "./plant-store";
 import { parseWateringLog, serializeWateringLog, type WateringLog } from "./watering";
@@ -71,15 +72,16 @@ function reparse<T>(value: unknown, parser: (json: string | null) => T): T {
   return parser(value === undefined ? null : JSON.stringify(value));
 }
 
+/** D-W16: plantId and fileName are joined into a path on restore, and the
+ * assessment id keys the index — each must be a value this app could have
+ * minted, or the photo is not restored at all. */
 function isValidBackupPhoto(value: unknown): value is BackupPhoto {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
-    typeof v.assessmentId === "string" &&
-    typeof v.plantId === "string" &&
-    typeof v.fileName === "string" &&
-    v.fileName.length > 0 &&
-    !v.fileName.includes("/") &&
+    isSafeRecordId(v.assessmentId) &&
+    isSafeRecordId(v.plantId) &&
+    isSafeBasename(v.fileName) &&
     typeof v.base64 === "string" &&
     v.base64.length > 0
   );
@@ -109,6 +111,46 @@ export function parseBackup(json: string): ParsedBackup | null {
     },
     photos: Array.isArray(r.photos) ? r.photos.filter(isValidBackupPhoto) : [],
   };
+}
+
+// ---- Photo carrier budget (D-W11) ----
+
+/** A photo the export could carry: its index entry plus the file's size when
+ * the io could read it (null → estimated). */
+export interface BackupPhotoCandidate {
+  assessmentId: string;
+  plantId: string;
+  localUri: string;
+  createdAt: string;
+  bytes: number | null;
+}
+
+/** Export base64-encodes every carried photo into ONE in-memory string, so the
+ * carrier is capped: a walk season of photos would otherwise fail to build. */
+export const BACKUP_PHOTO_CAP_BYTES = 120 * 1024 * 1024;
+/** Stand-in size for a file the io could not measure (a 1600 px JPEG). */
+export const BACKUP_PHOTO_BYTES_ESTIMATE = 700 * 1024;
+
+/** The photos an export carries: newest first while they fit under the cap.
+ * A newest-first PREFIX (stop at the first that would not fit) rather than a
+ * best-fit, so "Backup includes N of M photos" means "your N most recent". The
+ * newest photo is always carried, however large. `total` is the M. */
+export function selectBackupPhotos(
+  candidates: BackupPhotoCandidate[],
+  capBytes: number = BACKUP_PHOTO_CAP_BYTES,
+): { selected: BackupPhotoCandidate[]; total: number } {
+  const ordered = [...candidates].sort((a, b) =>
+    newestFirst(a.createdAt, a.assessmentId, b.createdAt, b.assessmentId),
+  );
+  const selected: BackupPhotoCandidate[] = [];
+  let running = 0;
+  for (const candidate of ordered) {
+    const size = candidate.bytes ?? BACKUP_PHOTO_BYTES_ESTIMATE;
+    if (selected.length > 0 && running + size > capBytes) break;
+    selected.push(candidate);
+    running += size;
+  }
+  return { selected, total: candidates.length };
 }
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

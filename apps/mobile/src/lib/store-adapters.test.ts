@@ -121,6 +121,17 @@ describe("timelineRowsFromStore → mapTimelineRows", () => {
     const store = [assessment({ id: "a1" }), assessment({ id: "b1", plantId: "p2" })];
     expect(timelineRowsFromStore(store, "p1").map((r) => r.id)).toEqual(["a1"]);
   });
+
+  // Two walk photos of one plant in the same second: the timeline must order
+  // them the same way the store's anchor/cover logic does (higher id first),
+  // whatever order the assessments arrived in.
+  it("orders rows with equal createdAt by id, in either input order", () => {
+    const t = "2026-08-20T00:00:00Z";
+    const ax = assessment({ id: "ax", createdAt: t });
+    const ay = assessment({ id: "ay", createdAt: t });
+    expect(timelineRowsFromStore([ax, ay], "p1").map((r) => r.id)).toEqual(["ay", "ax"]);
+    expect(timelineRowsFromStore([ay, ax], "p1").map((r) => r.id)).toEqual(["ay", "ax"]);
+  });
 });
 
 describe("plantDetailRowFromStore", () => {

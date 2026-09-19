@@ -1,11 +1,17 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { File } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from "react-native";
-import { CaptureHint, RoundButton } from "../components/CaptureOverlay";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  CaptureHint,
+  PermissionState,
+  RoundButton,
+  SnapTipsOverlay,
+} from "../components/CaptureOverlay";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
 import type { AssessedResult } from "../lib/assess";
-import { SNAP_TIPS, preselectedPlantId } from "../lib/capture-modes";
+import { preselectedPlantId } from "../lib/capture-modes";
 import { loadSnapTipsSeen, markSnapTipsSeen } from "../lib/capture-modes-io";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import { type PlantListItem } from "../lib/plants";
@@ -94,15 +100,19 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
   const ready = !busy;
 
+  /** Downscale into the review photo. True when the copy exists (the caller
+   * may then drop its own original); the user sees only the generic error. */
   const prepare = useCallback(
-    async (uri: string, width: number, height: number) => {
+    async (uri: string, width: number, height: number): Promise<boolean> => {
       setBusy(true);
       setError(null);
       try {
         setPhoto(await downscalePhoto(uri, { width, height }));
+        return true;
       } catch (e) {
         console.error("[CaptureScreen] downscale failed:", (e as Error).message);
         setError(GENERIC_PHOTO_ERROR);
+        return false;
       } finally {
         setBusy(false);
       }
@@ -118,7 +128,15 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     try {
       const shot = await camera.takePictureAsync({ quality: 1 });
       if (!shot) throw new Error("no picture returned");
-      await prepare(shot.uri, shot.width, shot.height);
+      if (await prepare(shot.uri, shot.width, shot.height)) {
+        // The downscaled copy is what the flow uses from here; the full-res
+        // original is cache weight nothing reads again. Best-effort.
+        try {
+          new File(shot.uri).delete();
+        } catch (e) {
+          console.error("[CaptureScreen] original cleanup failed:", (e as Error).message);
+        }
+      }
     } catch (e) {
       console.error("[CaptureScreen] capture failed:", (e as Error).message);
       setError(GENERIC_PHOTO_ERROR);
@@ -233,33 +251,13 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         </View>
       </View>
 
-      {tipsOpen ? (
-        <View style={styles.tipsOverlay}>
-          <View style={styles.tipsCard}>
-            <Text style={styles.tipsTitle}>Getting a good photo</Text>
-            {SNAP_TIPS.map((tip) => (
-              <View key={tip.title} style={styles.tipRow}>
-                <Text style={styles.tipGlyph}>{tip.glyph}</Text>
-                <View style={styles.tipTextWrap}>
-                  <Text style={styles.tipTitle}>{tip.title}</Text>
-                  <Text style={styles.tipBody}>{tip.body}</Text>
-                </View>
-              </View>
-            ))}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Close photo tips"
-              onPress={() => {
-                setTipsOpen(false);
-                void markSnapTipsSeen();
-              }}
-              style={styles.tipsCta}
-            >
-              <Text style={styles.tipsCtaText}>Got it</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
+      <SnapTipsOverlay
+        visible={tipsOpen}
+        onClose={() => {
+          setTipsOpen(false);
+          void markSnapTipsSeen();
+        }}
+      />
 
       <PlantPickerSheet
         visible={pickerOpen}
@@ -275,58 +273,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   );
 }
 
-function PermissionState({ denied, onRequest }: { denied: boolean; onRequest: () => void }) {
-  return (
-    <View style={styles.permission}>
-      <Text style={styles.permissionTitle}>
-        {denied ? "Camera access is off" : "Camera permission needed"}
-      </Text>
-      <Text style={styles.permissionBody}>
-        {denied
-          ? "Enable camera access for Citrus Care in your device settings to photograph plants. You can still import a photo from your gallery below."
-          : "Citrus Care uses the camera to photograph your plants for health checks."}
-      </Text>
-      <Pressable
-        accessibilityRole="button"
-        onPress={denied ? () => Linking.openSettings() : onRequest}
-        style={styles.permissionButton}
-      >
-        <Text style={styles.permissionButtonText}>
-          {denied ? "Open settings" : "Allow camera"}
-        </Text>
-      </Pressable>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  tipsOverlay: {
-    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.72)",
-    justifyContent: "center",
-    padding: 24,
-  },
-  tipsCard: {
-    backgroundColor: "rgba(20,24,20,0.97)",
-    borderRadius: RADIUS * 1.5,
-    padding: 20,
-    gap: 16,
-  },
-  tipsTitle: { color: "#ffffff", fontSize: 18, fontWeight: "700" },
-  tipRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
-  tipGlyph: { fontSize: 22 },
-  tipTextWrap: { flex: 1, gap: 2 },
-  tipTitle: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
-  tipBody: { color: "rgba(255,255,255,0.75)", fontSize: 13, lineHeight: 19 },
-  tipsCta: {
-    marginTop: 4,
-    backgroundColor: "#059669",
-    borderRadius: RADIUS,
-    minHeight: 46,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tipsCtaText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
   root: { flex: 1, backgroundColor: "#000" },
   topBar: {
     position: "absolute",
@@ -394,27 +341,4 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     overflow: "hidden",
   },
-  permission: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 32,
-    gap: 10,
-  },
-  permissionTitle: { color: "#ffffff", fontSize: 17, fontWeight: "600" },
-  permissionBody: {
-    color: "rgba(255,255,255,0.75)",
-    fontSize: 14,
-    lineHeight: 20,
-    textAlign: "center",
-    maxWidth: 300,
-  },
-  permissionButton: {
-    marginTop: 8,
-    backgroundColor: "rgba(255,255,255,0.16)",
-    borderRadius: RADIUS,
-    paddingVertical: 12,
-    paddingHorizontal: 22,
-  },
-  permissionButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
 });

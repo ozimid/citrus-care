@@ -35,7 +35,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Citrus Care uses the camera to photograph your plants for health checks."
+          "cameraPermission": "Citrus Care uses the camera to photograph your plants for health checks.",
+          "barcodeScannerEnabled": false
         }
       ],
       [

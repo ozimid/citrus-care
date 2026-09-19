@@ -14,9 +14,9 @@ import {
 import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
+import { TodayCard } from "../components/TodayCard";
 import { bandColor, healthBand } from "../lib/health";
 import { gardenTrend, type PlantListItem } from "../lib/plants";
-import { todayDigest } from "../lib/today-digest";
 import { weatherAlertsFor, type WeatherAlert } from "../lib/weather-alerts";
 import { scheduleWeatherAlert } from "../lib/reminders";
 import {
@@ -24,7 +24,7 @@ import {
   notificationScheduler,
   saveWeatherAlertMark,
 } from "../lib/reminders-io";
-import { pruningPackFor, seasonVerdict, type Hemisphere } from "../lib/pruning-rules";
+import type { Hemisphere } from "../lib/pruning-rules";
 import { cachedDailyByZip, cachedLocalConditions } from "../lib/weather-io";
 import { fetchPlants } from "../lib/plants-io";
 import { RADIUS, type Tokens } from "../lib/theme";
@@ -218,65 +218,6 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   );
 }
 
-/** #8 (honest v1) — what needs doing TODAY, from deterministic signals only:
- * a weather alert, watering due, an open prune window. Empty day = no card. */
-function TodayCard({
-  items,
-  plans,
-  alert,
-  hemisphere,
-  t,
-}: {
-  items: PlantListItem[];
-  plans: Record<string, WateringPlan>;
-  alert: WeatherAlert | null;
-  hemisphere: Hemisphere;
-  t: Tokens;
-}) {
-  const month = new Date().getMonth() + 1;
-  const lines = todayDigest({
-    alert: alert ? { kind: alert.kind, tempC: alert.tempC, plantNames: alert.plantNames } : null,
-    dueWater: items.filter((item) => plans[item.id]?.isDue === true).map((item) => item.name),
-    // Real identity, real hemisphere — a pet name must not pick the pack, and
-    // a southern grower must not get northern windows (D-P5).
-    pruneWindowOpen: items
-      .filter(
-        (item) =>
-          seasonVerdict(
-            pruningPackFor({
-              name: item.name,
-              plant_type: item.plantType,
-              species: item.species,
-              cultivar: null,
-            }),
-            month,
-            hemisphere,
-          ).status === "best",
-      )
-      .map((item) => item.name),
-  });
-  if (lines.length === 0) return null;
-  return (
-    <View style={[styles.todayCard, { backgroundColor: t.card, borderColor: t.border }]}>
-      <Text style={[styles.todayLabel, { color: t.sub }]}>TODAY</Text>
-      {lines.map((line) => (
-        <Text
-          key={line.text}
-          style={[
-            styles.todayLine,
-            // The most urgent thing should LOOK like it — the ranking used to
-            // exist only in source order (designer finding). The word carries
-            // the meaning; the colour just stops it whispering.
-            line.kind === "alert" ? { color: t.danger, fontWeight: "600" } : { color: t.text },
-          ]}
-        >
-          {line.text}
-        </Text>
-      ))}
-    </View>
-  );
-}
-
 function PlantCard({
   item,
   needsWater,
@@ -435,15 +376,6 @@ const styles = StyleSheet.create({
   addButtonText: { fontSize: 13, fontWeight: "600" },
   errorBanner: { fontSize: 13, paddingHorizontal: 20, marginBottom: 8 },
   trendLine: { fontSize: 13, fontWeight: "600", paddingHorizontal: 20, marginTop: -6, marginBottom: 8 },
-  todayCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS,
-    padding: 14,
-    gap: 6,
-    marginBottom: 10,
-  },
-  todayLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
-  todayLine: { fontSize: 13, lineHeight: 19 },
   listContent: { paddingHorizontal: 20, paddingBottom: 24, gap: 10 },
   emptyGrow: { flexGrow: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 8 },

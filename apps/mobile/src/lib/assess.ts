@@ -272,20 +272,32 @@ export async function runDiagnoseOnly(
 /** F35: the write half of snap-first — runs AFTER the user confirmed the new
  * plant. Same order and honesty as the normal flow: photo file first, then the
  * assessment row, then the best-effort thumbnail link. Returns the new
- * assessment id. */
+ * assessment id. A walk photo is already durable in the plant's directory, so
+ * a `savedUri` skips the save (no second copy, no "saving" phase) and is what
+ * the index links to. */
 export async function persistDeferredAssessment(
   deps: AssessDeps,
-  args: { plantId: string; photoUri: string; diagnosis: AssessmentDiagnosis; raw: string },
+  args: {
+    plantId: string;
+    photoUri: string;
+    diagnosis: AssessmentDiagnosis;
+    raw: string;
+    savedUri?: string | null;
+  },
   hooks: AssessHooks = {},
 ): Promise<string> {
-  hooks.onPhase?.("saving");
   let localUri: string;
-  try {
-    localUri = await deps.savePhoto(args.plantId, args.photoUri);
-    hooks.onPhotoSaved?.(localUri);
-  } catch (e) {
-    console.error("[runAssess] deferred photo save failed:", (e as Error).message);
-    throw new Error(PHOTO_SAVE_FAILED_ERROR);
+  if (args.savedUri) {
+    localUri = args.savedUri;
+  } else {
+    hooks.onPhase?.("saving");
+    try {
+      localUri = await deps.savePhoto(args.plantId, args.photoUri);
+      hooks.onPhotoSaved?.(localUri);
+    } catch (e) {
+      console.error("[runAssess] deferred photo save failed:", (e as Error).message);
+      throw new Error(PHOTO_SAVE_FAILED_ERROR);
+    }
   }
   let assessmentId: string;
   try {

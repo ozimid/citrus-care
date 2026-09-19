@@ -26,6 +26,13 @@ const CARE: CareProfile = {
   notes: "Citrus.",
 };
 
+// Ids that pass the D-W16 gate (newLocalId shape) — the parse tests need them
+// because parsePlantStore now refuses anything that could not name a directory.
+const P1 = "p1-00000001";
+const P2 = "p2-00000001";
+const P3 = "p3-00000001";
+const LEGACY_UUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
 function plant(overrides: Partial<StoredPlant> = {}): StoredPlant {
   return {
     id: "p1",
@@ -90,7 +97,7 @@ describe("getPlant / allPlants", () => {
 
 describe("parsePlantStore / serializePlantStore", () => {
   it("round-trips through JSON", () => {
-    const store = upsertPlant({}, plant());
+    const store = upsertPlant({}, plant({ id: P1 }));
     expect(parsePlantStore(serializePlantStore(store))).toEqual(store);
   });
 
@@ -103,19 +110,43 @@ describe("parsePlantStore / serializePlantStore", () => {
 
   it("skips malformed plants but keeps valid ones (stored data is untrusted)", () => {
     const stored = JSON.stringify({
-      good: plant(),
-      "missing-name": { id: "x", plant_type: "tree", created_at: "t" },
-      "wrong-types": { ...plant(), name: 5 },
+      [P1]: plant({ id: P1 }),
+      [P2]: { id: P2, plant_type: "tree", created_at: "t" },
+      [P3]: { ...plant({ id: P3 }), name: 5 },
       "not-an-object": "nope",
     });
-    expect(Object.keys(parsePlantStore(stored))).toEqual(["good"]);
+    expect(Object.keys(parsePlantStore(stored))).toEqual([P1]);
   });
 
   it("keeps a plant whose care_profile is malformed (it degrades downstream, not here)", () => {
-    const stored = JSON.stringify({ p1: { ...plant(), care_profile: { junk: true } } });
+    const stored = JSON.stringify({ [P1]: { ...plant({ id: P1 }), care_profile: { junk: true } } });
     const parsed = parsePlantStore(stored);
     // The plant survives; parseStoredCareProfile (in the mapper) turns the bad
     // profile into null. A bad profile is not a bad plant.
-    expect(parsed["p1"]?.name).toBe("Lemon");
+    expect(parsed[P1]?.name).toBe("Lemon");
+  });
+});
+
+// D-W16: a plant id becomes photos/{id}/ on disk, so a crafted backup (or a
+// corrupted blob) must not be able to smuggle a path through the parser.
+describe("parsePlantStore refuses ids that could not name a directory", () => {
+  it("drops traversal and reserved names, keeps valid neighbours", () => {
+    const stored = JSON.stringify({
+      "..": plant({ id: ".." }),
+      _inbox: plant({ id: "_inbox" }),
+      "a/b": plant({ id: "a/b" }),
+      [P1]: plant({ id: P1 }),
+    });
+    expect(Object.keys(parsePlantStore(stored))).toEqual([P1]);
+  });
+
+  it("drops a record whose key disagrees with its id", () => {
+    const stored = JSON.stringify({ [P2]: plant({ id: P1 }), [P1]: plant({ id: P1 }) });
+    expect(Object.keys(parsePlantStore(stored))).toEqual([P1]);
+  });
+
+  it("keeps legacy UUID ids (pre-D-17 plants)", () => {
+    const stored = JSON.stringify({ [LEGACY_UUID]: plant({ id: LEGACY_UUID }) });
+    expect(parsePlantStore(stored)[LEGACY_UUID]?.name).toBe("Lemon");
   });
 });

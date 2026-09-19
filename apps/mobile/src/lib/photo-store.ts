@@ -5,6 +5,8 @@
 // is pure and tested; the filesystem/AsyncStorage wiring is the thin
 // photo-store-io.ts (same split as photo.ts vs photo-io.ts).
 
+import { isSafeRecordId, newestFirst } from "./local-id";
+
 /** Which engine produced the diagnosis. Since D-17 only "on-device" (Gemma 4
  * E2B) is ever written — "gemini" stays in the union so index entries recorded
  * before the pivot still parse instead of being dropped by the sanitizer. */
@@ -26,6 +28,10 @@ export const PHOTO_INDEX_STORAGE_KEY = "citrus.photo-index.v1";
 
 /** Documents subdirectory that holds all plant photos. */
 export const PHOTOS_DIR = "photos";
+
+/** Sibling of the plant directories for photos that have no plant yet (D-W2).
+ * Starts with "_" so isSafeRecordId can never mistake it for a plant. */
+export const PHOTO_INBOX_DIR = "_inbox";
 
 export function upsertPhoto(
   index: PhotoIndex,
@@ -51,27 +57,31 @@ export function photoForAssessment(
   return index[assessmentId] ?? null;
 }
 
+/** A plant's entries newest-first. Two walk shots can share a second, so the
+ * index key breaks the tie — the order must not depend on how AsyncStorage
+ * happened to serialize the map. */
 export function photosForPlant(index: PhotoIndex, plantId: string): PhotoIndexEntry[] {
-  return Object.values(index).filter((entry) => entry.plantId === plantId);
+  return Object.entries(index)
+    .filter(([, entry]) => entry.plantId === plantId)
+    .sort(([keyA, a], [keyB, b]) => newestFirst(a.createdAt, keyA, b.createdAt, keyB))
+    .map(([, entry]) => entry);
 }
 
 /** The plant's newest on-phone photo — what "Where to prune" analyses by
  * default, so having just assessed a plant never means photographing it again
  * (device feedback 2026-08-31). */
 export function latestPhotoForPlant(index: PhotoIndex, plantId: string): PhotoIndexEntry | null {
-  return (
-    photosForPlant(index, plantId).sort((a, b) =>
-      a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
-    )[0] ?? null
-  );
+  return photosForPlant(index, plantId)[0] ?? null;
 }
 
+/** plantId names the photo directory (D-W16) — it must be an id this app could
+ * have minted, never a path fragment from a crafted backup. */
 function isValidEntry(value: unknown): value is PhotoIndexEntry {
   if (typeof value !== "object" || value === null) return false;
   const e = value as Record<string, unknown>;
   return (
     typeof e.localUri === "string" &&
-    typeof e.plantId === "string" &&
+    isSafeRecordId(e.plantId) &&
     (e.engine === "gemini" || e.engine === "on-device") &&
     typeof e.createdAt === "string"
   );
@@ -90,7 +100,7 @@ export function parsePhotoIndex(json: string | null): PhotoIndex {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   const index: PhotoIndex = {};
   for (const [assessmentId, entry] of Object.entries(raw)) {
-    if (isValidEntry(entry)) index[assessmentId] = entry;
+    if (isSafeRecordId(assessmentId) && isValidEntry(entry)) index[assessmentId] = entry;
   }
   return index;
 }

@@ -16,6 +16,12 @@ import {
 // assessmentId → { localUri, plantId, engine, createdAt }; all mapping logic
 // here is pure, the IO wrapper (photo-store-io.ts) stays thin.
 
+// D-W16 shapes: the parser refuses keys / plantIds that could not be a path.
+const P1 = "p1-00000001";
+const A1 = "a1-00000001";
+const A2 = "a2-00000001";
+const A3 = "a3-00000001";
+
 function entry(overrides: Partial<PhotoIndexEntry> = {}): PhotoIndexEntry {
   return {
     localUri: "file:///docs/photos/p1/a.jpg",
@@ -83,7 +89,7 @@ describe("photoForAssessment / photosForPlant", () => {
 
 describe("parsePhotoIndex / serializePhotoIndex", () => {
   it("round-trips through JSON", () => {
-    const index = upsertPhoto({}, "a1", entry());
+    const index = upsertPhoto({}, A1, entry({ plantId: P1 }));
     expect(parsePhotoIndex(serializePhotoIndex(index))).toEqual(index);
   });
 
@@ -96,12 +102,27 @@ describe("parsePhotoIndex / serializePhotoIndex", () => {
 
   it("skips malformed entries but keeps valid ones (stored data is untrusted)", () => {
     const stored = JSON.stringify({
-      good: entry(),
-      "missing-fields": { localUri: "file:///x.jpg" },
-      "wrong-types": { localUri: 5, plantId: "p", engine: "gemini", createdAt: "t" },
+      [A1]: entry({ plantId: P1 }),
+      [A2]: { localUri: "file:///x.jpg" },
+      [A3]: { localUri: 5, plantId: P1, engine: "gemini", createdAt: "t" },
       "not-an-object": "nope",
     });
-    expect(Object.keys(parsePhotoIndex(stored))).toEqual(["good"]);
+    expect(Object.keys(parsePhotoIndex(stored))).toEqual([A1]);
+  });
+
+  // D-W16: plantId names the photo directory, the key names the assessment —
+  // neither may carry a path.
+  it("drops entries with an unsafe plantId or an unsafe key, keeps the rest", () => {
+    const stored = JSON.stringify({
+      [A1]: entry({ plantId: P1 }),
+      [A2]: entry({ plantId: "../.." }),
+      "..": entry({ plantId: P1 }),
+      _inbox: entry({ plantId: P1 }),
+      "3f2504e0-4f89-41d3-9a0c-0305e82c3301": entry({ plantId: "6ba7b810-9dad-11d1-80b4-00c04fd430c8" }),
+    });
+    expect(Object.keys(parsePhotoIndex(stored)).sort()).toEqual(
+      ["3f2504e0-4f89-41d3-9a0c-0305e82c3301", A1].sort(),
+    );
   });
 });
 
@@ -130,5 +151,22 @@ describe("latestPhotoForPlant", () => {
   it("returns the plant's newest photo, never another plant's", () => {
     expect(latestPhotoForPlant(index, "p1")?.localUri).toBe("file:///p1/new.jpg");
     expect(latestPhotoForPlant(index, "p3")).toBeNull();
+  });
+
+  // Two walk shots can share a second; the winner must not depend on the
+  // order AsyncStorage happened to serialize the map in.
+  it("breaks a createdAt tie by the index key, whichever order the map is in", () => {
+    const same = "2026-08-20T00:00:00Z";
+    const forward: PhotoIndex = {
+      a1: { localUri: "file:///p1/a1.jpg", plantId: "p1", engine: "on-device", createdAt: same },
+      a2: { localUri: "file:///p1/a2.jpg", plantId: "p1", engine: "on-device", createdAt: same },
+    };
+    const backward: PhotoIndex = { a2: forward.a2, a1: forward.a1 };
+    expect(latestPhotoForPlant(forward, "p1")?.localUri).toBe("file:///p1/a2.jpg");
+    expect(latestPhotoForPlant(backward, "p1")?.localUri).toBe("file:///p1/a2.jpg");
+    expect(photosForPlant(backward, "p1").map((e) => e.localUri)).toEqual([
+      "file:///p1/a2.jpg",
+      "file:///p1/a1.jpg",
+    ]);
   });
 });

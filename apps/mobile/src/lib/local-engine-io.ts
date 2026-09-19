@@ -10,7 +10,7 @@ import { Platform } from "react-native";
 import { Paths } from "expo-file-system";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import {
-  assessmentsForPlant,
+  comparisonAnchor,
   upsertAssessment,
   withComputedComparison,
   type StoredAssessment,
@@ -90,14 +90,29 @@ export interface PersistLocalAssessmentInput {
   raw: string;
 }
 
+/** Batch (F39) knobs. Omitted = the single-shot behaviour, byte-identical. */
+export interface PersistOptions {
+  /** Compare against the newest assessment made BEFORE this ISO instant instead
+   * of the newest overall — a walk's per-plant anchor (D-W6), so two angles of
+   * the same tree minutes apart never read "Worse" against each other. */
+  compareBeforeIso?: string;
+  /** False = leave the plant's cover alone; a batch picks its cover once, at
+   * the end (D-W9). Default true. */
+  updateCover?: boolean;
+}
+
 /** Insert an on-device diagnosis into the local assessment store (D-17). The
- * newest existing assessment is the comparison anchor: its health score drives
- * the deterministic better/same/worse delta injected here so the timeline trend
- * survives without a model-emitted comparison. Best-effort cover update. Throws
- * on a store write failure (the assess flow surfaces it as a retryable error). */
-export async function persistLocalAssessment(input: PersistLocalAssessmentInput): Promise<string> {
+ * comparison anchor (newest existing assessment, or the newest before
+ * `compareBeforeIso`) drives the deterministic better/same/worse delta injected
+ * here so the timeline trend survives without a model-emitted comparison.
+ * Best-effort cover update. Throws on a store write failure (the assess flow
+ * surfaces it as a retryable error). */
+export async function persistLocalAssessment(
+  input: PersistLocalAssessmentInput,
+  options?: PersistOptions,
+): Promise<string> {
   const store = await loadAssessmentStore();
-  const previous = assessmentsForPlant(store, input.plantId)[0] ?? null;
+  const previous = comparisonAnchor(store, input.plantId, options?.compareBeforeIso);
   const diagnosis = withComputedComparison(input.diagnosis, previous?.diagnosis.health_score ?? null);
 
   const assessment: StoredAssessment = {
@@ -111,10 +126,12 @@ export async function persistLocalAssessment(input: PersistLocalAssessmentInput)
   await saveAssessmentStore(upsertAssessment(store, assessment));
 
   // A missed cover only costs a thumbnail — never fail the assessment for it.
-  try {
-    await setPlantCover(input.plantId, assessment.id);
-  } catch (e) {
-    console.error("[local-engine-io] cover update failed:", (e as Error).message);
+  if (options?.updateCover !== false) {
+    try {
+      await setPlantCover(input.plantId, assessment.id);
+    } catch (e) {
+      console.error("[local-engine-io] cover update failed:", (e as Error).message);
+    }
   }
 
   return assessment.id;

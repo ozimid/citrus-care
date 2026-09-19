@@ -453,6 +453,41 @@ describe("persistDeferredAssessment (F35)", () => {
       }),
     ).resolves.toBeTruthy();
   });
+
+  // A walk photo is already durable in the plant's directory before the model
+  // runs; "Score it anyway" must not copy it a second time or re-enter the
+  // saving phase — it only writes the row and links the existing file.
+  it("with savedUri skips the save phase and links the durable uri", async () => {
+    const phases: string[] = [];
+    const { deps, saved, linked } = makeDeps();
+    const savedUri = "file:///docs/photos/p9/kept.jpg";
+    const id = await persistDeferredAssessment(
+      deps,
+      { plantId: "p9", photoUri: "file:///tmp/p.jpg", diagnosis: LOCAL_DIAGNOSIS, raw: LOCAL_JSON, savedUri },
+      { onPhase: (phase) => phases.push(phase) },
+    );
+    expect(id).toBe("assessment-local-1");
+    expect(phases).not.toContain("saving");
+    expect(saved).toEqual([]);
+    expect(linked).toHaveLength(1);
+    expect(linked[0].entry.localUri).toBe(savedUri);
+    expect(linked[0].entry.plantId).toBe("p9");
+  });
+
+  it("an empty or null savedUri still saves the photo first (single-shot path unchanged)", async () => {
+    for (const savedUri of [null, ""] as const) {
+      const phases: string[] = [];
+      const { deps, saved, linked } = makeDeps();
+      await persistDeferredAssessment(
+        deps,
+        { plantId: "p9", photoUri: "file:///tmp/p.jpg", diagnosis: LOCAL_DIAGNOSIS, raw: LOCAL_JSON, savedUri },
+        { onPhase: (phase) => phases.push(phase) },
+      );
+      expect(phases).toEqual(["saving"]);
+      expect(saved).toEqual([{ plantId: "p9", sourceUri: "file:///tmp/p.jpg" }]);
+      expect(linked[0].entry.localUri).toBe("file:///docs/photos/plant-1/saved.jpg");
+    }
+  });
 });
 
 // #2 — the diagnosis gets the same diagnostics channel the prune flow proved
