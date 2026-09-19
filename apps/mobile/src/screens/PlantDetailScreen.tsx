@@ -14,6 +14,7 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import { BeforeAfterSlider } from "../components/BeforeAfterSlider";
 import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
+import { PendingPhotosStrip } from "../components/PendingPhotosStrip";
 import { QuarantineCard } from "../components/QuarantineCard";
 import { PlantInfoCard } from "../components/PlantInfoCard";
 import { PlantToolsCard } from "../components/PlantToolsCard";
@@ -66,8 +67,11 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
   const [viewing, setViewing] = useState<{ diagnosis: AssessmentDiagnosis; entry: TimelineEntry } | null>(null);
   /** Full-screen photo (tap a timeline thumbnail). */
   const [viewingPhoto, setViewingPhoto] = useState<{ uri: string; caption?: string } | null>(null);
+  /** F39: bumps per load so the pending-photos strip re-reads the queue. */
+  const [loadCount, setLoadCount] = useState(0);
 
   const load = useCallback(async () => {
+    setLoadCount((c) => c + 1);
     try {
       const detail = await fetchPlantDetail(plantId);
       // Join the synced assessments to their on-phone photos (D-16).
@@ -98,7 +102,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
     if (!data) return;
     Alert.alert(
       `Delete ${data.plant.name}?`,
-      "This removes the plant, all of its assessments, and the photos stored on this phone. This can't be undone.",
+      "This removes the plant, all of its assessments, the photos stored on this phone, and any photos waiting for analysis. This can't be undone.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -221,6 +225,17 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
               )}
             </Pressable>
           </View>
+
+          {/* F39: this plant's photos still waiting for analysis (hidden when
+              none). Not timeline rows — nothing is scored yet. */}
+          <PendingPhotosStrip
+            plantId={plantId}
+            refreshToken={loadCount}
+            onChanged={() => {
+              load();
+              onChanged();
+            }}
+          />
 
           {pair ? (
             <BeforeAfterSlider

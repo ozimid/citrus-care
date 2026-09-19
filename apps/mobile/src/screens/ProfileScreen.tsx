@@ -25,6 +25,8 @@ import {
 } from "../lib/local-engine";
 import { availableDiskSpaceBytes, deviceCapabilitySnapshot } from "../lib/local-engine-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
+import { pendingCount } from "../lib/photo-queue";
+import { loadPhotoQueue } from "../lib/photo-queue-io";
 import { totalPhotoUsageBytes } from "../lib/photo-store-io";
 import { storageSummary } from "../lib/storage-budget";
 import { measureRecordBytes } from "../lib/storage-budget-io";
@@ -167,11 +169,14 @@ function DataCard() {
   const [busy, setBusy] = useState<null | "export" | "import">(null);
   /** "Records: 1.2 of 6 MB · Photos: 412 MB" — null until measured / on failure. */
   const [storageLine, setStorageLine] = useState<string | null>(null);
+  /** F39 / D-W11: photos still waiting for analysis are NOT in the backup. */
+  const [pending, setPending] = useState(0);
 
   const loadStorage = useCallback(async () => {
     try {
       const records = await measureRecordBytes();
       setStorageLine(storageSummary(records, totalPhotoUsageBytes()));
+      setPending(pendingCount(await loadPhotoQueue()));
     } catch (e) {
       // Best-effort: a card without the line beats a card that fails to load.
       console.error("[ProfileScreen] storage measurement failed:", (e as Error).message);
@@ -237,6 +242,12 @@ function DataCard() {
       {storageLine ? (
         <Text style={[styles.dataBody, { color: t.sub }]} accessibilityLabel={`Storage: ${storageLine}`}>
           {storageLine}
+        </Text>
+      ) : null}
+      {pending > 0 ? (
+        <Text style={[styles.dataBody, { color: t.text }]}>
+          Photos still waiting for analysis aren&apos;t included in a backup — analyze or remove them
+          first.
         </Text>
       ) : null}
       <View style={styles.dataRow}>

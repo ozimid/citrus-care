@@ -9,16 +9,26 @@ import {
   RoundButton,
   SnapTipsOverlay,
 } from "../components/CaptureOverlay";
+import { ImportSheet, type ImportProgress } from "../components/ImportSheet";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
 import type { AssessedResult } from "../lib/assess";
 import { preselectedPlantId } from "../lib/capture-modes";
 import { loadSnapTipsSeen, markSnapTipsSeen } from "../lib/capture-modes-io";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
+import { MAX_IMPORT, type AssignEvidence } from "../lib/photo-queue";
+import {
+  enqueueWalkShot,
+  IMPORT_NO_SPACE_ERROR,
+  IMPORT_PARTIAL_ERROR,
+  importGalleryAssets,
+  newWalkId,
+} from "../lib/photo-queue-io";
 import { type PlantListItem } from "../lib/plants";
 import { fetchPlants } from "../lib/plants-io";
 import { RADIUS } from "../lib/theme";
 import { DiagnosisScreen } from "./DiagnosisScreen";
 import { ReviewScreen } from "./ReviewScreen";
+import { BATCH_ANALYSIS_STUB_NOTICE, WalkReviewScreen } from "./WalkReviewScreen";
 
 // Full-screen capture flow (design doc §3/§6), opened from the tab-bar FAB:
 // camera with one neutral guide, gallery import at equal prominence, plant
@@ -29,9 +39,21 @@ import { ReviewScreen } from "./ReviewScreen";
 // saw, and a rejected (non-plant) photo never reaches DiagnosisScreen.
 // F35: no plant needs to be selected — snap first, and the AI drafts the
 // new-plant form from the photo (ReviewScreen owns that deferred flow).
+// F39: the gallery picks up to MAX_IMPORT photos. One photo is the flow above,
+// unchanged; several go into the durable photo queue (D-W2) and open the
+// review screen, which asks "Analyze now / Later" every time (D-W7). "Save for
+// later" on the review screen queues a single camera shot the same way and
+// returns to the viewfinder — the next tree is one shutter tap away, not a
+// full capture re-entry. (Phase 3's walk mode owns the stay-in-camera loop
+// proper; this is the honest minimum until then.)
 
 const GENERIC_PHOTO_ERROR = "Couldn't process that photo. Please try again.";
 const GENERIC_PLANTS_ERROR = "Could not load your plants. Close and try again.";
+const GENERIC_GALLERY_ERROR = "Couldn't open your photos. Please try again.";
+const IMPORT_FAILED_ERROR = "Couldn't import those photos. Please try again.";
+const SAVED_LATER_NOTICE = "Saved for later — find it on the Plants tab";
+/** How long the saved-for-later toast stays on the viewfinder. */
+const SAVED_NOTICE_MS = 1800;
 
 interface Props {
   onClose: () => void;
@@ -58,6 +80,13 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   const [error, setError] = useState<string | null>(null);
   /** F36: null until the seen-flag loads; true = the guide is on screen. */
   const [tipsOpen, setTipsOpen] = useState(false);
+  /** F39: one walk per open capture — every queued photo from this session
+   * shares it, so the review and the run see them as one visit (D-W6). */
+  const [walkId] = useState(() => newWalkId());
+  const [importing, setImporting] = useState<ImportProgress | null>(null);
+  /** The import landed; showing the review with its one-line notice. */
+  const [walkReview, setWalkReview] = useState<{ notice: string | null } | null>(null);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +128,21 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
 
   const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
   const ready = !busy;
+
+  /** Leave after the import was reviewed: the Plants tab refreshes so its
+   * pending-walk card is right, then close. */
+  const finishWalk = useCallback(() => {
+    onAssessed?.();
+    onClose();
+  }, [onAssessed, onClose]);
+
+  // The saved-for-later toast is read on the viewfinder, then fades; the
+  // camera stays up for the next tree.
+  useEffect(() => {
+    if (!savedNotice) return;
+    const timer = setTimeout(() => setSavedNotice(null), SAVED_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [savedNotice]);
 
   /** Downscale into the review photo. True when the copy exists (the caller
    * may then drop its own original); the user sees only the generic error. */
@@ -146,19 +190,76 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
 
   const pickFromGallery = useCallback(async () => {
     setError(null);
+    // Set BEFORE the await: the picker copies every selected original into
+    // cache before it returns (seconds for 30), and the user must see why.
+    setImporting({ kind: "picking" });
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         quality: 1,
+        allowsMultipleSelection: true,
+        selectionLimit: MAX_IMPORT,
+        orderedSelection: true,
+        exif: true,
       });
-      if (result.canceled || !result.assets[0]) return;
-      const asset = result.assets[0];
-      await prepare(asset.uri, asset.width, asset.height);
+      if (result.canceled || result.assets.length === 0) return;
+      if (result.assets.length === 1) {
+        // One photo: today's single-shot flow, unchanged.
+        setImporting(null);
+        const asset = result.assets[0];
+        await prepare(asset.uri, asset.width, asset.height);
+        return;
+      }
+      // Several: each becomes durable before the next starts (D-W2); the
+      // sheet's count is true because of that.
+      setImporting({ kind: "importing", done: 0, total: result.assets.length });
+      // D-W3: the chip is hard evidence only when it was set for THIS import
+      // (this plant's own screen, or the only plant). A chip that merely
+      // happened to be set is a guess the review shows as one — twenty photos
+      // of a whole garden must never land on one tree without a badge.
+      const seedEvidence: AssignEvidence = !selectedPlant
+        ? "none"
+        : initialPlantId === selectedPlant.id || plants?.length === 1
+          ? "user"
+          : "carried";
+      const { imported, failed } = await importGalleryAssets(
+        result.assets,
+        { walkId, seedPlantId: selectedPlant?.id ?? null, seedEvidence },
+        (done, total) => setImporting({ kind: "importing", done, total }),
+      );
+      if (imported === 0) {
+        setError(IMPORT_FAILED_ERROR);
+        return;
+      }
+      setWalkReview({ notice: failed > 0 ? IMPORT_PARTIAL_ERROR(failed) : null });
     } catch (e) {
       console.error("[CaptureScreen] gallery import failed:", (e as Error).message);
-      setError("Couldn't open your photos. Please try again.");
+      // The no-space message is written for the user; everything else is generic.
+      setError((e as Error).message === IMPORT_NO_SPACE_ERROR ? IMPORT_NO_SPACE_ERROR : GENERIC_GALLERY_ERROR);
+    } finally {
+      setImporting(null);
     }
-  }, [prepare, selectedPlantId]);
+  }, [initialPlantId, plants, prepare, selectedPlant, walkId]);
+
+  /** F39 "Save for later": the reviewed shot goes to the durable queue under
+   * the chosen plant (or none); the Plants tab behind refreshes and the
+   * viewfinder comes back for the next tree. */
+  const saveForLater = useCallback(async () => {
+    if (!photo) return;
+    await enqueueWalkShot({
+      sourceUri: photo.uri,
+      width: photo.width,
+      height: photo.height,
+      plantId: selectedPlant?.id ?? null,
+      evidence: selectedPlant ? "user" : "none",
+      walkId,
+      source: "camera",
+      takenAt: new Date().toISOString(),
+    });
+    setPhoto(null);
+    setSavedNotice(SAVED_LATER_NOTICE);
+    onAssessed?.();
+  }, [onAssessed, photo, selectedPlant, walkId]);
 
   const resultPlant = selectedPlant ?? savedPlant;
   if (result && resultPlant) {
@@ -168,6 +269,19 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         plantId={resultPlant.id}
         plantName={resultPlant.name}
         onDone={onClose}
+      />
+    );
+  }
+
+  if (walkReview) {
+    return (
+      <WalkReviewScreen
+        walkId={walkId}
+        notice={walkReview.notice}
+        // Phase 1 stub: the batch runner lands next; items stay pending.
+        onAnalyze={() => setWalkReview({ notice: BATCH_ANALYSIS_STUB_NOTICE })}
+        onLater={finishWalk}
+        onClose={finishWalk}
       />
     );
   }
@@ -185,6 +299,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
           if (plant) setSavedPlant(plant);
           onAssessed?.();
         }}
+        onSaveForLater={saveForLater}
       />
     );
   }
@@ -219,14 +334,19 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
       <View style={styles.bottomArea}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {plantsError ? <Text style={styles.error}>{GENERIC_PLANTS_ERROR}</Text> : null}
+        {savedNotice ? (
+          <Text style={styles.toast} accessibilityLiveRegion="polite">
+            ✓ {savedNotice}
+          </Text>
+        ) : null}
         <CaptureHint />
         <View style={styles.controls}>
           <View style={styles.sideControl}>
             <RoundButton
-              label="Import from gallery"
+              label={`Import from gallery, up to ${MAX_IMPORT} photos`}
               glyph="🖼️"
               size={56}
-              disabled={busy}
+              disabled={busy || importing !== null}
               onPress={pickFromGallery}
             />
             <Text style={styles.controlCaption}>Gallery</Text>
@@ -258,6 +378,8 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
           void markSnapTipsSeen();
         }}
       />
+
+      <ImportSheet progress={importing} />
 
       <PlantPickerSheet
         visible={pickerOpen}
@@ -310,8 +432,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 6,
   },
-  sideControl: { alignItems: "center", gap: 4 },
-  controlCaption: { color: "#ffffff", fontSize: 11, fontWeight: "600" },
+  /** Both sides flex equally so a longer caption never shifts the shutter. */
+  sideControl: { flex: 1, alignItems: "center", gap: 4 },
+  controlCaption: { color: "#ffffff", fontSize: 11, fontWeight: "600", textAlign: "center" },
   shutter: {
     width: 76,
     height: 76,
@@ -337,6 +460,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 13,
+    textAlign: "center",
+    alignSelf: "center",
+    overflow: "hidden",
+  },
+  toast: {
+    color: "#ffffff",
+    backgroundColor: "rgba(5,150,105,0.92)",
+    borderRadius: RADIUS,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontWeight: "600",
     textAlign: "center",
     alignSelf: "center",
     overflow: "hidden",

@@ -99,6 +99,18 @@ describe("buildBackup / serializeBackup / parseBackup", () => {
     const parsed = parseBackup(JSON.stringify({ app: "citrus-care", version: 1, exportedAt: "t" }))?.stores;
     expect(parsed).toEqual({ plants: {}, assessments: {}, wateringLog: {}, photoIndex: {}, chat: {} });
   });
+
+  // D-W11: the photo queue is NOT in the backup. Its photos have no assessment
+  // yet, the photo carrier is keyed by assessment id, and a queue record on a
+  // dead uri is worse than none. The on-card copy says "Not in a backup until
+  // analyzed" for the same reason.
+  it("carries no photo-queue section (D-W11)", () => {
+    const doc = buildBackup(stores(), "2026-09-19T12:00:00Z");
+    const keys = Object.keys(doc);
+    expect(keys.filter((k) => /queue/i.test(k))).toEqual([]);
+    expect(keys).not.toContain("photoQueue");
+    expect(serializeBackup(doc)).not.toMatch(/photoQueue|photo-queue/);
+  });
 });
 
 describe("mergeBackup", () => {

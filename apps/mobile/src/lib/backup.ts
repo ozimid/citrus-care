@@ -30,7 +30,11 @@ export interface BackupStores {
   photoIndex: PhotoIndex;
   /** v3 (F38) — the per-plant conversations. Pruning plans are deliberately
    * NOT here: a plan IS its annotated photo, and the photo carrier below is
-   * keyed to assessment ids, so a restored plan would open on a dead file. */
+   * keyed to assessment ids, so a restored plan would open on a dead file.
+   * The F39 photo QUEUE (`citrus.photo-queue.v1`) is not here either (D-W11):
+   * its photos have no assessment yet, so the carrier cannot bring them, and
+   * a queue record pointing at a file the new phone never had is worse than
+   * none. The data card says "Not in a backup until analyzed". */
   chat: ChatStore;
 }
 

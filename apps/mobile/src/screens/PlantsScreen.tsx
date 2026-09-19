@@ -14,6 +14,7 @@ import {
 import { LocalEngineSetupCard } from "../components/LocalEngineSetupCard";
 import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
+import { PendingWalkCard } from "../components/PendingWalkCard";
 import { TodayCard } from "../components/TodayCard";
 import { bandColor, healthBand } from "../lib/health";
 import { gardenTrend, type PlantListItem } from "../lib/plants";
@@ -58,6 +59,8 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
    * granted (a list view must never throw a permission prompt). */
   const [alert, setAlert] = useState<WeatherAlert | null>(null);
   const [hemisphere, setHemisphere] = useState<Hemisphere>("northern");
+  /** F39: bumps per load so the pending-walk card re-reads the queue. */
+  const [loadCount, setLoadCount] = useState(0);
 
   /**
    * F20 chips, computed for the whole list in one pass AFTER the plants render.
@@ -113,6 +116,7 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   }, []);
 
   const load = useCallback(async () => {
+    setLoadCount((c) => c + 1);
     try {
       const plants = await fetchPlants();
       setItems(plants);
@@ -171,6 +175,8 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           ListHeaderComponent={
             <>
               <TodayCard items={items} plans={plans} alert={alert} hemisphere={hemisphere} t={t} />
+              {/* F39: photos waiting for analysis (hidden when none). */}
+              <PendingWalkCard onChanged={load} refreshToken={loadCount} />
               <LocalEngineSetupCard />
             </>
           }

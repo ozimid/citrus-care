@@ -7,6 +7,7 @@ import type { NewPlantInput } from "@citrus/shared";
 import { allAssessments, type AssessmentStore } from "./assessment-store";
 import { deletePlantAssessments, loadAssessmentStore } from "./assessment-store-io";
 import { deletePlantChat } from "./plant-chat-io";
+import { deletePlantQueuedPhotos } from "./photo-queue-io";
 import { deletePlantPrunePlans } from "./prune-io";
 import { buildStoredPlant, GENERIC_CREATE_PLANT_ERROR } from "./new-plant";
 import { newLocalId } from "./local-id";
@@ -115,9 +116,9 @@ export async function updatePlant(plantId: string, data: NewPlantInput): Promise
   }
 }
 
-/** Delete the plant and cascade its assessments, conversation, pruning plans
- * and on-phone photos. Every cleanup is best-effort; the plant-record delete
- * must succeed (its failure is the one surfaced to the user). */
+/** Delete the plant and cascade its assessments, conversation, pruning plans,
+ * pending walk photos and on-phone photos. Every cleanup is best-effort; the
+ * plant-record delete must succeed (its failure is the one surfaced to the user). */
 export async function deletePlantWithPhotos(plantId: string): Promise<void> {
   try {
     await deletePlantAssessments(plantId);
@@ -133,6 +134,13 @@ export async function deletePlantWithPhotos(plantId: string): Promise<void> {
     await deletePlantPrunePlans(plantId);
   } catch (e) {
     console.error("[deletePlantWithPhotos] pruning plan cleanup failed:", (e as Error).message);
+  }
+  // Queue records first: their files live in the plant directory that
+  // deleteLocalPlantPhotos removes next, so no record may outlive the files.
+  try {
+    await deletePlantQueuedPhotos(plantId);
+  } catch (e) {
+    console.error("[deletePlantWithPhotos] pending photo cleanup failed:", (e as Error).message);
   }
   try {
     await deleteLocalPlantPhotos(plantId);

@@ -1,8 +1,9 @@
 import { StatusBar } from "expo-status-bar";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal, StyleSheet, View } from "react-native";
 import { LocalEngineProvider } from "./src/components/LocalEngineProvider";
 import { TabBar, type Tab } from "./src/components/TabBar";
+import { recoverInterruptedWalk } from "./src/lib/photo-queue-io";
 import { useTheme } from "./src/lib/theme-io";
 import { CaptureScreen } from "./src/screens/CaptureScreen";
 import { PlantsScreen } from "./src/screens/PlantsScreen";
@@ -20,6 +21,13 @@ export default function App() {
   // Bumped when an assessment persists so the Plants tab behind the capture
   // modal reloads and the new score is visible the moment the modal closes.
   const [plantsVersion, setPlantsVersion] = useState(0);
+
+  // D-W2: once per process, before any capture — a walk the last process
+  // died in the middle of is reconciled against the stores and inbox
+  // orphans are swept. Best-effort inside; nothing here can block the app.
+  useEffect(() => {
+    void recoverInterruptedWalk();
+  }, []);
 
   return (
     // The on-device engine (D-17) loads once here, above the tabs, so the model

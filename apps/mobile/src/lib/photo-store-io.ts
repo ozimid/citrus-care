@@ -5,7 +5,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
-import { isSafeRecordId } from "./local-id";
+import { isSafeBasename, isSafeRecordId } from "./local-id";
 import {
   parsePhotoIndex,
   PHOTO_INBOX_DIR,
@@ -51,6 +51,27 @@ export async function savePlantPhoto(plantId: string, sourceUri: string): Promis
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, photoFileName(Date.now(), Math.random()));
   await new File(sourceUri).copy(dest);
+  return dest.uri;
+}
+
+/** Move a file into a photo directory — documents/photos/{dirName}/{basename}
+ * — and return its new uri. A same-volume rename, so a walk shot is durable
+ * the instant this resolves (D-W2): the manipulator output goes into the
+ * `_inbox` directory first, then on into its plant directory. `basename` must
+ * be a photoFileName (D-W16); omitted, a fresh one is minted. savePlantPhoto
+ * (copy) stays as the single-shot path's primitive. */
+export async function moveIntoPhotoDir(
+  dirName: string,
+  sourceUri: string,
+  basename?: string,
+): Promise<string> {
+  if (basename !== undefined && !isSafeBasename(basename)) {
+    throw new Error("invalid photo file name");
+  }
+  const dir = plantPhotoDir(dirName);
+  dir.create({ intermediates: true, idempotent: true });
+  const dest = new File(dir, basename ?? photoFileName(Date.now(), Math.random()));
+  await new File(sourceUri).move(dest);
   return dest.uri;
 }
 

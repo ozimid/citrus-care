@@ -43,6 +43,7 @@ const PHASE_LABEL: Record<AssessPhase, string> = {
 // First inference on a cold model is legitimately slow — say so rather than
 // leaving the user staring at a spinner (there is no cloud to fall back to).
 const SLOW_LABEL = "Still analyzing — the first one takes longer…";
+const SAVE_LATER_ERROR = "Couldn't save that photo. Please try again.";
 
 interface Props {
   photo: PreparedPhoto;
@@ -54,9 +55,21 @@ interface Props {
   onClose: () => void;
   /** `plant` is set when the assessment landed on a just-created plant. */
   onAssessed: (result: AssessedResult, plant?: { id: string; name: string }) => void;
+  /** F39: queue the photo instead of analyzing it now (D-W7 "Later"). The
+   * parent moves it into the durable queue and leaves; a throw shows the
+   * generic error here. Absent = no pill. */
+  onSaveForLater?: () => Promise<void>;
 }
 
-export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onAssessed }: Props) {
+export function ReviewScreen({
+  photo,
+  plantId,
+  plantName,
+  onRetake,
+  onClose,
+  onAssessed,
+  onSaveForLater,
+}: Props) {
   const { t } = useTheme();
   const localEngine = useLocalEngine();
   const [phase, setPhase] = useState<AssessPhase | null>(null);
@@ -77,7 +90,11 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
   const [deferred, setDeferred] = useState<{ diagnosis: AssessmentDiagnosis; raw: string } | null>(
     null,
   );
+  /** F39: the "Save for later" enqueue is in flight. */
+  const [saving, setSaving] = useState(false);
   const busy = phase !== null;
+  /** Nothing else may start while either the analysis or the save runs. */
+  const locked = busy || saving;
   const busyLabel = slow ? SLOW_LABEL : phase ? PHASE_LABEL[phase] : "";
 
   // A 25-120 s run against a 30 s screen timeout: hold the screen while the
@@ -157,6 +174,22 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
     }
   }, [localEngine, onAssessed, photo.height, photo.uri, photo.width, plantId, savedUri]);
 
+  const saveForLater = useCallback(async () => {
+    if (!onSaveForLater || inFlightRef.current) return;
+    inFlightRef.current = true;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSaveForLater();
+    } catch (e) {
+      console.error("[ReviewScreen] save for later failed:", (e as Error).message);
+      setError(SAVE_LATER_ERROR);
+    } finally {
+      inFlightRef.current = false;
+      setSaving(false);
+    }
+  }, [onSaveForLater]);
+
   /** F35: the user saved the drafted plant — now persist photo + assessment. */
   const completeDeferred = useCallback(
     async (newPlantId: string, name: string) => {
@@ -197,13 +230,13 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
         accessibilityLabel="Captured photo"
       />
       <View style={styles.topBar}>
-        <RoundButton label="Retake" glyph="‹" disabled={busy} onPress={() => leave(onRetake)} />
+        <RoundButton label="Retake" glyph="‹" disabled={locked} onPress={() => leave(onRetake)} />
         <View style={styles.chip}>
           <Text style={styles.chipText} numberOfLines={1}>
             {plantName ? `🪴 ${plantName}` : "New plant ✨"}
           </Text>
         </View>
-        <RoundButton label="Close" glyph="✕" disabled={busy} onPress={() => leave(onClose)} />
+        <RoundButton label="Close" glyph="✕" disabled={locked} onPress={() => leave(onClose)} />
       </View>
       <View style={styles.bottomArea}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -240,9 +273,9 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
           accessibilityLabel={
             busy ? busyLabel : rejection ? "Retake photo" : error ? "Try again" : "Analyze"
           }
-          disabled={busy}
+          disabled={locked}
           onPress={rejection ? () => leave(onRetake) : () => analyze()}
-          style={[styles.analyze, { backgroundColor: t.green, opacity: busy ? 0.75 : 1 }]}
+          style={[styles.analyze, { backgroundColor: t.green, opacity: locked ? 0.75 : 1 }]}
         >
           {busy ? (
             <View style={styles.analyzeBusy}>
@@ -255,6 +288,26 @@ export function ReviewScreen({ photo, plantId, plantName, onRetake, onClose, onA
             </Text>
           )}
         </Pressable>
+        {/* F39 / D-W7: the honest alternative to waiting here — the photo goes
+            to the durable queue and is analyzed from the Plants tab later. */}
+        {onSaveForLater && !rejection ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={plantId ? "Save for later" : "Save without a plant — pick one later"}
+            accessibilityState={{ disabled: locked }}
+            disabled={locked}
+            onPress={saveForLater}
+            style={[styles.later, { opacity: locked && !saving ? 0.5 : 1 }]}
+          >
+            {saving ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.laterText}>
+                {plantId ? "Save for later" : "Save without a plant — pick one later"}
+              </Text>
+            )}
+          </Pressable>
+        ) : null}
         {rejection && !busy ? (
           <Pressable
             accessibilityRole="button"
@@ -320,6 +373,17 @@ const styles = StyleSheet.create({
   },
   analyzeBusy: { flexDirection: "row", alignItems: "center", gap: 10 },
   analyzeText: { fontSize: 16, fontWeight: "600" },
+  later: {
+    minHeight: 48,
+    borderRadius: RADIUS,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.6)",
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  laterText: { color: "#ffffff", fontSize: 15, fontWeight: "600", textAlign: "center" },
   note: { color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center" },
   rejection: {
     backgroundColor: "rgba(0,0,0,0.72)",

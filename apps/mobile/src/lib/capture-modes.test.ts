@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CAPTURE_HINT, SNAP_TIPS, SNAP_TIPS_SEEN_KEY, preselectedPlantId } from "./capture-modes";
+import { CAPTURE_HINT, SNAP_TIPS, SNAP_TIPS_SEEN_KEY, filterPlantsByQuery, preselectedPlantId } from "./capture-modes";
+import type { PlantListItem } from "./plants";
 
 // F21 deleted the three capture modes: classifying the photo was the user's
 // job only because the prompt branched on it, and it manufactured false
@@ -61,5 +62,57 @@ describe("SNAP_TIPS", () => {
 
   it("seen-flag key follows the store convention", () => {
     expect(SNAP_TIPS_SEEN_KEY).toBe("citrus.snap-tips-seen.v1");
+  });
+});
+
+// F39 (Garden Walk): the plant picker gains a search field and a numeric-aware
+// order, because a garden of thirty numbered trees is browsed as "L2, L3, L10",
+// not "L10, L2, L3".
+describe("filterPlantsByQuery", () => {
+  function plant(id: string, name: string, extra: Partial<PlantListItem> = {}): PlantListItem {
+    return {
+      id,
+      name,
+      plantType: "tree",
+      species: null,
+      subLabel: "Tree · Unknown cultivar",
+      latestScore: null,
+      trend: null,
+      createdAt: "2026-09-19T00:00:00.000Z",
+      location: null,
+      zipCode: null,
+      careProfile: null,
+      lastAssessedAt: null,
+      coverAssessmentId: null,
+      coverUri: null,
+      ...extra,
+    };
+  }
+  const plants = [
+    plant("a", "L10"),
+    plant("b", "L2", { species: "Meyer lemon" }),
+    plant("c", "Lime tree", { subLabel: "Tree · Lime · Patio" }),
+    plant("d", "L3"),
+    plant("e", "orange", { species: "Citrus sinensis" }),
+  ];
+
+  it("returns every plant in numeric-aware name order for an empty query", () => {
+    expect(filterPlantsByQuery(plants, "").map((p) => p.name)).toEqual(["L2", "L3", "L10", "Lime tree", "orange"]);
+    expect(filterPlantsByQuery(plants, "   ").map((p) => p.name)).toEqual(["L2", "L3", "L10", "Lime tree", "orange"]);
+  });
+
+  it("matches on name, species or sub-label, case-insensitively, keeping the order", () => {
+    expect(filterPlantsByQuery(plants, "tree").map((p) => p.name)).toEqual(["L2", "L3", "L10", "Lime tree", "orange"]);
+    expect(filterPlantsByQuery(plants, "l1").map((p) => p.name)).toEqual(["L10"]);
+    expect(filterPlantsByQuery(plants, "MEYER").map((p) => p.name)).toEqual(["L2"]);
+    expect(filterPlantsByQuery(plants, "patio").map((p) => p.name)).toEqual(["Lime tree"]);
+    expect(filterPlantsByQuery(plants, "sinensis").map((p) => p.name)).toEqual(["orange"]);
+    expect(filterPlantsByQuery(plants, "zzz")).toEqual([]);
+  });
+
+  it("does not mutate the list it is given", () => {
+    const before = plants.map((p) => p.id);
+    filterPlantsByQuery(plants, "");
+    expect(plants.map((p) => p.id)).toEqual(before);
   });
 });

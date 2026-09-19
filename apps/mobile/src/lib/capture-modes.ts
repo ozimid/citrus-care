@@ -5,6 +5,8 @@
 // What survives is the photo-quality nudge the capture research earned —
 // closer is better — now stated once, for every shot.
 
+import type { PlantListItem } from "./plants";
+
 /** The one viewfinder hint. It asks for a good photo without asking the user
  * what the photo is; the model decides that (diagnosis.subject). */
 export const CAPTURE_HINT = "Get close to the sick part in good light — the whole photo is analyzed, nothing gets cropped";
@@ -47,3 +49,17 @@ export const SNAP_TIPS: SnapTip[] = [
 ];
 
 export const SNAP_TIPS_SEEN_KEY = "citrus.snap-tips-seen.v1";
+
+// F39 (Garden Walk): the plant picker in the review screen gains a search
+// field. Numeric-aware ordering, because a garden of numbered trees is browsed
+// as "L2, L3, L10" — the way the tags read on the stakes — not "L10, L2, L3".
+
+/** Plants matching `query` on name, species or sub-label (case-insensitive),
+ * in numeric-aware name order; an empty query lists every plant. Pure. */
+export function filterPlantsByQuery(items: PlantListItem[], query: string): PlantListItem[] {
+  const needle = query.trim().toLowerCase();
+  const matches = needle
+    ? items.filter((plant) => [plant.name, plant.species, plant.subLabel].some((v) => v?.toLowerCase().includes(needle)))
+    : [...items];
+  return matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+}
