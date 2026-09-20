@@ -18,6 +18,7 @@ import { assessmentDiagnosisSchema, type AssessmentDiagnosis } from "@citrus/sha
 import type { AssessmentStore } from "./assessment-store";
 import { isSafeBasename, isSafeRecordId } from "./local-id";
 import { PHOTO_INBOX_DIR, type PhotoIndex } from "./photo-store";
+import { isCodeDigest } from "./plant-tags";
 
 export const PHOTO_QUEUE_STORAGE_KEY = "citrus.photo-queue.v1";
 /** Ring of the last 30 per-photo run durations — D-W8's "about N min". */
@@ -52,10 +53,13 @@ export type AssignEvidence =
   | "file-tag"
   | "none";
 const EVIDENCE: readonly string[] = ["user", "user-run", "code-scan", "carried", "tag-card", "marker", "group", "file-tag", "none"];
-const DECIDING: readonly string[] = ["user", "user-run", "code-scan", "tag-card", "marker"];
+const DECIDING: readonly string[] = ["user", "user-run", "code-scan", "tag-card", "marker", "file-tag"];
 
-/** Evidence strong enough to decide a group or end a run (rungs 1–3); the
- * rest is propagation or suggestion and yields to it. */
+/** Evidence strong enough to decide a group or end a run (rungs 1–3, and the
+ * deciding half of rung 5: `file-tag` is only ever set for a marker token the
+ * user typed into the file name on purpose — "#L3", "TAG-L3" — so it is the
+ * user's own decision, not a guess); the rest is propagation or suggestion
+ * and yields to it. */
 export function isDecidingEvidence(evidence: AssignEvidence): boolean {
   return DECIDING.includes(evidence);
 }
@@ -75,6 +79,11 @@ export interface QueuedPhoto {
   height: number;
   /** Set on parse when the stored dimensions were unusable; the io re-measures. */
   needsDims?: true;
+  /** A tag card (rung 3) or a photo the user marked as a tree marker (rung 1c):
+   * it carries its plant to the photos after it (assignByMarkers) but is not a
+   * plant photo — never runnable, never counted as waiting, deleted with the
+   * walk when the assignments are saved. Only ever the literal true. */
+  isMarker?: true;
   /** EXIF instant; null when unknown — never a fake "now" for a gallery photo. */
   takenAt: string | null;
   addedAt: string;
@@ -145,20 +154,30 @@ function byShotOrder(a: QueuedPhoto, b: QueuedPhoto): number {
   return takenAtAsc(a.takenAt, b.takenAt) || cmp(a.id, b.id);
 }
 
+/** A walk's DISPLAY order: shooting time (unknown last), then arrival, then
+ * id — the order the review lists photos in, and the order a tag card or
+ * tree marker hands its plant forward along (assignByMarkers), so what the
+ * user sees is what propagates. */
+export function byWalkOrder(a: QueuedPhoto, b: QueuedPhoto): number {
+  return takenAtAsc(a.takenAt, b.takenAt) || cmp(a.addedAt, b.addedAt) || cmp(a.id, b.id);
+}
+
 /** Run order (D-W6): walk, then plant, then shooting order — so a plant's
  * photos from one walk run back to back against one anchor. */
 function byRunOrder(a: QueuedPhoto, b: QueuedPhoto): number {
   return cmp(a.walkId, b.walkId) || cmp(a.plantId ?? "", b.plantId ?? "") || byShotOrder(a, b);
 }
 
+/** A plant's photos in shooting order. A marker is not one of them. */
 export function queuedForPlant(q: PhotoQueue, plantId: string): QueuedPhoto[] {
   return Object.values(q)
-    .filter((item) => item.plantId === plantId)
+    .filter((item) => item.plantId === plantId && !item.isMarker)
     .sort(byShotOrder);
 }
 
+/** Pending or failed — and a plant photo: a marker never waits for the model. */
 function awaitsAnalysis(item: QueuedPhoto): boolean {
-  return item.status === "pending" || item.status === "failed";
+  return !item.isMarker && (item.status === "pending" || item.status === "failed");
 }
 
 /** Photos still waiting for the model (pending or failed) — the honest count
@@ -190,10 +209,11 @@ export function runnableItems(q: PhotoQueue, filter: { walkId?: string; plantId?
     .sort(byRunOrder);
 }
 
-/** Photos automation has given up on, or the model refused — the user decides. */
+/** Photos automation has given up on, or the model refused — the user decides.
+ * A marker is not one of them: the user already decided what it is. */
 export function stalledItems(q: PhotoQueue): QueuedPhoto[] {
   return Object.values(q)
-    .filter((item) => item.attempts >= MAX_AUTO_ATTEMPTS || item.status === "rejected")
+    .filter((item) => !item.isMarker && (item.attempts >= MAX_AUTO_ATTEMPTS || item.status === "rejected"))
     .sort(byRunOrder);
 }
 
@@ -253,6 +273,25 @@ export function assignedPhoto(item: QueuedPhoto, plantId: string | null, evidenc
 
 export function assignQueued(q: PhotoQueue, id: string, plantId: string | null, evidence: AssignEvidence): PhotoQueue {
   return patch(q, id, (item) => assignedPhoto(item, plantId, evidence));
+}
+
+/** Rungs 1c / 3: this photo is a tag card or a tree marker for `plantId` — it
+ * leaves the runnable set and hands its plant to the photos after it (the
+ * caller re-runs assignByMarkers). The code digest, when the io stored one, is
+ * kept: it is what tells a tag card from a hand-marked stake photo. */
+export function markAsMarker(q: PhotoQueue, id: string, plantId: string): PhotoQueue {
+  return patch(q, id, (item) => ({ ...assignedPhoto(item, plantId, "marker"), isMarker: true }));
+}
+
+/** The "Plant photo" toggle: the card is a plant photo after all — of the plant
+ * it was marking, decided by the user (D-W3 rung 1). A marker that somehow
+ * has no plant becomes an unassigned photo. Unknown id or not a marker → same
+ * queue. */
+export function unmarkMarker(q: PhotoQueue, id: string): PhotoQueue {
+  const item = q[id];
+  if (!item?.isMarker) return q;
+  const { isMarker: _gone, ...rest } = item;
+  return { ...q, [id]: { ...rest, evidence: rest.plantId === null ? "none" : "user" } };
 }
 
 function withChanges(q: PhotoQueue, changed: PhotoQueue): PhotoQueue {
@@ -476,7 +515,9 @@ function validRecord(key: string, value: unknown): QueuedPhoto | null {
     takenAt,
     addedAt: optionalIso(r.addedAt) ?? takenAt ?? "",
     source: r.source === "camera" ? "camera" : "gallery",
-    codeDigest: optionalString(r.codeDigest),
+    // D-W16: a digest is the one shape isCodeDigest accepts; anything else
+    // would render as a code row whose Bind action can only fail.
+    codeDigest: isCodeDigest(r.codeDigest) ? r.codeDigest : null,
     fileName: optionalString(r.fileName)?.slice(0, MAX_FILE_NAME) ?? null,
     status: r.status as QueueStatus,
     startedAt: optionalIso(r.startedAt),
@@ -487,6 +528,7 @@ function validRecord(key: string, value: unknown): QueuedPhoto | null {
     rejectedDiagnosis: rejected?.success ? rejected.data : null,
   };
   if (!dimsOk || r.needsDims === true) item.needsDims = true;
+  if (r.isMarker === true) item.isMarker = true;
   return item;
 }
 

@@ -8,6 +8,16 @@
 // A queued file lives in documents/photos/{plantId | _inbox}/{basename}; the
 // record stores the basename only and the uri is rebuilt through plantPhotoDir,
 // the single guarded directory constructor (D-W16).
+//
+// Phase 4 (D-W3 rungs 1c / 3 / 5): a photo that decodes a QR on import is a
+// TAG CARD; a photo the user marks is a TREE MARKER; both hand their plant to
+// the photos after them (assignByMarkers, pure) and are deleted when the walk
+// is analyzed or parked. Every re-assignment that touches more than one record
+// — propagation, binding, marking — goes through applyReassignment below,
+// which moves the files to match the records, so the invariant above holds
+// for a whole walk exactly as it does for one tap. A decoded payload is
+// normalized and digested inside classifyScan and never reaches a record, a
+// log line or a return value here (D-W13).
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { File, Paths } from "expo-file-system";
@@ -16,13 +26,21 @@ import { Image } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
 import { loadAssessmentStore } from "./assessment-store-io";
 import { newLocalId } from "./local-id";
-import { orderImportedPhotos, takenAtFromAsset } from "./photo-import";
+import {
+  assignByMarkers,
+  classifyScan,
+  fileTagToken,
+  orderImportedPhotos,
+  takenAtFromAsset,
+  type ImportScan,
+} from "./photo-import";
 import { downscalePhoto } from "./photo-io";
 import {
-  assignGroups, assignQueued, IMPORT_BYTES_PER_PHOTO, INBOX_SWEEP_MIN_AGE_MS, markAnalyzing,
-  markFailed, markPending, markRejected, parseDurations, parsePhotoQueue, PHOTO_QUEUE_STORAGE_KEY,
-  propagateWithinGroup, pushDuration, queuedDirName, reconcileInterrupted, removePlantQueued,
-  removeQueued, serializeDurations, serializePhotoQueue, upsertQueued, WALK_DURATIONS_KEY,
+  assignGroups, assignQueued, byWalkOrder, IMPORT_BYTES_PER_PHOTO, INBOX_SWEEP_MIN_AGE_MS, isDecidingEvidence,
+  markAnalyzing, markAsMarker, markFailed, markPending, markRejected, parseDurations, parsePhotoQueue,
+  PHOTO_QUEUE_STORAGE_KEY, propagateWithinGroup, pushDuration, queuedDirName, reconcileInterrupted,
+  removePlantQueued, removeQueued, serializeDurations, serializePhotoQueue, unmarkMarker, upsertQueued,
+  WALK_DURATIONS_KEY,
   type AssignEvidence, type PhotoQueue, type QueuedPhoto, type QueueRelink,
 } from "./photo-queue";
 import { PHOTO_INBOX_DIR, photoFileName } from "./photo-store";
@@ -32,8 +50,10 @@ import {
   moveIntoPhotoDir,
   plantPhotoDir,
 } from "./photo-store-io";
-import { getPlant } from "./plant-store";
-import { loadPlantStore } from "./plant-store-io";
+import { allPlants, getPlant } from "./plant-store";
+import { bindPlantCode, loadPlantStore, PLANT_CODE_LIMIT_ERROR } from "./plant-store-io";
+import { codeOwners } from "./plant-tags";
+import { decodeQrFromPhoto, IMPORT_SCAN_OPTIONS } from "./qr-decode-io";
 
 /** User-facing strings: generic and honest. Details go to console.error. */
 export const WALK_SAVE_ERROR = "Couldn't save this photo on your phone. Please try again.";
@@ -44,6 +64,7 @@ export const IMPORT_NO_SPACE_ERROR =
   "Not enough space on this phone for these photos. Free some space and try again.";
 export const IMPORT_PARTIAL_ERROR = (n: number) =>
   `Couldn't import ${n} of the photos. The rest are kept.`;
+export const BIND_CODE_ERROR = "Couldn't bind that code right now. Please try again.";
 
 /** Untrusted picker file names are kept for display only (D-W13). */
 const MAX_FILE_NAME = 80;
@@ -202,17 +223,28 @@ async function assetDims(a: StagedAsset): Promise<{ width: number; height: numbe
   return size;
 }
 
+/** The import sheet's second line: the current photo is being saved, or the
+ * io is looking for a tag code on it (rung 3 — a second or two per photo). */
+export type ImportPhase = "saving" | "scanning";
+
+/** What rungs 3 and 5 consult: bound code digests and human tags. */
+type IdentityPlant = { id: string; tag?: string | null; codes?: ReadonlyArray<string> | null };
+
 /** Multi-select gallery import into one walk. Each photo is enqueued — and so
  * persisted — on its own, in shooting order, so a kill mid-import keeps the
- * ones already done; then the walk is gap-grouped and a group with one decided
- * plant propagates it. Throws IMPORT_NO_SPACE_ERROR up front (free space
- * unknown → don't block); per-photo failures are counted, never thrown. */
+ * ones already done; then it is looked at for a tag code and a file-name
+ * token (rungs 3 and 5, recorded on its own record before the next photo
+ * starts); then the walk is marker-propagated and gap-grouped. Throws
+ * IMPORT_NO_SPACE_ERROR up front (free space unknown → don't block);
+ * per-photo failures are counted, never thrown; a failed propagation is
+ * logged — the photos are imported either way, and the review shows what
+ * still needs a plant. */
 export async function importGalleryAssets(
   assets: ImagePickerAsset[],
   /** The screen decides how sure the chip is (D-W3): `user` only when it was
    * set for this import, `carried` when it merely happened to be set. */
   ctx: { walkId: string; seedPlantId: string | null; seedEvidence: AssignEvidence },
-  onProgress: (done: number, total: number) => void,
+  onProgress: (done: number, total: number, phase: ImportPhase) => void,
 ): Promise<{ imported: number; failed: number }> {
   let free: number | null = null;
   try {
@@ -235,13 +267,17 @@ export async function importGalleryAssets(
       takenAt: takenAtFromAsset({ exif: a.exif, fileName: a.fileName }),
     })),
   );
+  // Rungs 3 and 5 read the plants once; one added mid-import is simply not
+  // matched — the review offers every plant anyway.
+  const plants: IdentityPlant[] = allPlants(await loadPlantStore());
   let imported = 0;
   let failed = 0;
-  onProgress(0, staged.length);
+  onProgress(0, staged.length, "saving");
   for (const a of staged) {
+    let item: QueuedPhoto;
     try {
       const dims = await assetDims(a);
-      await enqueueWalkShot({
+      item = await enqueueWalkShot({
         sourceUri: a.uri,
         ...dims,
         plantId: ctx.seedPlantId,
@@ -258,13 +294,161 @@ export async function importGalleryAssets(
       // The picker's full-resolution copy (EXIF intact) must not linger in
       // cache; a retry re-picks and gets a fresh one.
       deleteQuietly(a.uri, "picker copy");
+      onProgress(imported + failed, staged.length, "saving");
+      continue;
     }
-    onProgress(imported + failed, staged.length);
+    // The photo is durable; what follows only decides where it belongs. The
+    // sheet keeps the same count and changes its second line.
+    onProgress(imported + failed - 1, staged.length, "scanning");
+    try {
+      await applyReassignment(await identifyImported(item, plants));
+    } catch (e) {
+      console.error("[photo-queue-io] identification skipped for one photo:", (e as Error).message);
+    }
+    onProgress(imported + failed, staged.length, "saving");
   }
   if (imported > 0) {
-    await updateQueue((q) => propagateWithinGroup(assignGroups(q, ctx.walkId), ctx.walkId));
+    // Rungs 3 → 4 over the whole walk, in ladder order: cards and markers
+    // hand their plant forward, then the time-gap groups fill in around them.
+    try {
+      await applyReassignment((q) =>
+        propagateWithinGroup(assignGroups(withMarkersApplied(q, ctx.walkId), ctx.walkId), ctx.walkId),
+      );
+    } catch (e) {
+      console.error("[photo-queue-io] walk propagation failed; photos kept as they are:", (e as Error).message);
+    }
   }
   return { imported, failed };
+}
+
+/** Rungs 3 and 5 (D-W3) for one photo that is already durable; returns the
+ * pure change for its record (applyReassignment then moves the file to
+ * match). A QR that decodes on an imported photo is a sticker close-up, so
+ * the photo becomes a TAG CARD for the code's one owner — not saved, handing
+ * the plant to the photos after it; the review has a toggle back to "Plant
+ * photo" — UNLESS the chip already decided this photo (rung 1 outranks rung
+ * 3 as it outranks rung 5): a photo the user assigned by hand stays that
+ * plant's photo, digest kept for provenance, never turned into a card that
+ * is later deleted. A code with no or several owners keeps only its digest,
+ * for the review's "Bind to a plant" row. The payload is normalized and
+ * digested inside classifyScan and never reaches a record, a log line or
+ * this return (D-W13); a decode error is a miss, and the import path tries
+ * only the full frame and the centre (IMPORT_SCAN_OPTIONS — most photos of a
+ * roll hold no code, and the miss path is what costs). A file-name marker
+ * token decides unless the chip already decided; a bare tag suggests, and
+ * only where nothing has decided. */
+async function identifyImported(
+  item: QueuedPhoto,
+  plants: ReadonlyArray<IdentityPlant>,
+): Promise<(q: PhotoQueue) => PhotoQueue> {
+  let scan: ImportScan = null;
+  try {
+    const payload = await decodeQrFromPhoto(queuedPhotoUri(item), { width: item.width, height: item.height }, IMPORT_SCAN_OPTIONS);
+    scan = classifyScan(payload, plants);
+  } catch (e) {
+    console.error("[photo-queue-io] tag-code decode failed; treating as no code:", (e as Error).message);
+  }
+  const token = fileTagToken(item.fileName, plants);
+  return (q) => {
+    const current = q[item.id];
+    if (!current || current.isMarker) return q;
+    if (scan?.role === "tag-card") {
+      if (current.plantId !== null && isDecidingEvidence(current.evidence)) {
+        return upsertQueued(q, { ...current, codeDigest: scan.digest });
+      }
+      const marked = markAsMarker(q, item.id, scan.plantId);
+      return upsertQueued(marked, { ...marked[item.id], codeDigest: scan.digest });
+    }
+    const next = scan === null ? q : upsertQueued(q, { ...current, codeDigest: scan.digest });
+    if (token === null) return next;
+    const now = next[item.id];
+    if (token.decides) {
+      return now.plantId !== null && isDecidingEvidence(now.evidence)
+        ? next
+        : assignQueued(next, item.id, token.plantId, "file-tag");
+    }
+    return now.plantId === null ? upsertQueued(next, { ...now, suggestedPlantId: token.plantId }) : next;
+  };
+}
+
+/** Rungs 1c / 3 for one walk: every marker (a decoded tag card, or a photo the
+ * user marked) hands its plant to the photos after it in display order, until
+ * the next marker or explicit photo — assignByMarkers, pure and tested. */
+function withMarkersApplied(q: PhotoQueue, walkId: string): PhotoQueue {
+  const walk = Object.values(q)
+    .filter((item) => item.walkId === walkId)
+    .sort(byWalkOrder);
+  const markers: Record<string, string> = {};
+  for (const item of walk) if (item.isMarker && item.plantId !== null) markers[item.id] = item.plantId;
+  let next = q;
+  for (const item of assignByMarkers(walk, markers)) {
+    if (item !== q[item.id]) next = upsertQueued(next, item);
+  }
+  return next;
+}
+
+/** Move a queued file into `to` (a plant id or the inbox), finishing a
+ * half-done move: a kill between an earlier move and its record write leaves
+ * the file already where it is going, and that must complete the record
+ * instead of failing. Resolves true when this call moved a file. */
+async function moveQueuedFile(item: QueuedPhoto, to: string): Promise<boolean> {
+  const from = queuedDirName(item);
+  if (from === to) return false;
+  const source = new File(queuedPhotoUri(item));
+  const landed = new File(plantPhotoDir(to), item.basename);
+  if (source.exists || !landed.exists) {
+    await moveIntoPhotoDir(to, source.uri, item.basename);
+    return true;
+  }
+  return false;
+}
+
+/** Undo one moveQueuedFile: the file now in `to` goes back to the directory
+ * the record names. Best-effort — logged, never thrown. */
+async function moveQueuedFileBack(item: QueuedPhoto, to: string): Promise<void> {
+  await moveIntoPhotoDir(queuedDirName(item), new File(plantPhotoDir(to), item.basename).uri, item.basename).catch(
+    (err: Error) => console.error("[photo-queue-io] move-back failed:", err.message),
+  );
+}
+
+/** Apply a pure re-assignment to the queue — files first, records after
+ * (D-W2): every record whose plant changed has its file moved into the new
+ * directory before the records are written, and moved back if the write
+ * fails, so a record never names a file that is not where the record says.
+ * Only the records the transform changed are written, onto a fresh read, so
+ * an enqueue that lands in between is not lost. A change onto a plant that
+ * is gone throws (a directory nothing sweeps must not be made); a change to
+ * a photo being analyzed is dropped (the runner is reading that uri); a
+ * transform that changes nothing writes nothing. */
+async function applyReassignment(transform: (q: PhotoQueue) => PhotoQueue): Promise<void> {
+  const before = await loadPhotoQueue();
+  const after = transform(before);
+  if (after === before) return;
+  const changed = Object.values(after).filter((item) => {
+    const prev = before[item.id];
+    return prev !== undefined && prev !== item && prev.status !== "analyzing";
+  });
+  if (changed.length === 0) return;
+  const plants = await loadPlantStore();
+  for (const item of changed) {
+    if (item.plantId !== null && getPlant(plants, item.plantId) === null) throw new Error("plant not on this device");
+  }
+  const moved: { item: QueuedPhoto; to: string }[] = [];
+  try {
+    for (const item of changed) {
+      const prev = before[item.id];
+      const to = queuedDirName(item);
+      if (await moveQueuedFile(prev, to)) moved.push({ item: prev, to });
+    }
+    await updateQueue((fresh) => {
+      const merged = { ...fresh };
+      for (const item of changed) if (fresh[item.id]) merged[item.id] = item;
+      return merged;
+    });
+  } catch (e) {
+    for (const m of moved) await moveQueuedFileBack(m.item, m.to);
+    throw e;
+  }
 }
 
 /** Move a pending photo to another plant, or back to "needs a plant" (null).
@@ -280,35 +464,67 @@ export async function assignQueuedPhoto(
   if (item?.status === "analyzing") throw new Error(PHOTO_BUSY_ERROR);
   try {
     if (!item) throw new Error("queued photo not found");
-    if (plantId !== null && !getPlant(await loadPlantStore(), plantId)) {
-      throw new Error("plant not on this device");
-    }
-    const from = queuedDirName(item);
-    const to = plantId ?? PHOTO_INBOX_DIR;
-    let moved = false;
-    if (from !== to) {
-      // A kill between an earlier move and its record write leaves the file
-      // already where it is going: finish the record instead of failing.
-      const source = new File(queuedPhotoUri(item));
-      const landed = new File(plantPhotoDir(to), item.basename);
-      if (source.exists || !landed.exists) {
-        await moveIntoPhotoDir(to, source.uri, item.basename);
-        moved = true;
-      }
-    }
-    try {
-      await updateQueue((q) => assignQueued(q, id, plantId, evidence));
-    } catch (e) {
-      if (moved) {
-        await moveIntoPhotoDir(from, new File(plantPhotoDir(to), item.basename).uri, item.basename).catch(
-          (err: Error) => console.error("[photo-queue-io] move-back failed:", err.message),
-        );
-      }
-      throw e;
-    }
+    await applyReassignment((q) => assignQueued(q, id, plantId, evidence));
   } catch (e) {
     console.error("[photo-queue-io] assign failed:", (e as Error).message);
     throw new Error(ASSIGN_PHOTO_ERROR);
+  }
+}
+
+/** Rung 1c: this photo is a tree marker (a stake, a tag, a hand-written sign)
+ * for `plantId` — never analyzed, gone when the walk is analyzed or parked —
+ * and the photos after it in its walk take that plant. */
+export async function markQueuedAsMarker(id: string, plantId: string): Promise<void> {
+  const item = (await loadPhotoQueue())[id];
+  if (item?.status === "analyzing") throw new Error(PHOTO_BUSY_ERROR);
+  try {
+    if (!item) throw new Error("queued photo not found");
+    await applyReassignment((q) => withMarkersApplied(markAsMarker(q, id, plantId), item.walkId));
+  } catch (e) {
+    console.error("[photo-queue-io] mark as marker failed:", (e as Error).message);
+    throw new Error(ASSIGN_PHOTO_ERROR);
+  }
+}
+
+/** The card's "Plant photo" toggle: it is a photo of that plant after all —
+ * kept, analyzed, assigned by the user's own decision (unmarkMarker). The
+ * photos after it keep what the card gave them: the plant is the same. */
+export async function unmarkQueuedMarker(id: string): Promise<void> {
+  try {
+    await applyReassignment((q) => unmarkMarker(q, id));
+  } catch (e) {
+    console.error("[photo-queue-io] unmark marker failed:", (e as Error).message);
+    throw new Error(ASSIGN_PHOTO_ERROR);
+  }
+}
+
+/** "Bind to a plant" on an unknown-code row: the code gets its owner on the
+ * plant record (bindPlantCode), then every photo of this walk that decoded
+ * to that code becomes the plant's tag card and the cards propagate. Plant
+ * store first: a kill in between leaves a harmless binding the next import
+ * recognizes. "Pick one" on a code SEVERAL plants hold binds nothing (D-W4:
+ * a code moves only from its plant's own Tags card) — the tap is a per-walk
+ * choice between the current owners, and a plant that is not one of them is
+ * refused rather than made a third owner. Photos the viewfinder scanned
+ * (code-scan) are plant photos, not cards. */
+export async function bindCodeFromWalk(walkId: string, digest: string, plantId: string): Promise<void> {
+  try {
+    const owners = codeOwners(allPlants(await loadPlantStore()), digest);
+    if (owners.length === 0) await bindPlantCode(plantId, digest);
+    else if (!owners.includes(plantId)) throw new Error("plant does not hold this code");
+    await applyReassignment((q) => {
+      let next = q;
+      for (const item of Object.values(q)) {
+        if (item.walkId === walkId && item.codeDigest === digest && !item.isMarker && item.evidence !== "code-scan") {
+          next = markAsMarker(next, item.id, plantId);
+        }
+      }
+      return withMarkersApplied(next, walkId);
+    });
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[photo-queue-io] bind from walk failed:", message);
+    throw new Error(message === PLANT_CODE_LIMIT_ERROR ? message : BIND_CODE_ERROR);
   }
 }
 
@@ -332,6 +548,21 @@ export async function removeQueuedPhoto(id: string): Promise<void> {
   } catch (e) {
     console.error("[photo-queue-io] remove failed:", (e as Error).message);
     throw new Error(REMOVE_PHOTO_ERROR);
+  }
+}
+
+/** A marker photo is scaffolding, not a plant photo: when the user answers
+ * the every-time question (Analyze now / Later) the cards go — record and
+ * file. Best-effort per photo; one that will not delete stays a card row and
+ * is never analyzed (runnableItems excludes markers). */
+export async function discardMarkerPhotos(items: ReadonlyArray<QueuedPhoto>): Promise<void> {
+  for (const item of items) {
+    if (!item.isMarker) continue;
+    try {
+      await removeQueuedPhoto(item.id);
+    } catch (e) {
+      console.error("[photo-queue-io] marker photo not removed:", (e as Error).message);
+    }
   }
 }
 

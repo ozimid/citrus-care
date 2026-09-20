@@ -15,8 +15,10 @@ import {
   WALK_DURATIONS_KEY,
   assignGroups,
   assignQueued,
+  byWalkOrder,
   durationStats,
   markAnalyzing,
+  markAsMarker,
   markFailed,
   markPending,
   markRejected,
@@ -36,6 +38,7 @@ import {
   serializeDurations,
   serializePhotoQueue,
   stalledItems,
+  unmarkMarker,
   upsertQueued,
   type PhotoQueue,
   type QueuedPhoto,
@@ -410,6 +413,14 @@ describe("propagateWithinGroup (rung 4, bounded)", () => {
     expect(propagateWithinGroup(q, W1)).toEqual(q);
   });
 
+  it("a deciding file-name marker (evidence file-tag, the user's own token) decides its group", () => {
+    const q = group(
+      queued({ id: qid(1), takenAt: at(0), plantId: P1, evidence: "file-tag" }),
+      queued({ id: qid(2), takenAt: at(3), plantId: null, evidence: "none" }),
+    );
+    expect(propagateWithinGroup(q, W1)[qid(2)]).toMatchObject({ plantId: P1, evidence: "group" });
+  });
+
   it("does nothing with no decider, and weak evidence is not a decider", () => {
     const q = group(
       queued({ id: qid(1), takenAt: at(0), plantId: P1, evidence: "group" }),
@@ -580,6 +591,110 @@ describe("walk durations ring (D-W8)", () => {
   });
 });
 
+// Rungs 1c / 3 (D-W3): a tag card or a tree-marker photo carries a plant for
+// the photos after it but is not itself a plant photo — never analyzed, never
+// counted as waiting, deleted with the walk when the assignments are saved.
+describe("tree markers (rungs 1c / 3, D-W3)", () => {
+  it("markAsMarker flags the photo, assigns the plant with evidence marker and resets the run state", () => {
+    const q = build(
+      queued({ plantId: null, evidence: "none", suggestedPlantId: P2, status: "failed", attempts: 2, error: "Took too long", timedOut: true, runAnchorIso: at(1) }),
+    );
+    const next = markAsMarker(q, qid(1), P1);
+    expect(next[qid(1)]).toMatchObject({
+      isMarker: true,
+      plantId: P1,
+      evidence: "marker",
+      suggestedPlantId: null,
+      status: "pending",
+      attempts: 0,
+      error: null,
+      timedOut: false,
+      runAnchorIso: null,
+    });
+    expect(q[qid(1)].isMarker).toBeUndefined();
+    expect(markAsMarker(q, "zz-00000001", P1)).toBe(q);
+  });
+
+  it("keeps a code digest across marking so a tag card still says which sticker it was", () => {
+    const digest = "a".repeat(64);
+    const next = markAsMarker(build(queued({ plantId: null, evidence: "none", codeDigest: digest })), qid(1), P1);
+    expect(next[qid(1)].codeDigest).toBe(digest);
+  });
+
+  it("unmarkMarker turns the card back into a plant photo of that plant, decided by the user", () => {
+    const marked = markAsMarker(build(queued({ plantId: null, evidence: "none" })), qid(1), P1);
+    const next = unmarkMarker(marked, qid(1));
+    expect(next[qid(1)].isMarker).toBeUndefined();
+    expect("isMarker" in next[qid(1)]).toBe(false);
+    expect(next[qid(1)]).toMatchObject({ plantId: P1, evidence: "user" });
+    expect(runnableItems(next)).toHaveLength(1);
+  });
+
+  it("unmarkMarker on a marker with no plant leaves an unassigned photo, and is a no-op otherwise", () => {
+    const orphan = build({ ...queued({ plantId: null, evidence: "marker" }), isMarker: true });
+    expect(unmarkMarker(orphan, qid(1))[qid(1)]).toMatchObject({ plantId: null, evidence: "none" });
+    const plain = build(queued());
+    expect(unmarkMarker(plain, qid(1))).toBe(plain);
+    expect(unmarkMarker(plain, "zz-00000001")).toBe(plain);
+  });
+
+  it("a marker is never runnable, never waiting, and not one of the plant's photos", () => {
+    const q = markAsMarker(build(queued({ id: qid(1) }), queued({ id: qid(2), plantId: P1 })), qid(1), P1);
+    expect(runnableItems(q).map((i) => i.id)).toEqual([qid(2)]);
+    expect(runnableItems(q, { walkId: W1, plantId: P1 }).map((i) => i.id)).toEqual([qid(2)]);
+    expect(pendingCount(q)).toBe(1);
+    expect(pendingByPlant(q)).toEqual({ [P1]: 1 });
+    expect(queuedForPlant(q, P1).map((i) => i.id)).toEqual([qid(2)]);
+    expect(stalledItems(q)).toEqual([]);
+  });
+
+  it("a stake photo the model refused, then marked as a marker, is not stalled — the user already decided", () => {
+    const q = markAsMarker(build(queued({ id: qid(1), status: "rejected", rejectedDiagnosis: diagnosis() })), qid(1), P1);
+    expect(q[qid(1)].status).toBe("rejected");
+    expect(stalledItems(q)).toEqual([]);
+  });
+
+  it("a plant's cascade takes its markers with it", () => {
+    const q = markAsMarker(build(queued({ id: qid(1) }), queued({ id: qid(2), plantId: P2 })), qid(1), P1);
+    expect(Object.keys(removePlantQueued(q, P1))).toEqual([qid(2)]);
+  });
+
+  it("persists isMarker only as the literal true", () => {
+    const marked = markAsMarker(build(queued({ plantId: null, evidence: "none" })), qid(1), P1);
+    expect(parsePhotoQueue(serializePhotoQueue(marked))).toEqual(marked);
+    const raw = JSON.stringify({
+      [qid(1)]: { ...queued({ id: qid(1) }), isMarker: true },
+      [qid(2)]: { ...queued({ id: qid(2) }), isMarker: "yes" },
+      [qid(3)]: { ...queued({ id: qid(3) }), isMarker: 1 },
+      [qid(4)]: { ...queued({ id: qid(4) }), isMarker: false },
+      [qid(5)]: queued({ id: qid(5) }),
+    });
+    const q = parsePhotoQueue(raw);
+    expect(q[qid(1)].isMarker).toBe(true);
+    for (const n of [2, 3, 4, 5]) {
+      expect(q[qid(n)].isMarker, `record ${n}`).toBeUndefined();
+      expect("isMarker" in q[qid(n)], `record ${n}`).toBe(false);
+    }
+  });
+});
+
+describe("byWalkOrder (display order — what a marker hands its plant along)", () => {
+  it("sorts by shooting time, unknown times last, then arrival, then id", () => {
+    const late = queued({ id: qid(4), takenAt: at(30), addedAt: at(1) });
+    const early = queued({ id: qid(3), takenAt: at(10), addedAt: at(9) });
+    const unknownB = queued({ id: qid(2), takenAt: null, addedAt: at(6) });
+    const unknownA = queued({ id: qid(1), takenAt: null, addedAt: at(5) });
+    expect([late, unknownB, early, unknownA].sort(byWalkOrder).map((i) => i.id)).toEqual([qid(3), qid(4), qid(1), qid(2)]);
+  });
+
+  it("breaks a same-second, same-arrival tie on the id so two shots never swap between renders", () => {
+    const a = queued({ id: qid(1), takenAt: at(10), addedAt: at(10) });
+    const b = queued({ id: qid(2), takenAt: at(10), addedAt: at(10) });
+    expect([b, a].sort(byWalkOrder).map((i) => i.id)).toEqual([qid(1), qid(2)]);
+    expect(byWalkOrder(a, a)).toBe(0);
+  });
+});
+
 describe("photo queue persistence (untrusted on read, D-W16)", () => {
   it("round-trips", () => {
     const q = build(queued(), queued({ id: qid(2), status: "rejected", rejectedDiagnosis: diagnosis() }));
@@ -683,6 +798,21 @@ describe("photo queue persistence (untrusted on read, D-W16)", () => {
     expect(q[qid(1)].takenAt).toBeNull();
     expect(q[qid(1)].startedAt).toBeNull();
     expect(q[qid(1)].runAnchorIso).toBe(at(0));
+  });
+
+  it("keeps codeDigest only as the one shape a digest has — 64 lowercase hex (D-W16)", () => {
+    const good = "a".repeat(64);
+    const raw = JSON.stringify({
+      [qid(1)]: queued({ id: qid(1), codeDigest: good }),
+      [qid(2)]: queued({ id: qid(2), codeDigest: "A".repeat(64) }),
+      [qid(3)]: queued({ id: qid(3), codeDigest: "https://example.com/tag/7" }),
+      [qid(4)]: queued({ id: qid(4), codeDigest: "a".repeat(63) }),
+      [qid(5)]: queued({ id: qid(5), codeDigest: null }),
+    });
+    const q = parsePhotoQueue(raw);
+    expect(q[qid(1)].codeDigest).toBe(good);
+    for (const n of [2, 3, 4, 5]) expect(q[qid(n)].codeDigest, `record ${n}`).toBeNull();
+    expect(Object.keys(q)).toHaveLength(5);
   });
 
   it("repairs the small fields rather than dropping the photo", () => {

@@ -424,7 +424,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget,
       const { imported, failed } = await importGalleryAssets(
         result.assets,
         { walkId, seedPlantId: selectedPlant?.id ?? null, seedEvidence },
-        (done, total) => setImporting({ kind: "importing", done, total }),
+        (done, total, phase) => setImporting({ kind: "importing", done, total, phase }),
       );
       if (imported === 0) {
         setError(IMPORT_FAILED_ERROR);

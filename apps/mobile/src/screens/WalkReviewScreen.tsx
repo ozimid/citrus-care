@@ -12,14 +12,28 @@ import {
   type TileAction,
 } from "../components/WalkReviewChrome";
 import {
+  rowKey,
   useWalkQueue,
   WalkSectionHeader,
+  WalkSpecialRow,
   WalkTileRow,
+  type WalkRow,
   type WalkSection,
 } from "../components/WalkReviewSections";
-import { applyPlantToRun } from "../lib/photo-import";
-import type { QueuedPhoto } from "../lib/photo-queue";
-import { assignQueuedPhoto, loadDurations, queuedPhotoUri, removeQueuedPhoto } from "../lib/photo-queue-io";
+import { applyPlantToRun, markerRunSize } from "../lib/photo-import";
+import { byWalkOrder, type QueuedPhoto } from "../lib/photo-queue";
+import {
+  assignQueuedPhoto,
+  bindCodeFromWalk,
+  discardMarkerPhotos,
+  loadDurations,
+  markQueuedAsMarker,
+  queuedPhotoUri,
+  removeQueuedPhoto,
+  unmarkQueuedMarker,
+} from "../lib/photo-queue-io";
+import { PLANT_CODE_LIMIT_ERROR } from "../lib/plant-store-io";
+import { codeOwners } from "../lib/plant-tags";
 import { useTheme } from "../lib/theme-io";
 
 // F39 review screen (D-W3, D-W7): every queued photo's plant is visible and
@@ -27,8 +41,18 @@ import { useTheme } from "../lib/theme-io";
 // "Needs a plant" first, then one per plant; the footer asks "Analyze now /
 // Later" every time — and only from here, where the user can see what the
 // answer spends twenty minutes on (D-W7). There is deliberately no "Accept
-// all". The store math is photo-queue.ts (tested); this file only reads,
-// renders and calls the io.
+// all". The store math is photo-queue.ts / photo-import.ts (tested); this
+// file only reads, renders and calls the io.
+//
+// Phase 4 (rungs 1c / 3 / 5): a tag card or tree-marker photo is a row that
+// says it is deleted when the user leaves and toggles back to a plant photo;
+// an unbound code binds from its row; a file-name suggestion accepts from
+// its row; the tile sheet can make any photo a tree marker (one confirm that
+// says a true, walk-wide number — and is not offered at all in a plant's
+// filtered view, where what it would move is not on screen). Marker photos
+// are scaffolding — they are deleted on EVERY exit (Analyze now, Later, ✕):
+// nothing counts a marker as waiting, so one left behind would be
+// unreachable from any card or strip.
 
 const GENERIC_UPDATE_ERROR = "Couldn't update that photo. Please try again.";
 
@@ -49,7 +73,17 @@ interface Props {
 type Picker =
   | { kind: "group"; section: WalkSection }
   | { kind: "tile"; item: QueuedPhoto }
+  /** Rung 1c, "Use as tree marker": which tree does this photo stand for? */
+  | { kind: "marker"; item: QueuedPhoto }
+  /** An unbound code (no owners: bind it) or one several plants hold (pick
+   * between the owners for this walk — D-W4, nothing is bound). */
+  | { kind: "bind"; item: QueuedPhoto; digest: string; owners: string[] }
   | null;
+
+const BIND_FOOT =
+  "Tapping a plant binds this code to it. Scanning it will pick that plant from now on — remove it later on that plant's Tag & codes card. This photo becomes a tag card and is deleted when you leave this screen.";
+const PICK_OWNER_FOOT =
+  "This code is on more than one plant — fix that on a plant's Tag & codes card. Tapping one here only makes this photo its tag card for this walk: the photos after it follow, and this photo is deleted when you leave this screen.";
 
 export function WalkReviewScreen({
   walkId,
@@ -85,11 +119,39 @@ export function WalkReviewScreen({
     };
   }, []);
 
-  const analyze = useCallback(() => onAnalyze(runnable), [onAnalyze, runnable]);
+  const nameOf = useCallback(
+    (plantId: string | null) => plants.find((p) => p.id === plantId)?.name ?? "that plant",
+    [plants],
+  );
 
-  /** Run an io mutation, then reload; the user only ever sees the generic line.
-   * `busy` also puts a blocker over the list so a second tap cannot interleave
-   * two read-modify-writes of the queue while files are mid-move. */
+  /** Every exit — the every-time answer either way, and ✕: the marker
+   * photos in view go first (they were never plant photos, and nothing else
+   * would ever show them again), then the caller takes over. */
+  const settle = useCallback(
+    async (then: () => void) => {
+      if (!items.some((i) => i.isMarker)) {
+        then();
+        return;
+      }
+      setBusy(true);
+      try {
+        await discardMarkerPhotos(items);
+        onChanged?.();
+      } finally {
+        setBusy(false);
+      }
+      then();
+    },
+    [items, onChanged],
+  );
+  const analyze = useCallback(() => void settle(() => onAnalyze(runnable)), [onAnalyze, runnable, settle]);
+  const later = useCallback(() => void settle(onLater), [onLater, settle]);
+  const close = useCallback(() => void settle(onClose), [onClose, settle]);
+
+  /** Run an io mutation, then reload; the user only ever sees a generic line
+   * (or the one message the io wrote for them, the code cap). `busy` also
+   * puts a blocker over the list so a second tap cannot interleave two
+   * read-modify-writes of the queue while files are mid-move. */
   const mutate = useCallback(
     async (work: () => Promise<void>) => {
       setBusy(true);
@@ -99,8 +161,9 @@ export function WalkReviewScreen({
         await work();
         onChanged?.();
       } catch (e) {
-        console.error("[WalkReviewScreen] update failed:", (e as Error).message);
-        setError(GENERIC_UPDATE_ERROR);
+        const message = (e as Error).message;
+        console.error("[WalkReviewScreen] update failed:", message);
+        setError(message === PLANT_CODE_LIMIT_ERROR ? message : GENERIC_UPDATE_ERROR);
       } finally {
         await load();
         setBusy(false);
@@ -114,11 +177,49 @@ export function WalkReviewScreen({
       const target = picker;
       setPicker(null);
       if (!target) return;
-      const name = plants.find((p) => p.id === plantId)?.name ?? "that plant";
+      const name = nameOf(plantId);
+      if (target.kind === "bind") {
+        void mutate(async () => {
+          await bindCodeFromWalk(target.item.walkId, target.digest, plantId);
+          setFlash(
+            target.owners.length === 0
+              ? `Code bound to ${name} — its photos follow`
+              : `Tag card for ${name} on this walk — its photos follow`,
+          );
+        });
+        return;
+      }
+      if (target.kind === "marker") {
+        // Counted over the WHOLE walk in display order, never this view: the
+        // io applies the marker walk-wide, so the number must be too.
+        const walk = Object.values(queue ?? {})
+          .filter((i) => i.walkId === target.item.walkId)
+          .sort(byWalkOrder);
+        const n = markerRunSize(walk, target.item.id, plantId);
+        Alert.alert(
+          `Use as ${name}'s tree marker?`,
+          n === 0
+            ? "No photos follow it in this walk. This photo is removed from the walk and deleted when you leave this screen."
+            : `Assigns the ${n} ${n === 1 ? "photo" : "photos"} after it to ${name}. This photo is removed from the walk and deleted when you leave this screen.`,
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Use as marker",
+              onPress: () =>
+                void mutate(async () => {
+                  await markQueuedAsMarker(target.item.id, plantId);
+                  setFlash(n === 0 ? `Marked as ${name}'s tree marker` : `Marked as ${name}'s tree marker · ${n} ${n === 1 ? "photo" : "photos"} assigned`);
+                }),
+            },
+          ],
+        );
+        return;
+      }
       void mutate(async () => {
         let changed = 0;
         if (target.kind === "group") {
           for (const item of target.section.items) {
+            if (item.isMarker) continue;
             await assignQueuedPhoto(item.id, plantId, "user");
             changed += 1;
           }
@@ -143,7 +244,7 @@ export function WalkReviewScreen({
         setFlash(`Assigned ${changed} ${changed === 1 ? "photo" : "photos"} to ${name}`);
       });
     },
-    [items, mutate, picker, plants, runOn],
+    [items, mutate, nameOf, picker, queue, runOn],
   );
 
   const onTileAction = useCallback(
@@ -153,10 +254,19 @@ export function WalkReviewScreen({
         // The run toggle keeps its last state: it is visibly checked every
         // time the picker opens and reversible before any compute.
         setPicker({ kind: "tile", item });
+      } else if (action === "marker") {
+        setPicker({ kind: "marker", item });
       } else if (action === "new-plant") {
         setNewPlantFor(item);
       } else if (action === "view") {
-        setViewing({ uri: queuedPhotoUri(item), caption: "Waiting for analysis" });
+        setViewing({
+          uri: queuedPhotoUri(item),
+          caption: item.isMarker
+            ? item.codeDigest
+              ? "Tag card — deleted when you leave this screen"
+              : "Tree marker — deleted when you leave this screen"
+            : "Waiting for analysis",
+        });
       } else {
         Alert.alert("Remove this photo?", "It is deleted from this phone. This can't be undone.", [
           { text: "Cancel", style: "cancel" },
@@ -171,13 +281,60 @@ export function WalkReviewScreen({
     [mutate],
   );
 
+  /** The card's toggle: a plant photo after all, kept and analyzed. */
+  const onToggleMarker = useCallback(
+    (item: QueuedPhoto) =>
+      void mutate(async () => {
+        await unmarkQueuedMarker(item.id);
+        setFlash(`Kept as a plant photo of ${nameOf(item.plantId)}`);
+      }),
+    [mutate, nameOf],
+  );
+
+  /** No owner: bind the code. Several: a per-walk pick between them (D-W4) —
+   * the picker is narrowed to the owners so no third plant can be chosen. */
+  const onBind = useCallback(
+    (item: QueuedPhoto) => {
+      if (item.codeDigest) {
+        setPicker({ kind: "bind", item, digest: item.codeDigest, owners: codeOwners(plants, item.codeDigest) });
+      }
+    },
+    [plants],
+  );
+
+  /** Rung 5, one tap per photo — the user's own decision from here on. */
+  const onAccept = useCallback(
+    (item: QueuedPhoto) => {
+      const plantId = item.suggestedPlantId;
+      if (!plantId) return;
+      void mutate(async () => {
+        await assignQueuedPhoto(item.id, plantId, "user");
+        setFlash(`Assigned 1 photo to ${nameOf(plantId)}`);
+      });
+    },
+    [mutate, nameOf],
+  );
+
+  const openTilePicker = useCallback((item: QueuedPhoto) => setPicker({ kind: "tile", item }), []);
+
+  const pickerTitle =
+    picker?.kind === "group"
+      ? `${picker.section.plantId === null ? "Assign" : "Move"} ${picker.section.items.filter((i) => !i.isMarker).length} photos to…`
+      : picker?.kind === "bind"
+        ? picker.owners.length > 1
+          ? "Which of its plants does this code mean here?"
+          : "Which plant has this code?"
+        : picker?.kind === "marker"
+          ? "Which tree is this a marker for?"
+          : "Which plant is this?";
+
   return (
     <View style={[styles.root, { backgroundColor: t.canvas }]}>
       <View style={styles.headerRow}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Close"
-          onPress={onClose}
+          onPress={close}
           hitSlop={10}
           style={[styles.back, { borderColor: t.border, backgroundColor: t.card }]}
         >
@@ -199,28 +356,34 @@ export function WalkReviewScreen({
       ) : items.length === 0 ? (
         // A failed read is NOT "nothing waiting": the banner is the state
         // then, and the exit stays in the thumb zone either way.
-        <WalkEmptyState t={t} onDone={onClose} silent={error !== null} />
+        <WalkEmptyState t={t} onDone={close} silent={error !== null} />
       ) : (
         <View style={styles.listWrap}>
-          <SectionList
+          <SectionList<WalkRow, WalkSection>
             sections={sections}
-            keyExtractor={(row) => row.map((i) => i.id).join("|")}
+            keyExtractor={rowKey}
             stickySectionHeadersEnabled={false}
             contentContainerStyle={styles.list}
             renderSectionHeader={({ section }) => (
               <WalkSectionHeader section={section} t={t} scheme={scheme} onReassign={(s) => setPicker({ kind: "group", section: s })} />
             )}
-            renderItem={({ item, index, section }) => (
-              <WalkTileRow
-                row={item}
-                rowIndex={index}
-                section={section}
-                t={t}
-                scheme={scheme}
-                onTile={setSheetItem}
-                onAssign={(target) => setPicker({ kind: "tile", item: target })}
-              />
-            )}
+            renderItem={({ item: row, section }) =>
+              row.kind === "tiles" ? (
+                <WalkTileRow row={row.items} section={section} t={t} scheme={scheme} onTile={setSheetItem} onAssign={openTilePicker} />
+              ) : (
+                <WalkSpecialRow
+                  row={row}
+                  section={section}
+                  t={t}
+                  scheme={scheme}
+                  onTile={setSheetItem}
+                  onAssign={openTilePicker}
+                  onToggleMarker={onToggleMarker}
+                  onBind={onBind}
+                  onAccept={onAccept}
+                />
+              )
+            }
           />
           {busy ? (
             <View style={styles.blocker} accessibilityLabel="Updating your photos">
@@ -237,29 +400,32 @@ export function WalkReviewScreen({
           needsPlant={needsPlant}
           engine={engine.kind}
           guardReason={guardReason}
-          notice={flash ?? notice}
+          notice={notice}
+          flash={flash}
           busy={busy}
           onAnalyze={analyze}
-          onLater={onLater}
+          onLater={later}
           t={t}
         />
       ) : null}
 
-      <TileActionSheet item={sheetItem} t={t} onAction={onTileAction} onClose={() => setSheetItem(null)} />
+      <TileActionSheet item={sheetItem} t={t} canMark={!plantFilter} onAction={onTileAction} onClose={() => setSheetItem(null)} />
       <PlantPickerSheet
         visible={picker !== null}
-        title={
-          picker?.kind === "group"
-            ? `${picker.section.plantId === null ? "Assign" : "Move"} ${picker.section.items.length} photos to…`
-            : "Which plant is this?"
-        }
-        plants={plants}
+        title={pickerTitle}
+        plants={picker?.kind === "bind" && picker.owners.length > 1 ? plants.filter((p) => picker.owners.includes(p.id)) : plants}
         selectedId={picker?.kind === "group" ? picker.section.plantId : picker?.item.plantId ?? null}
         onSelect={onPick}
         onClose={() => setPicker(null)}
         onNewPlant={picker?.kind === "tile" ? () => { setNewPlantFor(picker.item); setPicker(null); } : undefined}
         footer={
-          picker?.kind === "tile" ? <RunToggle on={runOn} onToggle={() => setRunOn((v) => !v)} t={t} /> : null
+          picker?.kind === "tile" ? (
+            <RunToggle on={runOn} onToggle={() => setRunOn((v) => !v)} t={t} />
+          ) : picker?.kind === "bind" ? (
+            // The consequence at the decision point — the scan sheet's own
+            // wording (TagScanSheet), plus what happens to this photo.
+            <Text style={[styles.pickerFoot, { color: t.sub }]}>{picker.owners.length === 0 ? BIND_FOOT : PICK_OWNER_FOOT}</Text>
+          ) : null
         }
       />
       <NewPlantSheet
@@ -283,6 +449,7 @@ const styles = StyleSheet.create({
   backGlyph: { fontSize: 18, fontWeight: "600" },
   heading: { flex: 1, fontSize: 22, fontWeight: "600", letterSpacing: -0.4 },
   errorBanner: { fontSize: 13, paddingHorizontal: 20, marginBottom: 8 },
+  pickerFoot: { fontSize: 13, lineHeight: 18, marginTop: 10, paddingHorizontal: 4 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   listWrap: { flex: 1 },
   list: { paddingHorizontal: 16, paddingBottom: 16 },

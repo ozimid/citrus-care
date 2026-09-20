@@ -67,12 +67,35 @@ async function cropTile(uri: string, tile: { x: number; y: number; w: number; h:
   return result.uri;
 }
 
+/** How hard to look. jsqr is pure JS on the JS thread (Hermes, no JIT), and
+ * every tile after the full frame costs a native crop + re-encode + another
+ * jpeg-js decode + another jsqr pass — so the miss path, not the hit path,
+ * is what a caller budgets. */
+export interface DecodeOptions {
+  /** scanTargets to try, coarse to fine: 1 = full frame only, 2 = + centre,
+   * 6 (default) = + the four quadrants. */
+  maxTiles?: number;
+  /** Skip the tile retries once the full-frame pass alone has taken longer
+   * than this — a slow phone must not pay six decodes per photo with no code. */
+  budgetMs?: number;
+}
+
+/** The import path (rung 3): every photo of a roll goes through this and most
+ * hold no code, so only the full frame and the centre are tried, and not even
+ * the centre once the first pass shows the phone is slow. The deliberate
+ * "Scan tag" still runs the full tile retry. NOTE: the Phase 0 probe (c) —
+ * decode time and hit rate at 800 px — has not been measured on a device
+ * yet (docs/design/garden-walk.md §6); these numbers are a ceiling, not a
+ * measurement. */
+export const IMPORT_SCAN_OPTIONS: DecodeOptions = { maxTiles: 2, budgetMs: 1000 };
+
 /** Decode a QR code from a photo: one 800 px copy, decoded whole, then each
- * scanTargets tile (centre, quadrants) cropped from that copy and retried.
- * Resolves to the RAW payload string — the caller must normalize and digest
- * it immediately — or null when no tile holds a readable code. Every temp
- * file this makes is deleted best-effort before it returns. */
-export async function decodeQrFromPhoto(uri: string, size: PhotoSize): Promise<string | null> {
+ * scanTargets tile (centre, quadrants) cropped from that copy and retried —
+ * as far as `options` allow. Resolves to the RAW payload string — the caller
+ * must normalize and digest it immediately — or null when no tile holds a
+ * readable code. Every temp file this makes is deleted best-effort before it
+ * returns. */
+export async function decodeQrFromPhoto(uri: string, size: PhotoSize, options: DecodeOptions = {}): Promise<string | null> {
   let small = await downscalePhoto(uri, size, SCAN_MAX_DIMENSION);
   const temps: string[] = [small.uri];
   try {
@@ -83,7 +106,11 @@ export async function decodeQrFromPhoto(uri: string, size: PhotoSize): Promise<s
       temps.push(small.uri);
     }
     const full = await readJpegRgba(small.uri);
-    for (const tile of scanTargets(full.width, full.height)) {
+    const startedAt = Date.now();
+    const tiles = scanTargets(full.width, full.height).slice(0, options.maxTiles ?? Number.POSITIVE_INFINITY);
+    for (let index = 0; index < tiles.length; index += 1) {
+      const tile = tiles[index];
+      if (index > 0 && options.budgetMs !== undefined && Date.now() - startedAt > options.budgetMs) return null;
       const isFullFrame = tile.x === 0 && tile.y === 0 && tile.w === full.width && tile.h === full.height;
       let hit: string | null;
       if (isFullFrame) {

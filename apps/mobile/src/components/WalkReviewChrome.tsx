@@ -28,23 +28,35 @@ function staysWaitingLine(needsPlant: number): string {
 const STARTING_REASON = "The AI is starting — Analyze now unlocks in a moment";
 const NOTHING_RUNNABLE_REASON = "Assign a plant to at least one photo first";
 
-export type TileAction = "assign" | "new-plant" | "view" | "remove";
+export type TileAction = "assign" | "marker" | "new-plant" | "view" | "remove";
 
-/** The only per-photo menu: assign, new plant, view, remove (the one confirm). */
+/** The only per-photo menu: assign, use as tree marker (rung 1c), new plant,
+ * view, remove (the one confirm). A tag card / marker row keeps view and
+ * remove only — its "Keep photo" toggle is on the row itself. `canMark` is
+ * false where the view cannot show what a marker would move (a plant's own
+ * strip shows one plant; the marker applies to the whole walk) — the row is
+ * then not offered at all rather than offered blind. */
 export function TileActionSheet({
   item,
   t,
+  canMark,
   onAction,
   onClose,
 }: {
   item: QueuedPhoto | null;
   t: Tokens;
+  canMark: boolean;
   onAction: (action: TileAction, item: QueuedPhoto) => void;
   onClose: () => void;
 }) {
   const rows: { action: TileAction; label: string; danger?: true }[] = [
-    { action: "assign", label: item?.plantId ? "Assign to another plant…" : "Assign this photo…" },
-    { action: "new-plant", label: "New plant…" },
+    ...(item?.isMarker
+      ? []
+      : [
+          { action: "assign" as const, label: item?.plantId ? "Assign to another plant…" : "Assign this photo…" },
+          ...(canMark ? [{ action: "marker" as const, label: "Use as tree marker…" }] : []),
+          { action: "new-plant" as const, label: "New plant…" },
+        ]),
     { action: "view", label: "View photo" },
     { action: "remove", label: "Remove photo", danger: true },
   ];
@@ -140,8 +152,12 @@ interface FooterProps {
   engine: LocalEngineState["kind"];
   /** canRunBatch's reason when the record store is too full; null when ok. */
   guardReason: string | null;
-  /** A one-line, user-safe message from the parent (e.g. a partial import). */
+  /** A one-line, user-safe message from the parent (e.g. a partial import).
+   * Stays for the whole review — a per-tap acknowledgement never replaces it. */
   notice: string | null;
+  /** The screen's own acknowledgement of the last tap ("Assigned 3 photos to
+   * Lemon 3") — its own line, under the parent's. */
+  flash: string | null;
   busy: boolean;
   onAnalyze: () => void;
   onLater: () => void;
@@ -156,6 +172,7 @@ export function WalkReviewFooter({
   engine,
   guardReason,
   notice,
+  flash,
   busy,
   onAnalyze,
   onLater,
@@ -178,6 +195,14 @@ export function WalkReviewFooter({
           accessibilityLiveRegion="polite"
         >
           {notice}
+        </Text>
+      ) : null}
+      {flash ? (
+        <Text
+          style={[styles.notice, { color: t.text, borderColor: t.green }]}
+          accessibilityLiveRegion="polite"
+        >
+          {flash}
         </Text>
       ) : null}
       {engineDown ? (
