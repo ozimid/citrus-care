@@ -92,12 +92,20 @@ export function RoundButton({
 export function PlantChip({
   walk,
   plantName,
+  tag = null,
+  position = null,
   stale,
   disabled,
   onPress,
 }: {
   walk: boolean;
   plantName: string | null;
+  /** Phase 3b (walk only): the number on the stake — the one identifier that
+   * exists on the physical tree, so the chip can be checked against it. */
+  tag?: string | null;
+  /** Phase 3b (walk only): where this plant stands in its zone's walk, so a
+   * shot that did NOT move the chip is visible as such (rank, never commit). */
+  position?: { index: number; total: number; zone: string | null } | null;
   stale: boolean;
   disabled: boolean;
   onPress: () => void;
@@ -117,20 +125,23 @@ export function PlantChip({
       </Pressable>
     );
   }
-  const main = plantName ? (stale ? `still on 🪴 ${plantName}` : `🪴 ${plantName}`) : "🪴 No plant yet";
+  const number = tag ? `#${tag} · ` : "";
+  const main = plantName ? `${number}${stale ? "still on " : ""}🪴 ${plantName}` : "🪴 No plant yet";
+  const where = position
+    ? `${position.index} of ${position.total}${position.zone ? ` in ${position.zone}` : ""}`
+    : "";
   const sub = plantName
-    ? stale
-      ? "tap to confirm or change"
-      : "tap to change"
+    ? `${where ? `${where} · ` : ""}${stale ? "tap to confirm or change" : "tap to change"}`
     : "tap to pick — photos are kept unassigned";
+  const facts = `${tag ? `, number ${tag}` : ""}${where ? `, ${where}` : ""}`;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
         plantName
           ? stale
-            ? `Still on ${plantName}. Tap to confirm or change plant`
-            : `Saving to ${plantName}. Tap to change plant`
+            ? `Still on ${plantName}${facts}. Tap to confirm or change plant`
+            : `Saving to ${plantName}${facts}. Tap to change plant`
           : "No plant yet. Tap to pick a plant"
       }
       accessibilityLiveRegion={stale ? "polite" : "none"}
@@ -148,6 +159,40 @@ export function PlantChip({
   );
 }
 
+/** F39 Phase 3b: ◀ Prev / Next ▶ flank the sticky chip in walk mode. They
+ * RANK, never commit (research §4; design §5 "auto-advancing the walk
+ * order"): a tap moves the chip one step along the stored walk order and the
+ * shots that follow save under it as a hand confirm — no shot, timer or scan
+ * ever moves it, so a skipped tree never shifts every later photo. 56 dp
+ * (gloves, sun), a word under each glyph; the screen announces the new tree. */
+export function WalkNav({
+  onPrev,
+  onNext,
+  disabled,
+  children,
+}: {
+  onPrev: () => void;
+  onNext: () => void;
+  /** Fewer than two plants, or a shot still being saved. */
+  disabled: boolean;
+  /** The chip. */
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={styles.walkNav}>
+      <View style={styles.navSide}>
+        <RoundButton label="Previous tree in walk order" glyph="◀" size={56} disabled={disabled} onPress={onPrev} />
+        <Text style={styles.controlCaption}>Prev</Text>
+      </View>
+      {children}
+      <View style={styles.navSide}>
+        <RoundButton label="Next tree in walk order" glyph="▶" size={56} disabled={disabled} onPress={onNext} />
+        <Text style={styles.controlCaption}>Next</Text>
+      </View>
+    </View>
+  );
+}
+
 /** The bottom control block for all three viewfinder modes.
  *  - single (walk off): Gallery · shutter · Walk toggle — today's row, with
  *    the toggle where the empty spacer was.
@@ -155,7 +200,9 @@ export function PlantChip({
  *    thumbnail flash of the last saved shot, Scan tag straight above the
  *    shutter, and the Done · N pill (≥ 48 dp, bottom-right).
  *  - bind (scan-to-bind from a Tags card): Scan tag alone, large; no shutter,
- *    no gallery, no toggle. */
+ *    no gallery, no toggle. A zone-wide bind pass (ZonesSheet) adds a Skip
+ *    pill on the right: the plant whose sticker is unreadable or missing is
+ *    passed over without a bind, and the pass moves on. */
 export function WalkControls({
   mode,
   busy,
@@ -171,6 +218,8 @@ export function WalkControls({
   doneCount,
   onDone,
   flashUri,
+  onSkip,
+  skipLabel = "Skip this plant",
 }: {
   mode: "single" | "walk" | "bind";
   busy: boolean;
@@ -186,6 +235,9 @@ export function WalkControls({
   doneCount: number;
   onDone: () => void;
   flashUri: string | null;
+  /** bind only: advance to the next plant without binding anything. */
+  onSkip?: () => void;
+  skipLabel?: string;
 }) {
   if (mode === "bind") {
     return (
@@ -195,7 +247,20 @@ export function WalkControls({
           <RoundButton label="Scan tag" glyph="▣" size={76} disabled={scanDisabled} onPress={onScan} />
           <Text style={styles.controlCaption}>Scan tag</Text>
         </View>
-        <View style={styles.sideControl} />
+        <View style={styles.sideControl}>
+          {onSkip ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={skipLabel}
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={onSkip}
+              style={[styles.skipPill, { opacity: busy ? 0.5 : 1 }]}
+            >
+              <Text style={styles.skipPillText}>Skip ▸</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     );
   }
@@ -510,6 +575,21 @@ const styles = StyleSheet.create({
   plantChipSub: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontWeight: "500", marginTop: 1 },
   controlBlock: { gap: 10 },
   walkRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" },
+  /** Prev · chip · Next: the chip keeps its flex: 1, the buttons their 56 dp. */
+  walkNav: { flexDirection: "row", alignItems: "center", gap: 10 },
+  navSide: { alignItems: "center", gap: 2 },
+  skipPill: {
+    minHeight: 48,
+    minWidth: 88,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  skipPillText: { color: "#ffffff", fontSize: 15, fontWeight: "700" },
   controls: {
     flexDirection: "row",
     alignItems: "center",

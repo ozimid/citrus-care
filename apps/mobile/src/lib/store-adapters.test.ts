@@ -192,3 +192,28 @@ describe("F39 identifiers ride through the adapters", () => {
     expect(plantDetailRowFromStore(plant())).toMatchObject({ tag: null, codes: [], tag_photo: null, tag_missing: false });
   });
 });
+
+// F39 Phase 3b: zone + walk order ride the list adapter so PlantsScreen can
+// group by zone and the walk chip can step through the zone's order.
+describe("F39 zone + walk order ride through the adapters", () => {
+  it("plantRowsFromStore carries zone and walk_order, null for a legacy plant", () => {
+    const [zoned, legacy] = plantRowsFromStore(
+      [plant({ zone: "NORTH", walk_order: 3 }), plant({ id: "p2" })],
+      [],
+    );
+    expect(zoned).toMatchObject({ zone: "NORTH", walk_order: 3 });
+    expect(legacy).toMatchObject({ zone: null, walk_order: null });
+  });
+
+  it("→ mapPlantRows exposes zone and walkOrder on the list item", () => {
+    const [item] = mapPlantRows(plantRowsFromStore([plant({ zone: "NORTH", walk_order: 3 })], []));
+    expect(item).toMatchObject({ zone: "NORTH", walkOrder: 3 });
+    const [plain] = mapPlantRows(plantRowsFromStore([plant()], []));
+    expect(plain).toMatchObject({ zone: null, walkOrder: null });
+  });
+
+  it("plantDetailRowFromStore carries zone and walk_order so the edit sheet can prefill the zone", () => {
+    expect(plantDetailRowFromStore(plant({ zone: "NORTH", walk_order: 3 }))).toMatchObject({ zone: "NORTH", walk_order: 3 });
+    expect(plantDetailRowFromStore(plant())).toMatchObject({ zone: null, walk_order: null });
+  });
+});

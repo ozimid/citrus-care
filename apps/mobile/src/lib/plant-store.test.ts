@@ -244,3 +244,77 @@ describe("addPlantCode / removePlantCode", () => {
     expect(removePlantCode(after, "c".repeat(64)).codes).toEqual([D2]);
   });
 });
+
+// F39 Phase 3b: zone + walk order. A zone is normalized like a tag (it is the
+// same kind of thing — a short label written on a map); a walk order is a
+// positive integer, unique within its zone. Both are REPAIRED, never a reason
+// to drop the plant: the plant is still the plant when its position is off.
+describe("F39 zones: zone / walk_order", () => {
+  const stored = (extra: Record<string, unknown>, id = P1) =>
+    JSON.stringify({ [id]: { ...plant({ id }), ...extra } });
+
+  it("round-trips a zoned, ordered plant", () => {
+    const store = upsertPlant({}, plant({ id: P1, zone: "NORTH", walk_order: 3 }));
+    expect(parsePlantStore(serializePlantStore(store))).toEqual(store);
+  });
+
+  it("leaves a legacy plant without zone fields exactly as it was", () => {
+    const parsed = parsePlantStore(stored({}))[P1];
+    expect("zone" in parsed).toBe(false);
+    expect("walk_order" in parsed).toBe(false);
+  });
+
+  it("normalizes a sloppy zone and repairs a bad one to null", () => {
+    expect(parsePlantStore(stored({ zone: " north " }))[P1].zone).toBe("NORTH");
+    expect(parsePlantStore(stored({ zone: "row 2" }))[P1].zone).toBe("ROW 2");
+    expect(parsePlantStore(stored({ zone: 7 }))[P1].zone).toBeNull();
+    expect(parsePlantStore(stored({ zone: "N!" }))[P1].zone).toBeNull();
+    expect(parsePlantStore(stored({ zone: "A".repeat(25) }))[P1].zone).toBeNull();
+    expect(parsePlantStore(stored({ zone: null }))[P1].zone).toBeNull();
+    expect(parsePlantStore(stored({ zone: "" }))[P1].zone).toBeNull();
+  });
+
+  it("repairs a walk_order that is not a positive integer to null", () => {
+    expect(parsePlantStore(stored({ walk_order: 2.5 }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: 0 }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: -1 }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: "3" }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: Number.NaN }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: 1e300 }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: null }))[P1].walk_order).toBeNull();
+    expect(parsePlantStore(stored({ walk_order: 3 }))[P1].walk_order).toBe(3);
+  });
+
+  it("when two plants in one zone share a walk_order, the earlier created_at keeps it and the later is nulled", () => {
+    const blob = JSON.stringify({
+      [P2]: plant({ id: P2, zone: "NORTH", walk_order: 2, created_at: "2026-07-20T00:00:00Z" }),
+      [P1]: plant({ id: P1, zone: "NORTH", walk_order: 2, created_at: "2026-07-15T10:00:00Z" }),
+      [P3]: plant({ id: P3, zone: "NORTH", walk_order: 3, created_at: "2026-07-21T00:00:00Z" }),
+    });
+    const parsed = parsePlantStore(blob);
+    expect(parsed[P1].walk_order).toBe(2);
+    expect(parsed[P2].walk_order).toBeNull();
+    expect(parsed[P3].walk_order).toBe(3);
+  });
+
+  it("allows the same walk_order in DIFFERENT zones, and treats unzoned plants as one zone", () => {
+    const blob = JSON.stringify({
+      [P1]: plant({ id: P1, zone: "NORTH", walk_order: 1, created_at: "2026-07-15T00:00:00Z" }),
+      [P2]: plant({ id: P2, zone: "SOUTH", walk_order: 1, created_at: "2026-07-16T00:00:00Z" }),
+      [P3]: plant({ id: P3, zone: null, walk_order: 1, created_at: "2026-07-17T00:00:00Z" }),
+      [LEGACY_UUID]: plant({ id: LEGACY_UUID, walk_order: 1, created_at: "2026-07-18T00:00:00Z" }),
+    });
+    const parsed = parsePlantStore(blob);
+    expect(parsed[P1].walk_order).toBe(1);
+    expect(parsed[P2].walk_order).toBe(1);
+    expect(parsed[P3].walk_order).toBe(1);
+    // Absent zone === null zone: the legacy plant collides with P3 and is later.
+    expect(parsed[LEGACY_UUID].walk_order).toBeNull();
+  });
+
+  it("never drops an otherwise valid plant because of a bad zone or order", () => {
+    const parsed = parsePlantStore(stored({ zone: 7, walk_order: "x" }));
+    expect(parsed[P1]?.name).toBe("Lemon");
+    expect(parsed[P1]).toMatchObject({ zone: null, walk_order: null });
+  });
+});

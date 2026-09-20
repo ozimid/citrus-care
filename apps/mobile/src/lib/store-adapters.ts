@@ -43,11 +43,19 @@ export function plantRowsFromStore(plants: StoredPlant[], assessments: StoredAss
     tag: plant.tag ?? null,
     codes: plant.codes ?? [],
     tag_missing: plant.tag_missing === true,
+    // Phase 3b: zone grouping + walk order for the list and the viewfinder.
+    zone: plant.zone ?? null,
+    walk_order: plant.walk_order ?? null,
   }));
 }
 
-/** The plant header row (no assessments — the timeline is fetched separately). */
-export function plantDetailRowFromStore(plant: StoredPlant): PlantDetailRow {
+/** The plant header row (no assessments — the timeline is fetched separately).
+ * Phase 3b adds zone + walk_order on top of the detail row so the edit sheet
+ * can prefill the zone (formFromPlant) — without them the sheet leaves the
+ * stored zone untouched, so an older caller is safe either way. */
+export function plantDetailRowFromStore(
+  plant: StoredPlant,
+): PlantDetailRow & { zone: string | null; walk_order: number | null } {
   return {
     id: plant.id,
     name: plant.name,
@@ -63,6 +71,8 @@ export function plantDetailRowFromStore(plant: StoredPlant): PlantDetailRow {
     codes: plant.codes ?? [],
     tag_photo: plant.tag_photo ?? null,
     tag_missing: plant.tag_missing === true,
+    zone: plant.zone ?? null,
+    walk_order: plant.walk_order ?? null,
   };
 }
 

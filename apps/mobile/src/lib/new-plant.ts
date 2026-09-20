@@ -13,6 +13,10 @@ export const GENERIC_CREATE_PLANT_ERROR = "Could not add the plant. Please try a
 /** F39 D-W4: the human tag is unique across the garden. */
 export const TAG_TAKEN_ERROR = "Another plant already has this tag";
 export const TAG_FORMAT_ERROR = `Use up to ${TAG_MAX_LENGTH} letters, numbers, spaces or - _ . #`;
+/** F39 Phase 3b: a zone follows the tag's alphabet and cap (it is written on the
+ * same map), but is shared by many plants, so it is never checked for
+ * uniqueness. */
+export const ZONE_FORMAT_ERROR = `Use up to ${TAG_MAX_LENGTH} letters, numbers, spaces or - _ . #`;
 
 export interface NewPlantForm {
   name: string;
@@ -23,6 +27,9 @@ export interface NewPlantForm {
   zip_code: string;
   /** F39: the number/label on the physical tag; "" = none. */
   tag: string;
+  /** F39 Phase 3b: the zone / row the plant stands in; "" = none. Like the
+   * tag, the whole form is written on save — see formFromPlant. */
+  zone: string;
 }
 
 export const emptyNewPlantForm: NewPlantForm = {
@@ -33,6 +40,7 @@ export const emptyNewPlantForm: NewPlantForm = {
   location: "",
   zip_code: "",
   tag: "",
+  zone: "",
 };
 
 /** Prefill for the edit sheet: DB row (nulls) → form state (empty strings). */
@@ -66,6 +74,10 @@ export function formFromPlant(plant: {
   /** Optional so every existing caller compiles; a tagged plant MUST pass it
    * or saving the edit would clear the tag (the whole form is written). */
   tag?: string | null;
+  /** Phase 3b, same rule as the tag: a zoned plant MUST pass it or saving the
+   * edit would move the tree out of its row. plantDetailRowFromStore and
+   * PlantListItem both carry it, so every edit path in the app does. */
+  zone?: string | null;
 }): NewPlantForm {
   return {
     name: plant.name,
@@ -75,6 +87,7 @@ export function formFromPlant(plant: {
     location: plant.location ?? "",
     zip_code: plant.zip_code ?? "",
     tag: plant.tag ?? "",
+    zone: plant.zone ?? "",
   };
 }
 
@@ -130,6 +143,14 @@ export function validateNewPlant(
     }
   }
 
+  // F39 Phase 3b: same alphabet as the tag, normalized the same way, but NOT
+  // unique — a row of trees shares one zone by design.
+  let zone: string | null = null;
+  if (form.zone.trim().length > 0) {
+    zone = normalizeTag(form.zone);
+    if (zone === null) errors.zone = ZONE_FORMAT_ERROR;
+  }
+
   const parsed = newPlantSchema.safeParse({
     name: form.name,
     plant_type: form.plant_type,
@@ -138,6 +159,7 @@ export function validateNewPlant(
     location: form.location,
     zip_code: form.zip_code,
     tag: form.tag,
+    zone: form.zone,
   });
 
   if (!parsed.success) {
@@ -152,7 +174,23 @@ export function validateNewPlant(
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   if (!parsed.success) return { ok: false, errors: { name: "Invalid input" } };
-  return { ok: true, data: { ...parsed.data, tag } };
+  return { ok: true, data: { ...parsed.data, tag, zone } };
+}
+
+/** "Add several plants" (F39 Phase 3b): every draft bulkPlantDrafts produced
+ * goes through validateNewPlant — the same gate as the sheet — before the io
+ * writes anything, so a future required field on the schema fails here, under
+ * test, not in the storage loop. A malformed zone throws its error verbatim
+ * (the user's typo, shown as such); anything else is the generic create error,
+ * because a name the pattern produced should never fail. */
+export function bulkPlantInputs(
+  drafts: ReadonlyArray<{ name: string; plant_type: string; zone: string | null }>,
+): NewPlantInput[] {
+  return drafts.map((draft) => {
+    const result = validateNewPlant({ ...emptyNewPlantForm, name: draft.name, plant_type: draft.plant_type, zone: draft.zone ?? "" });
+    if (result.ok) return result.data;
+    throw new Error(result.errors.zone === ZONE_FORMAT_ERROR ? ZONE_FORMAT_ERROR : GENERIC_CREATE_PLANT_ERROR);
+  });
 }
 
 /** Validated form input → a new on-device plant record. No user_id (no
@@ -175,5 +213,9 @@ export function buildStoredPlant(data: NewPlantInput, id: string, createdAt: str
     // start empty — a sticker is bound by scanning, never typed.
     tag: normalizeTag(data.tag) ?? null,
     codes: [],
+    // Phase 3b: the zone is stored; the walk order is NOT set here — the io
+    // places a new plant last in its zone (placeNewPlant), which needs the
+    // other plants. No walk_order key means "not placed".
+    zone: normalizeTag(data.zone) ?? null,
   };
 }

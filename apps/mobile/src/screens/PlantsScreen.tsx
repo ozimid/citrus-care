@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Image,
   Modal,
   Platform,
   Pressable,
   RefreshControl,
+  SectionList,
   StyleSheet,
   Text,
   View,
@@ -16,8 +16,11 @@ import { PhotoViewer } from "../components/PhotoViewer";
 import { NewPlantSheet } from "../components/NewPlantSheet";
 import { PendingWalkCard } from "../components/PendingWalkCard";
 import { TodayCard } from "../components/TodayCard";
+import { ZonesSheet } from "../components/ZonesSheet";
 import { bandColor, healthBand } from "../lib/health";
 import { gardenTrend, type PlantListItem } from "../lib/plants";
+import { loadPlantsSort, savePlantsSort, type PlantsSort } from "../lib/plants-sort-io";
+import { groupByZone, sortByStaleness } from "../lib/walk-order";
 import { weatherAlertsFor, type WeatherAlert } from "../lib/weather-alerts";
 import { scheduleWeatherAlert } from "../lib/reminders";
 import {
@@ -41,8 +44,21 @@ import { PlantDetailScreen } from "./PlantDetailScreen";
 // bands. RLS scopes the query to the signed-in user; pull-to-refresh re-runs
 // it. Tapping a card opens the plant detail modal; the "Add plant" button
 // (header + empty state) opens the new-plant sheet.
+// F39 Phase 3b (research §4, "structure beats search"): once one plant has a
+// zone the list becomes sections — one per zone, walk order inside, unzoned
+// last — so the rows read the way the garden is walked. A remembered sort
+// toggle swaps that structure for triage: "Needs a check" ranks the WHOLE
+// garden in one section (never assessed first, then longest ago), each card
+// naming its zone; "Zones" opens the editor. The grouping and both orders are
+// walk-order.ts (pure, tested); the toggle's memory is plants-sort-io.
 
 const GENERIC_LOAD_ERROR = "Could not load your plants. Pull to retry.";
+
+interface PlantSection {
+  /** null = the single unlabelled section of a garden with no zones. */
+  title: string | null;
+  data: PlantListItem[];
+}
 
 export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const { t, scheme } = useTheme();
@@ -51,6 +67,8 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [zonesOpen, setZonesOpen] = useState(false);
+  const [sort, setSort] = useState<PlantsSort>("newest");
   const [detailId, setDetailId] = useState<string | null>(null);
   /** Full-screen photo (tap a card's thumbnail). */
   const [viewing, setViewing] = useState<{ uri: string; caption?: string } | null>(null);
@@ -142,6 +160,38 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
     setRefreshing(false);
   }, [load]);
 
+  // The remembered sort (degrades to "newest").
+  useEffect(() => {
+    let cancelled = false;
+    loadPlantsSort().then((saved) => {
+      if (!cancelled) setSort(saved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const pickSort = useCallback((next: PlantsSort) => {
+    setSort(next);
+    void savePlantsSort(next);
+  }, []);
+
+  /** Two genuine views. Structure: sections appear as soon as one plant has a
+   * zone (until then one unlabelled section in today's order). Triage: "Needs
+   * a check" ranks the whole garden in ONE section — confining it to a zone
+   * would discard exactly the comparison it computes (the longest-unchecked
+   * tree three sections down would sit under freshly checked ones). */
+  const zoned = useMemo(() => (items ?? []).some((p) => p.zone), [items]);
+  const sections = useMemo<PlantSection[]>(() => {
+    const list = items ?? [];
+    // An empty garden gets NO sections: SectionList counts a header and a
+    // footer slot per section, so one empty section would hide the empty state.
+    if (list.length === 0) return [];
+    if (sort === "stale") return [{ title: zoned ? "Needs a check first · all zones" : null, data: sortByStaleness(list) }];
+    if (!zoned) return [{ title: null, data: list }];
+    return groupByZone(list).map((group) => ({ title: group.zone ?? "No zone", data: group.items }));
+  }, [items, sort, zoned]);
+
   return (
     <View style={[styles.container, { backgroundColor: t.canvas }]}>
       <View style={styles.headerRow}>
@@ -160,14 +210,38 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
         <Text style={[styles.trendLine, { color: t.sub }]}>{gardenTrend(items)!.line}</Text>
       ) : null}
       {error ? <Text style={[styles.errorBanner, { color: t.danger }]}>{error}</Text> : null}
+      {items !== null ? (
+        <View style={styles.toolbar}>
+          {/* The sort needs two plants to mean anything; Zones is always here —
+              "Add several plants…" lives behind it, and an empty garden is
+              exactly when thirty numbered trees get created at once. */}
+          {items.length > 1 ? (
+            <View style={[styles.segment, { borderColor: t.border }]} accessibilityRole="radiogroup">
+              <SortOption text={zoned ? "Walk order" : "Newest"} selected={sort === "newest"} onPress={() => pickSort("newest")} t={t} />
+              <SortOption text="Needs a check" selected={sort === "stale"} onPress={() => pickSort("stale")} t={t} />
+            </View>
+          ) : (
+            <View style={styles.toolbarFlex} />
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Zones and walk order"
+            onPress={() => setZonesOpen(true)}
+            style={[styles.zonesButton, { borderColor: t.border, backgroundColor: t.card }]}
+          >
+            <Text style={[styles.zonesButtonText, { color: t.text }]}>Zones ▸</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {items === null ? (
         <View style={styles.center}>
           <ActivityIndicator color={t.green} />
         </View>
       ) : (
-        <FlatList
-          data={items}
+        <SectionList<PlantListItem, PlantSection>
+          sections={sections}
           keyExtractor={(item) => item.id}
+          stickySectionHeadersEnabled={false}
           contentContainerStyle={items.length === 0 ? styles.emptyGrow : styles.listContent}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.green} />
@@ -183,11 +257,19 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           ListEmptyComponent={
             error ? null : <EmptyState t={t} onAdd={() => setAdding(true)} />
           }
+          renderSectionHeader={({ section }) =>
+            section.title ? (
+              <Text style={[styles.sectionHeader, { color: t.sub }]} accessibilityRole="header">
+                {section.title} · {section.data.length}
+              </Text>
+            ) : null
+          }
           renderItem={({ item }) => (
             <PlantCard
               item={item}
               needsWater={plans[item.id]?.isDue === true}
               tagMissing={item.tagMissing}
+              showZone={sort === "stale" && zoned}
               t={t}
               scheme={scheme}
               onPress={() => setDetailId(item.id)}
@@ -207,6 +289,8 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           load();
         }}
       />
+      {/* F39 Phase 3b: zones, walk order, bulk add, zone-wide code binding. */}
+      <ZonesSheet visible={zonesOpen} onClose={() => setZonesOpen(false)} onChanged={load} />
       {/* Plant detail over the tab (Modal pattern like the capture flow). */}
       <Modal
         visible={detailId !== null}
@@ -229,12 +313,16 @@ function PlantCard({
   item,
   needsWater,
   tagMissing,
+  showZone,
   t,
   scheme,
   onPress,
   onViewPhoto,
 }: {
   item: PlantListItem;
+  /** Phase 3b: in the flat triage view the section no longer says where the
+   * plant stands, so the card does. */
+  showZone: boolean;
   /** F20: this plant's watering plan says it's due (chip appears once the
    * list's weather pass lands — never blocks the card). */
   needsWater: boolean;
@@ -252,7 +340,7 @@ function PlantCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${item.name}${tag ? `, number ${tag}` : ""}${needsWater ? ", needs water" : ""}${tagMissing ? ", tag missing" : ""}`}
+      accessibilityLabel={`Open ${item.name}${tag ? `, number ${tag}` : ""}${showZone && item.zone ? `, zone ${item.zone}` : ""}${needsWater ? ", needs water" : ""}${tagMissing ? ", tag missing" : ""}`}
       onPress={onPress}
       style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}
     >
@@ -287,6 +375,13 @@ function PlantCard({
               </Text>
             </View>
           ) : null}
+          {showZone && item.zone ? (
+            <View style={[styles.tagChip, { borderColor: t.border }]}>
+              <Text style={[styles.tagChipText, { color: t.sub }]} numberOfLines={1}>
+                {item.zone}
+              </Text>
+            </View>
+          ) : null}
         </View>
         {item.subLabel ? (
           <Text style={[styles.cardSub, { color: t.sub }]} numberOfLines={1}>
@@ -306,6 +401,25 @@ function PlantCard({
         </View>
       </View>
       <HealthRing score={item.latestScore} t={t} scheme={scheme} />
+    </Pressable>
+  );
+}
+
+/** One half of the sort toggle: a ≥ 48 dp radio whose selected state is a
+ * fill AND a check mark, so it reads without colour. */
+function SortOption({ text, selected, onPress, t }: { text: string; selected: boolean; onPress: () => void; t: Tokens }) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={`Sort by ${text}`}
+      accessibilityState={{ checked: selected }}
+      onPress={onPress}
+      style={[styles.segmentOption, { backgroundColor: selected ? t.green : "transparent" }]}
+    >
+      <Text style={[styles.segmentText, { color: selected ? t.onGreen : t.text }]} numberOfLines={1}>
+        {selected ? "✓ " : ""}
+        {text}
+      </Text>
     </Pressable>
   );
 }
@@ -402,6 +516,21 @@ const styles = StyleSheet.create({
   addButtonText: { fontSize: 13, fontWeight: "600" },
   errorBanner: { fontSize: 13, paddingHorizontal: 20, marginBottom: 8 },
   trendLine: { fontSize: 13, fontWeight: "600", paddingHorizontal: 20, marginTop: -6, marginBottom: 8 },
+  toolbar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 20, marginBottom: 10 },
+  toolbarFlex: { flex: 1 },
+  segment: { flex: 1, flexDirection: "row", borderWidth: 1, borderRadius: RADIUS, overflow: "hidden" },
+  segmentOption: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
+  segmentText: { fontSize: 13, fontWeight: "600" },
+  zonesButton: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderRadius: RADIUS,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  zonesButtonText: { fontSize: 14, fontWeight: "600" },
+  sectionHeader: { fontSize: 12, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase", marginTop: 6 },
   listContent: { paddingHorizontal: 20, paddingBottom: 24, gap: 10 },
   emptyGrow: { flexGrow: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 8 },

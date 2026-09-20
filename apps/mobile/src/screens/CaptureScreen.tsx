@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { File } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import {
   CaptureHint,
@@ -12,6 +12,7 @@ import {
   useWalkMode,
   WalkControls,
   WalkModeLine,
+  WalkNav,
 } from "../components/CaptureOverlay";
 import { ImportSheet, type ImportProgress } from "../components/ImportSheet";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
@@ -31,6 +32,7 @@ import {
 import { type PlantListItem } from "../lib/plants";
 import { fetchPlants } from "../lib/plants-io";
 import { RADIUS } from "../lib/theme";
+import { groupByZone, nextInWalk, prevInWalk } from "../lib/walk-order";
 import { DiagnosisScreen } from "./DiagnosisScreen";
 import { ReviewScreen } from "./ReviewScreen";
 import { WalkReviewScreen } from "./WalkReviewScreen";
@@ -59,6 +61,13 @@ import { WalkRunScreen } from "./WalkRunScreen";
 // review. OFF is today's flow, verbatim.
 // Scan-to-bind (`scanTarget`, from a plant's Tags card): the same viewfinder
 // with only Scan tag — one successful scan binds and closes.
+// F39 Phase 3b: in walk mode ◀ Prev / Next ▶ flank the chip and move it along
+// the stored walk order (walk-order.ts). They RANK, never commit (research §4):
+// the chip moves only on a tap, a move is a hand confirm (`user` evidence for
+// the shots that follow) and it is announced ("Next tree: Meyer lemon"); a
+// shot never advances the chip. `scanTargets` is the zone-wide bind pass from
+// ZonesSheet: the same scan-only viewfinder, one plant at a time, each bind
+// (or Skip) moving to the next — no plant photos are taken.
 
 const GENERIC_PHOTO_ERROR = "Couldn't process that photo. Please try again.";
 const GENERIC_PLANTS_ERROR = "Could not load your plants. Close and try again.";
@@ -79,13 +88,25 @@ interface Props {
   initialPlantId?: string;
   /** Scan-to-bind from PlantTagsCard: bind the scanned code to this plant. */
   scanTarget?: string;
+  /** Scan-to-bind for several plants in order (ZonesSheet "Bind codes for
+   * this zone"): each bind — or Skip — advances to the next id; the screen
+   * closes after the last. Takes precedence over `scanTarget`. */
+  scanTargets?: string[];
 }
 
-export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget }: Props) {
+export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget, scanTargets }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const askedRef = useRef(false);
-  const bindMode = scanTarget !== undefined;
+  /** The bind pass, as a list either way; null outside bind mode. Memoized:
+   * a fresh array per render would re-run the empty-pass effect every time. */
+  const targets = useMemo(
+    () => scanTargets ?? (scanTarget !== undefined ? [scanTarget] : null),
+    [scanTargets, scanTarget],
+  );
+  const bindMode = targets !== null;
+  const [scanIndex, setScanIndex] = useState(0);
+  const currentTarget = targets?.[scanIndex];
 
   const [plants, setPlants] = useState<PlantListItem[] | null>(null);
   const [plantsError, setPlantsError] = useState(false);
@@ -109,6 +130,9 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
    * the tap — the review may have created one). */
   const [walkRun, setWalkRun] = useState<{ items: QueuedPhoto[]; plants: PlantListItem[] } | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  /** Phase 3b: "Next tree: …" / "Now binding: …" — its own live region, so a
+   * navigation announcement never wears the save toast's check mark. */
+  const [navNotice, setNavNotice] = useState<string | null>(null);
   /** Close with saved walk shots: the "kept" toast is read, then we leave. */
   const [closing, setClosing] = useState(false);
 
@@ -157,9 +181,35 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
     return () => clearTimeout(timer);
   }, [savedNotice]);
 
+  useEffect(() => {
+    if (!navNotice) return;
+    const timer = setTimeout(() => setNavNotice(null), SAVED_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [navNotice]);
+
+  // An empty bind pass has nothing to do — leave rather than show a scanner
+  // aimed at no plant (useTagScan would otherwise read it as walk mode).
+  useEffect(() => {
+    if (targets && targets.length === 0) onClose();
+  }, [targets, onClose]);
+
   const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
+  /** Phase 3b: where the chip's plant stands in its zone's walk (1-based).
+   * The chip shows it so a step — or a wrap — can be checked against the
+   * stake, and walkTo uses it to say what actually happened. */
+  const walkPosition = useMemo(() => {
+    if (!plants || !selectedPlantId) return null;
+    const group = groupByZone(plants).find((g) => g.items.some((p) => p.id === selectedPlantId));
+    if (!group) return null;
+    return { zone: group.zone, index: group.items.findIndex((p) => p.id === selectedPlantId) + 1, total: group.items.length };
+  }, [plants, selectedPlantId]);
   const ready = !busy && !closing;
   const havePlants = !!plants && plants.length > 0;
+  const nameOf = useCallback(
+    (id: string | undefined) => plants?.find((p) => p.id === id)?.name ?? "that plant",
+    [plants],
+  );
+  const bindPlantName = bindMode ? nameOf(currentTarget) : null;
 
   const walkMode = useWalkMode({ enabled: !bindMode, selectedPlant, walkId, cameraRef, setBusy, setError });
   // D-W7: walk mode is disabled with zero plants. The remembered flag is left
@@ -206,11 +256,50 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
     [walkMode],
   );
 
+  /** Phase 3b: step the chip along the stored walk order. The step itself is
+   * the confirm (fresh chip, no code run → `user` evidence), and it is said
+   * out loud — the chip is small and the sun is bright. Nothing else moves it.
+   * nextInWalk wraps inside the zone (a locked, tested contract); what changes
+   * here is only what the screen CLAIMS: a wrap says so, and a zone of one
+   * says why nothing moved instead of "Next tree: <the same tree>". */
+  const walkTo = useCallback(
+    (direction: "next" | "prev") => {
+      if (!plants || plants.length === 0) return;
+      const id = direction === "next" ? nextInWalk(plants, selectedPlantId) : prevInWalk(plants, selectedPlantId);
+      if (!id) return;
+      if (id === selectedPlantId) {
+        setNavNotice(`Only tree in ${walkPosition?.zone ?? "this group"} — tap the name to pick another`);
+        return;
+      }
+      setSelectedPlantId(id);
+      walkMode.setScanDigest(null);
+      walkMode.touchActivity();
+      const atEdge = walkPosition && (direction === "next" ? walkPosition.index === walkPosition.total : walkPosition.index === 1);
+      setNavNotice(
+        atEdge
+          ? `Back to the ${direction === "next" ? "start" : "end"} of ${walkPosition?.zone ?? "the list"}: ${nameOf(id)}`
+          : `${direction === "next" ? "Next" : "Previous"} tree: ${nameOf(id)}`,
+      );
+    },
+    [nameOf, plants, selectedPlantId, walkMode, walkPosition],
+  );
+
+  /** The bind pass moves on: to the next plant, or out when it was the last.
+   * Bind and Skip both land here — a Skip is an explicit "not this one",
+   * never an inferred one. */
+  const advanceBind = useCallback(() => {
+    if (!targets) return;
+    const next = scanIndex + 1;
+    if (next >= targets.length) return finishWalk();
+    setScanIndex(next);
+    setNavNotice(`Now binding ${nameOf(targets[next])} · ${next + 1} of ${targets.length}`);
+  }, [finishWalk, nameOf, scanIndex, targets]);
+
   const tagScan = useTagScan({
     cameraRef,
     plants,
     selectedPlantId,
-    scanTarget,
+    scanTarget: currentTarget,
     onSwitch: (plantId, digest) => {
       setSelectedPlantId(plantId);
       walkMode.setScanDigest(digest);
@@ -218,8 +307,22 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
     },
     onBound: async (plantId, digest) => {
       if (bindMode) {
-        onAssessed?.();
-        onClose();
+        // Re-read before moving on so the next scan sees this bind: the pass
+        // stays on one screen, and a stale list would let the same sticker be
+        // bound to two consecutive plants (D-W3 — exactly one owner decides).
+        try {
+          setPlants(await fetchPlants());
+        } catch {
+          // fetchPlants already logged; the pass still moves on.
+        }
+        setSavedNotice(`Code bound to ${nameOf(plantId)}`);
+        if (targets && scanIndex + 1 >= targets.length) {
+          // The last one: the toast is read, then we leave (the `closing` pattern).
+          setClosing(true);
+          setTimeout(finishWalk, KEEP_NOTICE_MS);
+          return;
+        }
+        advanceBind();
         return;
       }
       let named = plants ?? [];
@@ -437,28 +540,52 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
       )}
 
       <View style={styles.topBar}>
-        {/* 48 dp: in walk mode Close is the keep-and-leave exit, load-bearing
-            for a gloved thumb; held while a walk shot is still being saved
-            so the "N photos kept" count is true. */}
-        <RoundButton label="Close" glyph="✕" size={48} disabled={walk && busy} onPress={close} />
-        {bindMode ? (
-          <Text style={styles.bindHeader} accessibilityRole="header">
-            Point at the code on this plant
-          </Text>
-        ) : (
-          <PlantChip
-            walk={walk}
-            plantName={selectedPlant?.name ?? null}
-            stale={walkMode.stale}
-            disabled={!havePlants}
-            onPress={() => setPickerOpen(true)}
-          />
-        )}
-        {bindMode ? (
-          <View style={styles.topSpacer} />
-        ) : (
-          <RoundButton label="Photo tips" glyph="?" size={48} onPress={() => setTipsOpen(true)} />
-        )}
+        <View style={styles.topRow}>
+          {/* 48 dp: in walk mode Close is the keep-and-leave exit, load-bearing
+              for a gloved thumb; held while a walk shot is still being saved
+              so the "N photos kept" count is true. */}
+          <RoundButton label="Close" glyph="✕" size={48} disabled={walk && busy} onPress={close} />
+          {bindMode ? (
+            <Text style={styles.bindHeader} accessibilityRole="header" accessibilityLiveRegion="polite">
+              Point at the code on {bindPlantName}
+              {targets && targets.length > 1 ? ` · ${scanIndex + 1} of ${targets.length}` : ""}
+            </Text>
+          ) : walk ? (
+            // Walk mode: the chip moves down a row so Prev/Next get their 56 dp
+            // without squeezing a two-line name into the gap.
+            <View style={styles.topFlex} />
+          ) : (
+            <PlantChip
+              walk={false}
+              plantName={selectedPlant?.name ?? null}
+              stale={false}
+              disabled={!havePlants}
+              onPress={() => setPickerOpen(true)}
+            />
+          )}
+          {bindMode ? (
+            <View style={styles.topSpacer} />
+          ) : (
+            <RoundButton label="Photo tips" glyph="?" size={48} onPress={() => setTipsOpen(true)} />
+          )}
+        </View>
+        {walk ? (
+          <WalkNav
+            onPrev={() => walkTo("prev")}
+            onNext={() => walkTo("next")}
+            disabled={!plants || plants.length < 2 || busy || closing}
+          >
+            <PlantChip
+              walk
+              plantName={selectedPlant?.name ?? null}
+              tag={selectedPlant?.tag ?? null}
+              position={walkPosition}
+              stale={walkMode.stale}
+              disabled={!havePlants}
+              onPress={() => setPickerOpen(true)}
+            />
+          </WalkNav>
+        ) : null}
       </View>
 
       <View style={styles.bottomArea}>
@@ -467,6 +594,11 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
         {savedNotice ? (
           <Text style={styles.toast} accessibilityLiveRegion="polite">
             ✓ {savedNotice}
+          </Text>
+        ) : null}
+        {navNotice ? (
+          <Text style={[styles.toast, styles.navToast]} accessibilityLiveRegion="polite">
+            {navNotice}
           </Text>
         ) : null}
         {bindMode ? (
@@ -491,6 +623,9 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget 
           doneCount={walkCount}
           onDone={() => setWalkReview({ notice: null })}
           flashUri={walkMode.flashUri}
+          // Skip only on a pass (ZonesSheet): a single plant's card has Close.
+          onSkip={scanTargets ? advanceBind : undefined}
+          skipLabel={`Skip ${bindPlantName ?? "this plant"} without binding a code`}
         />
       </View>
 
@@ -526,11 +661,12 @@ const styles = StyleSheet.create({
     right: 0,
     paddingTop: 62,
     paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
     gap: 10,
   },
+  topRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  topFlex: { flex: 1 },
   topSpacer: { width: 48, height: 48 },
+  navToast: { backgroundColor: "rgba(0,0,0,0.7)" },
   bindHeader: {
     flex: 1,
     minHeight: 48,

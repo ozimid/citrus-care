@@ -37,6 +37,15 @@ export interface StoredPlant {
   /** The user flagged the physical tag as lost/unreadable — shown on the card
    * and the picker until they re-tag. */
   tag_missing?: boolean;
+  // F39 Phase 3b — zones + a stored walk order (research §4). A walk order
+  // RANKS plants for the viewfinder's Next/Prev; it never decides where a
+  // photo goes. Both optional so pre-3b records round-trip byte-for-byte.
+  /** Zone / row label ("NORTH", "ROW 2"): normalizeTag output — same alphabet
+   * and cap as a tag, but many plants share one. */
+  zone?: string | null;
+  /** Position within the zone's walk: a positive integer, unique per zone.
+   * null = not placed yet (sorts last, by name). */
+  walk_order?: number | null;
 }
 
 /** plantId → plant. */
@@ -110,6 +119,11 @@ function repairCodes(raw: unknown): string[] {
   return out;
 }
 
+/** The one shape `StoredPlant.walk_order` may hold: a positive safe integer. */
+export function isWalkOrder(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 /** F39: the identifier fields are REPAIRED, not validated — a plant is still
  * the plant when its tag is malformed. Only fields that are present are
  * touched, so a pre-F39 record round-trips without invented keys. */
@@ -120,7 +134,31 @@ function repairIdentifiers(plant: StoredPlant): StoredPlant {
   if ("codes" in raw) out.codes = repairCodes(raw.codes);
   if ("tag_photo" in raw) out.tag_photo = isSafeBasename(raw.tag_photo) ? raw.tag_photo : null;
   if ("tag_missing" in raw) out.tag_missing = raw.tag_missing === true;
+  // Phase 3b: a zone is a tag-shaped label; an order is a positive integer.
+  if ("zone" in raw) out.zone = normalizeTag(raw.zone);
+  if ("walk_order" in raw) out.walk_order = isWalkOrder(raw.walk_order) ? raw.walk_order : null;
   return out;
+}
+
+/** Oldest first, id as the tiebreak — the order the walk-order repair trusts. */
+function byCreatedAtAsc(a: StoredPlant, b: StoredPlant): number {
+  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** Two plants in one zone cannot share a position (a hand-edited or merged
+ * blob could say so): the earlier-created plant keeps it and the later one is
+ * unplaced (null — sorts last, by name) until the user reorders. Absent and
+ * null zones are one zone, so the unzoned list is walkable too. */
+function repairWalkOrders(store: PlantStore): PlantStore {
+  const seen = new Set<string>();
+  let next = store;
+  for (const plant of Object.values(store).filter((p) => isWalkOrder(p.walk_order)).sort(byCreatedAtAsc)) {
+    const key = JSON.stringify([plant.zone ?? null, plant.walk_order]);
+    if (seen.has(key)) next = { ...next, [plant.id]: { ...plant, walk_order: null } };
+    else seen.add(key);
+  }
+  return next;
 }
 
 /** Parse the stored blob. Untrusted: malformed JSON or malformed plants degrade
@@ -140,7 +178,7 @@ export function parsePlantStore(json: string | null): PlantStore {
     // keeping it would let two names reach one directory.
     if (isValidStoredPlant(plant) && plant.id === id) store[id] = repairIdentifiers(plant);
   }
-  return store;
+  return repairWalkOrders(store);
 }
 
 export function serializePlantStore(store: PlantStore): string {

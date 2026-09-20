@@ -174,6 +174,8 @@ describe("mapPlantRows", () => {
       codes: [],
       codeCount: 0,
       tagMissing: false,
+      zone: null,
+      walkOrder: null,
     });
     expect(items[1].latestScore).toBeNull();
     expect(items[1].trend).toBeNull();
@@ -204,6 +206,15 @@ describe("mapPlantRows", () => {
     expect(tagged).toMatchObject({ tag: "L3", codes: [D1, D2], codeCount: 2, tagMissing: true });
     const [absent] = mapPlantRows([row({ codes: null, tag_missing: undefined })]);
     expect(absent).toMatchObject({ tag: null, codes: [], codeCount: 0, tagMissing: false });
+  });
+
+  // F39 Phase 3b: zone + walk order reach the list so PlantsScreen can group
+  // by zone and the walk chip can step along the zone's order.
+  it("carries zone and walkOrder, null when absent (F39 Phase 3b)", () => {
+    const [zoned] = mapPlantRows([row({ zone: "NORTH", walk_order: 3 })]);
+    expect(zoned).toMatchObject({ zone: "NORTH", walkOrder: 3 });
+    const [absent] = mapPlantRows([row({ zone: undefined, walk_order: undefined })]);
+    expect(absent).toMatchObject({ zone: null, walkOrder: null });
   });
 });
 

@@ -9,12 +9,15 @@ import { deletePlantAssessments, loadAssessmentStore } from "./assessment-store-
 import { deletePlantChat } from "./plant-chat-io";
 import { deletePlantQueuedPhotos } from "./photo-queue-io";
 import { deletePlantPrunePlans } from "./prune-io";
-import { buildStoredPlant, GENERIC_CREATE_PLANT_ERROR } from "./new-plant";
+import { buildStoredPlant, bulkPlantInputs, GENERIC_CREATE_PLANT_ERROR, ZONE_FORMAT_ERROR } from "./new-plant";
 import { newLocalId } from "./local-id";
 import {
-  buildPlantUpdateRow,
+  applyPlantUpdate,
+  applyWalkOrders,
   GENERIC_DELETE_PLANT_ERROR,
   GENERIC_UPDATE_PLANT_ERROR,
+  placeInZone,
+  placeNewPlant,
 } from "./plant-mutations";
 import {
   mapTimelineRows,
@@ -22,8 +25,9 @@ import {
   type PlantDetailData,
 } from "./plant-detail";
 import { attachCoverPhotos, mapPlantRows, type PlantListItem } from "./plants";
-import { allPlants, getPlant, type PlantStore } from "./plant-store";
-import { deletePlantRecord, loadPlantStore, putPlant } from "./plant-store-io";
+import { allPlants, getPlant, upsertPlant, type PlantStore } from "./plant-store";
+import { deletePlantRecord, loadPlantStore, savePlantStore } from "./plant-store-io";
+import { normalizeTag } from "./plant-tags";
 import { deleteLocalPlantPhotos, loadPhotoIndex } from "./photo-store-io";
 import { buildDiagnosisContext } from "./spike-vlm";
 import {
@@ -92,11 +96,14 @@ export async function loadDiagnosisContext(plantId: string, now: Date = new Date
 }
 
 /** Create a plant on the phone; returns its new id (care_profile null — the
- * detail screen backfills it on-device when the model is ready). */
+ * detail screen backfills it on-device when the model is ready). A plant
+ * created in a zone takes the last position in that zone's walk (Phase 3b). */
 export async function insertPlant(data: NewPlantInput): Promise<string> {
   try {
+    const store = await loadPlantStore();
     const id = newLocalId(Date.now(), Math.random());
-    await putPlant(buildStoredPlant(data, id, new Date().toISOString()));
+    const plant = placeNewPlant(allPlants(store), buildStoredPlant(data, id, new Date().toISOString()));
+    await savePlantStore(upsertPlant(store, plant));
     return id;
   } catch (e) {
     console.error("[insertPlant] save failed:", (e as Error).message);
@@ -104,15 +111,85 @@ export async function insertPlant(data: NewPlantInput): Promise<string> {
   }
 }
 
+/** The edit sheet's save. One read-modify-write; a zone change re-places the
+ * plant last in its new zone, an input without a zone field keeps it. */
 export async function updatePlant(plantId: string, data: NewPlantInput): Promise<void> {
+  try {
+    const store = await loadPlantStore();
+    const next = applyPlantUpdate(store, plantId, data);
+    if (!next) throw new Error("plant not found on this device");
+    await savePlantStore(upsertPlant(store, next));
+  } catch (e) {
+    console.error("[updatePlant] save failed:", (e as Error).message);
+    throw new Error(GENERIC_UPDATE_PLANT_ERROR);
+  }
+}
+
+// F39 Phase 3b — zones + walk order (design contract §4: the order RANKS, the
+// user's tap COMMITS). Three writes for the Zones sheet; every rule about
+// where a plant lands is the tested pure half (plant-mutations / walk-order).
+
+/** "Move to zone…": null clears the zone (and the position); a new zone
+ * places the plant last in it. Throws ZONE_FORMAT_ERROR (user-facing) for a
+ * label outside the tag alphabet, the generic error when the write fails. */
+export async function setPlantZone(plantId: string, zone: string | null): Promise<void> {
+  const normalized = zone === null ? null : normalizeTag(zone);
+  if (zone !== null && normalized === null) throw new Error(ZONE_FORMAT_ERROR);
   try {
     const store = await loadPlantStore();
     const plant = getPlant(store, plantId);
     if (!plant) throw new Error("plant not found on this device");
-    await putPlant({ ...plant, ...buildPlantUpdateRow(data) });
+    const next = placeInZone(allPlants(store), plant, normalized);
+    if (next === plant) return;
+    await savePlantStore(upsertPlant(store, next));
   } catch (e) {
-    console.error("[updatePlant] save failed:", (e as Error).message);
+    console.error("[setPlantZone] save failed:", (e as Error).message);
     throw new Error(GENERIC_UPDATE_PLANT_ERROR);
+  }
+}
+
+/** ▲ ▼ on the Zones sheet: persist the whole zone's renumbered positions from
+ * reorderWalk in one write, so a kill can never leave two plants on one step. */
+export async function setWalkOrders(updates: { id: string; walkOrder: number }[]): Promise<void> {
+  if (updates.length === 0) return;
+  try {
+    const store = await loadPlantStore();
+    await savePlantStore(applyWalkOrders(store, updates));
+  } catch (e) {
+    console.error("[setWalkOrders] save failed:", (e as Error).message);
+    throw new Error(GENERIC_UPDATE_PLANT_ERROR);
+  }
+}
+
+/** "Add several plants…": the drafts bulkPlantDrafts produced, created in
+ * order and placed 1..n after whatever the zone already holds. One write for
+ * the batch; created_at is one millisecond apart per draft so the parser's
+ * duplicate-order repair and the "Newest" sort both see the batch in pattern
+ * order. Returns the new ids in draft order. */
+export async function insertPlantsBulk(
+  drafts: { name: string; plant_type: string; zone: string | null }[],
+): Promise<string[]> {
+  if (drafts.length === 0) return [];
+  // Validated through the sheet's own gate (pure, tested) before anything is
+  // written: a bad zone is the user's typo (its error verbatim), not a storage
+  // failure. This io only mints ids, places and writes.
+  const inputs = bulkPlantInputs(drafts);
+  try {
+    let store = await loadPlantStore();
+    const ids: string[] = [];
+    const now = Date.now();
+    inputs.forEach((data, i) => {
+      const stamp = now + i;
+      const id = newLocalId(stamp, Math.random());
+      const plant = placeNewPlant(allPlants(store), buildStoredPlant(data, id, new Date(stamp).toISOString()));
+      store = upsertPlant(store, plant);
+      ids.push(id);
+    });
+    await savePlantStore(store);
+    return ids;
+  } catch (e) {
+    console.error("[insertPlantsBulk] save failed:", (e as Error).message);
+    throw new Error(GENERIC_CREATE_PLANT_ERROR);
   }
 }
 

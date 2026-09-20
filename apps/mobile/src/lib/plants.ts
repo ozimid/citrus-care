@@ -30,6 +30,9 @@ export type PlantRow = Pick<
   tag?: string | null;
   codes?: string[] | null;
   tag_missing?: boolean;
+  /** F39 Phase 3b: the zone / row and the plant's position in its walk. */
+  zone?: string | null;
+  walk_order?: number | null;
 };
 
 export interface PlantListItem {
@@ -65,6 +68,13 @@ export interface PlantListItem {
   codeCount: number;
   /** The user flagged the physical tag as lost/unreadable. */
   tagMissing: boolean;
+  // F39 Phase 3b. PlantsScreen groups by zone (groupByZone) and the walk
+  // chip steps along the zone's order (nextInWalk / prevInWalk) — the order
+  // ranks, it never assigns a photo.
+  /** normalizeTag output ("NORTH"), or null when the plant has no zone. */
+  zone: string | null;
+  /** Position within the zone's walk (1-based), null when not placed yet. */
+  walkOrder: number | null;
 }
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
@@ -133,6 +143,8 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
     codes: [...(row.codes ?? [])],
     codeCount: row.codes?.length ?? 0,
     tagMissing: row.tag_missing === true,
+    zone: row.zone ?? null,
+    walkOrder: row.walk_order ?? null,
   }));
 }
 

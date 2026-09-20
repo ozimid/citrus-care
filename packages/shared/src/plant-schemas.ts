@@ -63,6 +63,10 @@ export const newPlantSchema = z.object({
   /** F39 (mobile): the human tag on the physical marker. Length only here —
    * the whitelist, casing and uniqueness live in the mobile validator. */
   tag: optionalString(24).optional(),
+  /** F39 Phase 3b (mobile): the zone / row the plant stands in. Same rules as
+   * the tag (length here, whitelist + casing in the mobile validator), but
+   * shared by many plants — never unique. */
+  zone: optionalString(24).optional(),
 });
 
 export type NewPlantInput = z.infer<typeof newPlantSchema>;

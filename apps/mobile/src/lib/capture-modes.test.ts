@@ -96,6 +96,8 @@ describe("filterPlantsByQuery", () => {
       codes: [],
       codeCount: 0,
       tagMissing: false,
+      zone: null,
+      walkOrder: null,
       ...extra,
     };
   }

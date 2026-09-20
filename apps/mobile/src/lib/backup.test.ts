@@ -359,3 +359,37 @@ describe("backup v3 carries tags and code digests (F39)", () => {
     expect(merged.plants[P1].codes).toEqual([DIGEST]);
   });
 });
+
+// F39 Phase 3b (D-W11): zone + walk order ride the plant store into backup v3
+// with no version bump, through the same repairing parser as the tag.
+describe("backup v3 carries zone and walk order (F39 Phase 3b)", () => {
+  it("round-trips a zoned, ordered plant", () => {
+    const zoned: StoredPlant = { ...plant(P1), zone: "NORTH", walk_order: 3 };
+    const doc = buildBackup(stores({ plants: { [P1]: zoned } }), "2026-09-19T12:00:00Z");
+    expect(parseBackup(serializeBackup(doc))?.stores.plants[P1]).toEqual(zoned);
+  });
+
+  it("repairs a crafted zone / walk order and de-duplicates orders within a zone on import", () => {
+    const doc = {
+      app: "citrus-care",
+      version: 3,
+      exportedAt: "t",
+      plants: {
+        [P1]: { ...plant(P1), zone: " north ", walk_order: 2.5 },
+        [P2]: { ...plant(P2), zone: "NORTH", walk_order: 1, created_at: "2026-07-16T00:00:00Z" },
+        [A1]: { ...plant(A1), zone: "NORTH", walk_order: 1, created_at: "2026-07-15T00:00:00Z" },
+      },
+    };
+    const parsed = parseBackup(JSON.stringify(doc))!.stores.plants;
+    expect(parsed[P1]).toMatchObject({ zone: "NORTH", walk_order: null });
+    expect(parsed[A1].walk_order).toBe(1);
+    expect(parsed[P2].walk_order).toBeNull();
+  });
+
+  it("merge keeps the local plant's zone and order on collision (import never overwrites)", () => {
+    const local: StoredPlant = { ...plant(P1), zone: "NORTH", walk_order: 1 };
+    const incoming: StoredPlant = { ...plant(P1), zone: "SOUTH", walk_order: 9 };
+    const { merged } = mergeBackup(stores({ plants: { [P1]: local } }), stores({ plants: { [P1]: incoming } }));
+    expect(merged.plants[P1]).toMatchObject({ zone: "NORTH", walk_order: 1 });
+  });
+});

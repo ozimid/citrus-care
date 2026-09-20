@@ -11,6 +11,9 @@
 // generated code is shown exactly once, before it is saved. The card owns its
 // own modals (scan-to-bind capture, the move picker, the photo viewer) and
 // reports every change upward through onChanged, like PlantToolsCard.
+// Phase 3b: one line for the plant's zone and its place in the walk order,
+// read from the store the card already loads (`garden`), with "Edit zones…"
+// opening the Zones sheet — the only place either is changed.
 
 import { File } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
@@ -61,6 +64,7 @@ import { RADIUS, type Tokens } from "../lib/theme";
 import { CaptureScreen } from "../screens/CaptureScreen";
 import { PhotoViewer } from "./PhotoViewer";
 import { PlantPickerSheet } from "./PlantPickerSheet";
+import { ZonesSheet } from "./ZonesSheet";
 
 const TAG_SAVE_ERROR = "Couldn't save the number. Please try again.";
 const CODE_SAVE_ERROR = "Couldn't save the code. Please try again.";
@@ -125,9 +129,15 @@ export function PlantTagsCard({ plant, t, scheme, onChanged }: Props) {
   const [moving, setMoving] = useState<{ digest: string; plants: PlantListItem[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [viewing, setViewing] = useState<{ uri: string; caption?: string } | null>(null);
+  const [zonesOpen, setZonesOpen] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const codes = plant.codes ?? [];
+  /** Phase 3b: zone + walk order come from the store record — `garden`
+   * reloads whenever the detail hands over a fresh `plant`. */
+  const self = garden.find((p) => p.id === plant.id);
+  const zone = self?.zone ?? null;
+  const walkOrder = self?.walk_order ?? null;
   const atCodeCap = codes.length >= MAX_CODES_PER_PLANT;
   /** Nothing identifies this plant yet — the one moment the guidance is the
    * point of the card rather than a footnote to it. */
@@ -485,6 +495,24 @@ export function PlantTagsCard({ plant, t, scheme, onChanged }: Props) {
         </Pressable>
       ) : null}
 
+      {/* ---- Zone & walk order (Phase 3b) — read here, edited on the sheet. ---- */}
+      <Text style={[styles.sectionTitle, { color: t.text }]}>Zone & walk order</Text>
+      <View style={styles.tagRow}>
+        <Text
+          style={[styles.hint, styles.zoneLine, { color: zone ? t.text : t.sub }]}
+          accessibilityLabel={
+            zone
+              ? `Zone ${zone}${walkOrder ? `, number ${walkOrder} in the walk order` : ", not ordered yet"}`
+              : "No zone yet"
+          }
+        >
+          {zone
+            ? `${zone} · ${walkOrder ? `#${walkOrder} in the walk order` : "not ordered yet"}`
+            : "No zone yet — a zone groups the Plants list and gives Prev / Next in walk mode their order."}
+        </Text>
+        <ActionButton label="Edit zones and walk order" text="Edit zones…" onPress={() => setZonesOpen(true)} t={t} />
+      </View>
+
       {/* ---- Codes ---- */}
       <Text style={[styles.sectionTitle, { color: t.text }]}>Codes</Text>
       {codes.length === 0 ? (
@@ -607,6 +635,7 @@ export function PlantTagsCard({ plant, t, scheme, onChanged }: Props) {
         onSelect={(id) => void moveTo(id)}
         onClose={() => setMoving(null)}
       />
+      <ZonesSheet visible={zonesOpen} onClose={() => setZonesOpen(false)} onChanged={onChanged} />
       <PhotoViewer photo={viewing} onClose={() => setViewing(null)} />
     </View>
   );
@@ -668,6 +697,7 @@ const styles = StyleSheet.create({
   tagRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, minHeight: 48 },
   tagValue: { fontSize: 24, fontWeight: "700", fontVariant: ["tabular-nums"], flexShrink: 1 },
   tagEdit: { gap: 8 },
+  zoneLine: { flex: 1, fontSize: 14, lineHeight: 19, fontWeight: "600" },
   input: {
     borderWidth: 1,
     borderRadius: RADIUS,

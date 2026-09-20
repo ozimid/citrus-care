@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   prefillFromDiagnosis,
   buildStoredPlant,
+  bulkPlantInputs,
   emptyNewPlantForm,
   formFromPlant,
+  GENERIC_CREATE_PLANT_ERROR,
   showsCitrusCultivarPicker,
   validateNewPlant,
+  ZONE_FORMAT_ERROR,
 } from "./new-plant";
 
 function filled(overrides: Partial<typeof emptyNewPlantForm> = {}) {
@@ -40,7 +43,18 @@ describe("formFromPlant", () => {
       location: "",
       zip_code: "92866",
       tag: "",
+      zone: "",
     });
+  });
+
+  // F39 Phase 3b: the zone is edited on the same sheet, so (like the tag) the
+  // prefill must carry it or every edit of a zoned plant would silently move
+  // it out of its row.
+  it("prefills the zone when the plant has one, '' for none", () => {
+    const base = { name: "Mr Lemon", plant_type: "tree", species: null, cultivar: null, location: null, zip_code: null };
+    expect(formFromPlant({ ...base, zone: "NORTH" }).zone).toBe("NORTH");
+    expect(formFromPlant({ ...base, zone: null }).zone).toBe("");
+    expect(formFromPlant(base).zone).toBe("");
   });
 
   // F39: the tag is edited on the same sheet, so the prefill must carry it or
@@ -82,6 +96,32 @@ describe("validateNewPlant", () => {
       location: "South patio",
       zip_code: "90210",
       tag: null,
+      zone: null,
+    });
+  });
+
+  // F39 Phase 3b: the zone follows the tag's rules (same whitelist, ≤ 24,
+  // normalized) but is NOT unique — many plants share a zone by design.
+  describe("zone", () => {
+    it("normalizes a zone (trim, collapse spaces, uppercase) and turns an empty one into null", () => {
+      const zoned = validateNewPlant(filled({ zone: "  row   2 " }));
+      expect(zoned.ok).toBe(true);
+      if (zoned.ok) expect(zoned.data.zone).toBe("ROW 2");
+      const unzoned = validateNewPlant(filled({ zone: "   " }));
+      expect(unzoned.ok).toBe(true);
+      if (unzoned.ok) expect(unzoned.data.zone).toBeNull();
+    });
+
+    it("rejects characters outside the whitelist and zones over 24 characters", () => {
+      for (const bad of ["North!", "A".repeat(25), "zone/1"]) {
+        const result = validateNewPlant(filled({ zone: bad }));
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.errors.zone).toMatch(/24|letters|numbers/);
+      }
+    });
+
+    it("is not checked for uniqueness — two plants may share a zone", () => {
+      expect(validateNewPlant(filled({ zone: "NORTH" }), { takenTags: ["NORTH"] }).ok).toBe(true);
     });
   });
 
@@ -187,6 +227,7 @@ describe("buildStoredPlant", () => {
       created_at: "2026-07-15T00:00:00Z",
       tag: null,
       codes: [],
+      zone: null,
     });
   });
 
@@ -197,6 +238,18 @@ describe("buildStoredPlant", () => {
     const stored = buildStoredPlant(result.data, "plant-1", "2026-07-15T00:00:00Z");
     expect(stored.tag).toBe("L3");
     expect(stored.codes).toEqual([]);
+  });
+
+  // F39 Phase 3b: the zone is stored normalized; the walk order is NOT set
+  // here — a new plant is placed in its zone's order by the io (placeInZone),
+  // which knows the other plants. The record carries no walk_order key.
+  it("stores the normalized zone and leaves walk_order unset (F39 Phase 3b)", () => {
+    const result = validateNewPlant(filled({ zone: " north " }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const stored = buildStoredPlant(result.data, "plant-1", "2026-07-15T00:00:00Z");
+    expect(stored.zone).toBe("NORTH");
+    expect("walk_order" in stored).toBe(false);
   });
 });
 
@@ -227,5 +280,34 @@ describe("prefillFromDiagnosis", () => {
 
   it("uses the species as the suggested name", () => {
     expect(prefillFromDiagnosis(diag({ species: "Meyer Lemon" }) as never).name).toBe("Meyer Lemon");
+  });
+});
+
+describe("bulkPlantInputs", () => {
+  // "Add several plants" drafts go through the SAME gate as the sheet, so a
+  // future required field on newPlantSchema fails here, in a test, not in the
+  // io loop on a phone.
+  it("validates every draft: trimmed name, normalized zone, null for the optionals it never asks for", () => {
+    const inputs = bulkPlantInputs([
+      { name: " A-01 ", plant_type: "tree", zone: " north " },
+      { name: "A-02", plant_type: "shrub", zone: null },
+    ]);
+    const nulls = { species: null, cultivar: null, location: null, zip_code: null, tag: null };
+    expect(inputs).toEqual([
+      { ...nulls, name: "A-01", plant_type: "tree", zone: "NORTH" },
+      { ...nulls, name: "A-02", plant_type: "shrub", zone: null },
+    ]);
+  });
+
+  it("throws the zone error verbatim for a malformed zone — the user's typo, shown as such", () => {
+    expect(() => bulkPlantInputs([{ name: "A-01", plant_type: "tree", zone: "north!" }])).toThrow(ZONE_FORMAT_ERROR);
+  });
+
+  it("throws the generic create error for any other invalid draft", () => {
+    expect(() => bulkPlantInputs([{ name: "   ", plant_type: "tree", zone: null }])).toThrow(GENERIC_CREATE_PLANT_ERROR);
+  });
+
+  it("is empty for no drafts", () => {
+    expect(bulkPlantInputs([])).toEqual([]);
   });
 });

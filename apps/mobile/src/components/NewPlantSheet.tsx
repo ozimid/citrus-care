@@ -27,6 +27,7 @@ import { suggestNextTag, TAG_MAX_LENGTH } from "../lib/plant-tags";
 import { insertPlant, updatePlant } from "../lib/plants-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
+import { compareZones } from "../lib/walk-order";
 
 // New/edit plant bottom sheet per the native design doc §4 (#5/#7): same
 // fields and validation as the web form (apps/web/app/plants/new/
@@ -42,6 +43,10 @@ import { useTheme } from "../lib/theme-io";
 // it on. The sheet reads the plant store itself for the taken numbers, so
 // every caller (Plants tab, detail, review, capture) gets the uniqueness
 // check without new props.
+// F39 Phase 3b: a "Zone" field — the garden's own grouping ("NORTH", "ROW A"),
+// normalized like a tag. The zones already in use are offered as one-tap
+// chips so a thirty-tree garden spells each zone one way; the walk order
+// inside a zone is set on the Zones sheet, not here.
 
 interface EditablePlant {
   id: string;
@@ -53,22 +58,37 @@ interface EditablePlant {
   zip_code: string | null;
   /** The number on the stake; absent on rows that predate F39. */
   tag?: string | null;
+  /** Phase 3b: the zone; absent on rows that predate it. */
+  zone?: string | null;
+}
+
+interface TagContext {
+  taken: string[];
+  suggested: string;
+  /** Distinct zones in use, in the Plants list's zone order (compareZones). */
+  zones: string[];
 }
 
 /** Every other plant's tag, normalized upstream by parsePlantStore, plus the
- * next free number to suggest. Read failures degrade to "nothing taken". */
-async function loadTagContext(selfId: string | null): Promise<{ taken: string[]; suggested: string }> {
+ * next free number to suggest and the zones already in use. Read failures
+ * degrade to "nothing taken, nothing to suggest". */
+async function loadTagContext(selfId: string | null): Promise<TagContext> {
   try {
     const plants = allPlants(await loadPlantStore());
+    const zones = new Set<string>();
+    for (const plant of plants) {
+      if (typeof plant.zone === "string" && plant.zone.length > 0) zones.add(plant.zone);
+    }
     return {
       taken: plants
         .filter((plant) => plant.id !== selfId && typeof plant.tag === "string" && plant.tag.length > 0)
         .map((plant) => plant.tag as string),
       suggested: suggestNextTag(plants),
+      zones: [...zones].sort(compareZones),
     };
   } catch (e) {
     console.error("[NewPlantSheet] tag context read failed:", (e as Error).message);
-    return { taken: [], suggested: "" };
+    return { taken: [], suggested: "", zones: [] };
   }
 }
 
@@ -95,15 +115,17 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
   /** F39: the other plants' numbers (uniqueness) and the next free one. */
   const [takenTags, setTakenTags] = useState<string[]>([]);
   const [suggestedTag, setSuggestedTag] = useState("");
+  /** Phase 3b: zones already in use, offered as chips. */
+  const [knownZones, setKnownZones] = useState<string[]>([]);
   const editing = plant != null;
 
   // Edit mode: re-prefill from the plant row on every open, discarding
   // unsaved edits. (Create mode keeps typed values across an accidental
-  // close, as before; submit resets them on success.) The tag is set
-  // explicitly so an edit can never silently blank a number the row carries.
+  // close, as before; submit resets them on success.) The tag and zone are
+  // set explicitly so an edit can never silently blank what the row carries.
   useEffect(() => {
     if (!visible || !plant) return;
-    setForm({ ...formFromPlant(plant), tag: plant.tag ?? "" });
+    setForm({ ...formFromPlant(plant), tag: plant.tag ?? "", zone: plant.zone ?? "" });
     setErrors({});
     setSubmitError(null);
     setCultivarOpen(false);
@@ -124,10 +146,11 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    loadTagContext(plant?.id ?? null).then(({ taken, suggested }) => {
+    loadTagContext(plant?.id ?? null).then(({ taken, suggested, zones }) => {
       if (cancelled) return;
       setTakenTags(taken);
       setSuggestedTag(suggested);
+      setKnownZones(zones);
     });
     return () => {
       cancelled = true;
@@ -390,6 +413,49 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
                 />
               </Field>
 
+              {/* F39 Phase 3b: the zone groups the Plants list and gives the
+                  viewfinder's Prev / Next their order. Existing zones are one
+                  tap away so the same row is never spelled two ways. */}
+              <Field label="Zone" error={errors.zone} t={t}>
+                <TextInput
+                  accessibilityLabel="Zone, such as a row or a bed"
+                  value={form.zone ?? ""}
+                  onChangeText={(v) => set("zone", v)}
+                  maxLength={TAG_MAX_LENGTH}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  placeholder="e.g. NORTH or ROW A (optional)"
+                  placeholderTextColor={t.sub}
+                  style={[inputStyle(t), errors.zone ? { borderColor: t.danger } : null]}
+                />
+                {knownZones.length > 0 ? (
+                  <View style={styles.chips}>
+                    {knownZones.map((zone) => {
+                      const selected = (form.zone ?? "").trim().toUpperCase() === zone;
+                      return (
+                        <Pressable
+                          key={zone}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Use zone ${zone}`}
+                          accessibilityState={{ selected }}
+                          onPress={() => set("zone", selected ? "" : zone)}
+                          style={[
+                            styles.chip,
+                            styles.zoneChip,
+                            { borderColor: selected ? t.green : t.border, backgroundColor: selected ? t.green : "transparent" },
+                          ]}
+                        >
+                          <Text style={[styles.chipText, { color: selected ? t.onGreen : t.text }]}>{zone}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : null}
+                <Text style={[styles.fieldHint, { color: t.sub }]}>
+                  Groups the Plants list and sets which trees Prev / Next walk through. Order them on the Zones sheet.
+                </Text>
+              </Field>
+
               <Field label="ZIP code" error={errors.zip_code} t={t}>
                 <TextInput
                   accessibilityLabel="ZIP code"
@@ -544,6 +610,8 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   chipText: { fontSize: 13, fontWeight: "600" },
+  /** Zone chips are tap targets on a form, not labels: 40 dp tall, like Use N. */
+  zoneChip: { minHeight: 40, justifyContent: "center" },
   options: {
     borderWidth: 1,
     borderRadius: RADIUS,
