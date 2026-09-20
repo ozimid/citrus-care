@@ -267,7 +267,10 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
           renderItem={({ item }) => (
             <PlantCard
               item={item}
-              needsWater={plans[item.id]?.isDue === true}
+              // Phase 6: only a LOGGED watering earns "Needs water". A plan
+              // anchored on the day the plant was added is a projection, and
+              // every never-watered plant would fly the chip at once.
+              needsWater={plans[item.id]?.isDue === true && plans[item.id]?.anchor === "log"}
               tagMissing={item.tagMissing}
               showZone={sort === "stale" && zoned}
               t={t}

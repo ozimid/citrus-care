@@ -99,6 +99,13 @@ export interface PersistOptions {
   /** False = leave the plant's cover alone; a batch picks its cover once, at
    * the end (D-W9). Default true. */
   updateCover?: boolean;
+  /** When the photo was taken (ISO) — a walk photo that carried a time (EXIF /
+   * the in-app shutter). Stored on the record so the timeline, "latest", the
+   * cover and later anchors date it by the photo, not the analysis (Phase 5). */
+  takenAt?: string;
+  /** The walk this assessment lands in, so "Undo this walk" can take exactly
+   * its rows back (Phase 6b). */
+  walkId?: string;
 }
 
 /** Insert an on-device diagnosis into the local assessment store (D-17). The
@@ -122,6 +129,9 @@ export async function persistLocalAssessment(
     diagnosis,
     comparedToId: previous?.id ?? null,
     engine: "on-device",
+    // Only ever present on a walk's row: a single-shot record stays byte-identical.
+    ...(options?.takenAt !== undefined ? { takenAt: options.takenAt } : {}),
+    ...(options?.walkId !== undefined ? { walkId: options.walkId } : {}),
   };
   await saveAssessmentStore(upsertAssessment(store, assessment));
 

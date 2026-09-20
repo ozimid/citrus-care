@@ -148,7 +148,7 @@ export function buildPlantChatFacts(input: PlantChatFactsInput): PlantChatFacts 
             location: plant.location,
             weather,
             lastWateredAt: watered,
-            lastAssessedAt: timeline[0]?.createdAt ?? null,
+            createdAt: plant.created_at,
             now,
           }),
         )

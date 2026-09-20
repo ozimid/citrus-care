@@ -79,18 +79,32 @@ const MAX_FILE_NAME = 80;
 /** IMG_20260919_101533.jpg, PXL_20260919-101533.MP.jpg, 20260919_101533.jpg. */
 const FILE_NAME_DATE_RE = /(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/;
 
+/** A stamp later than the clock we were given is not a time we can use: Phase
+ * 5 ranks the timeline, the cover and the comparison anchor by the photo's own
+ * time, so a camera whose clock runs fast would pin that row at the top of the
+ * plant until real time caught up. Treated like any other unreadable field —
+ * the chain moves on, and unknown stays null rather than becoming a fake now. */
+function notFuture(value: string | null, nowIso: string | undefined): string | null {
+  if (value === null || nowIso === undefined) return value;
+  return value > nowIso ? null : value;
+}
+
 /** The chain: DateTimeOriginal (+ sub-second, + offset) › DateTimeDigitized ›
- * DateTime › a stock-camera file name (local wall clock) › null. */
-export function takenAtFromAsset(asset: { exif?: unknown; fileName?: string | null }): string | null {
+ * DateTime › a stock-camera file name (local wall clock) › null. `nowIso` (the
+ * io passes the clock; omitted, nothing is clamped) refuses a future stamp. */
+export function takenAtFromAsset(
+  asset: { exif?: unknown; fileName?: string | null },
+  nowIso?: string,
+): string | null {
   const dates = pickExifDates(asset.exif);
   const fromExif =
-    parseExifDateTime(dates.original, dates.subsec, dates.offset) ??
-    parseExifDateTime(dates.digitized) ??
-    parseExifDateTime(dates.dateTime);
+    notFuture(parseExifDateTime(dates.original, dates.subsec, dates.offset), nowIso) ??
+    notFuture(parseExifDateTime(dates.digitized), nowIso) ??
+    notFuture(parseExifDateTime(dates.dateTime), nowIso);
   if (fromExif) return fromExif;
   if (typeof asset.fileName !== "string") return null;
   const m = FILE_NAME_DATE_RE.exec(asset.fileName.slice(0, MAX_FILE_NAME));
-  return m ? parseExifDateTime(`${m[1]}:${m[2]}:${m[3]} ${m[4]}:${m[5]}:${m[6]}`) : null;
+  return m ? notFuture(parseExifDateTime(`${m[1]}:${m[2]}:${m[3]} ${m[4]}:${m[5]}:${m[6]}`), nowIso) : null;
 }
 
 /** Known shooting times first, ascending (stable); photos with no known time

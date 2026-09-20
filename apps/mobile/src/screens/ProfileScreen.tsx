@@ -25,6 +25,7 @@ import {
 } from "../lib/local-engine";
 import { availableDiskSpaceBytes, deviceCapabilitySnapshot } from "../lib/local-engine-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
+import { exportPlantsCsv } from "../lib/csv-export-io";
 import { pendingCount } from "../lib/photo-queue";
 import { loadPhotoQueue } from "../lib/photo-queue-io";
 import { totalPhotoUsageBytes } from "../lib/photo-store-io";
@@ -166,7 +167,7 @@ export function ProfileScreen() {
  * are — the 6 MB Android AsyncStorage default is a real cliff. */
 function DataCard() {
   const { t } = useTheme();
-  const [busy, setBusy] = useState<null | "export" | "import">(null);
+  const [busy, setBusy] = useState<null | "export" | "import" | "csv">(null);
   /** "Records: 1.2 of 6 MB · Photos: 412 MB" — null until measured / on failure. */
   const [storageLine, setStorageLine] = useState<string | null>(null);
   /** F39 / D-W11: photos still waiting for analysis are NOT in the backup. */
@@ -207,6 +208,24 @@ function DataCard() {
     } catch (e) {
       console.error("[ProfileScreen] export failed:", (e as Error).message);
       Alert.alert("Couldn't export", "Something went wrong creating the backup. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** F39 Phase 6c: the plant ↔ tag ↔ zone map as a spreadsheet — the "backup
+   * system in a safe spot" the research says every tagged garden needs
+   * (tags fade, blow away, get chewed). Not a restore path: the JSON is. */
+  async function onExportCsv() {
+    setBusy("csv");
+    try {
+      const { shared } = await exportPlantsCsv();
+      if (!shared) {
+        Alert.alert("Spreadsheet saved", "Sharing isn't available on this device.");
+      }
+    } catch (e) {
+      console.error("[ProfileScreen] CSV export failed:", (e as Error).message);
+      Alert.alert("Couldn't export", "Something went wrong creating the spreadsheet. Please try again.");
     } finally {
       setBusy(null);
     }
@@ -253,7 +272,7 @@ function DataCard() {
       <View style={styles.dataRow}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Export my data"
+          accessibilityLabel="Export a backup of my data"
           disabled={busy !== null}
           onPress={onExport}
           style={[styles.dataButton, { borderColor: t.border, opacity: busy ? 0.6 : 1 }]}
@@ -261,7 +280,7 @@ function DataCard() {
           {busy === "export" ? (
             <ActivityIndicator color={t.sub} />
           ) : (
-            <Text style={[styles.dataButtonText, { color: t.text }]}>Export</Text>
+            <Text style={[styles.dataButtonText, { color: t.text }]}>Export backup</Text>
           )}
         </Pressable>
         <Pressable
@@ -278,6 +297,26 @@ function DataCard() {
           )}
         </Pressable>
       </View>
+      {/* Which of the two "export" buttons restores your garden is the whole
+          question here, so it is answered BEFORE the second one, at body
+          weight — not in a footnote under it. */}
+      <Text style={[styles.dataBody, styles.csvNote, { color: t.sub }]}>
+        A spreadsheet of your plants, tags and zones — for your own records. It can&apos;t be
+        imported back; Export backup is the one that restores everything.
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Export a spreadsheet of my plants"
+        disabled={busy !== null}
+        onPress={onExportCsv}
+        style={[styles.dataButton, styles.csvButton, { borderColor: t.border, opacity: busy ? 0.6 : 1 }]}
+      >
+        {busy === "csv" ? (
+          <ActivityIndicator color={t.sub} />
+        ) : (
+          <Text style={[styles.dataButtonText, { color: t.text }]}>Export spreadsheet (CSV)</Text>
+        )}
+      </Pressable>
     </View>
   );
 }
@@ -432,11 +471,13 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderRadius: RADIUS,
-    minHeight: 44,
+    minHeight: 48,
     alignItems: "center",
     justifyContent: "center",
   },
   dataButtonText: { fontSize: 14, fontWeight: "600" },
+  csvButton: { flex: 0 },
+  csvNote: { marginTop: 10, marginBottom: 6 },
   engineRow: {
     flexDirection: "row",
     alignItems: "center",

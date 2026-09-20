@@ -4,9 +4,9 @@ import { GuideNavigation } from "@/components/guides/GuideNavigation";
 import { authoritativePacks, guideSlug, guideSummary } from "./_lib";
 
 export const metadata = {
-  title: "Pruning guides — Citrus Care",
+  title: "Guides — Citrus Care",
   description:
-    "When and how to prune citrus, roses, flowering shrubs and trees — sourced from university extension services and the RHS.",
+    "When and how to prune citrus, roses, flowering shrubs and trees — sourced from university extension services and the RHS — plus how to label your trees so Garden Walk photos land on the right plant.",
 };
 
 // #6 — the app's sourced rule packs, published as pages. Same data the app
@@ -41,6 +41,24 @@ export default function GuidesIndex() {
           </li>
         ))}
       </ul>
+      {/* Phase 6d — the Garden Walk labelling guide: sourced purchasing and
+          mounting rules (docs/research/plant-tagging-garden-walk.md §5). */}
+      <h2 className="mt-10 text-sm font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+        Garden Walk
+      </h2>
+      <div className="mt-3 rounded-xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <Link
+          href="/guides/labeling-trees"
+          className="font-semibold text-emerald-700 hover:underline dark:text-emerald-400"
+        >
+          Labeling your trees so photos land on the right plant →
+        </Link>
+        <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
+          Numbered aluminium tags that last 20+ years, where and how to mount them without hurting the
+          tree, and how big a code must be to scan standing — from arborists and arboreta, every claim
+          sourced.
+        </p>
+      </div>
       <div className="mt-10 rounded-xl border border-neutral-200 p-5 dark:border-neutral-800">
         <p className="font-medium">Want these rules applied to a photo of your own plant?</p>
         <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">

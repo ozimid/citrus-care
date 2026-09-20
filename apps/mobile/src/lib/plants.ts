@@ -9,6 +9,9 @@ import { latestPhotoForPlant, photoForAssessment, type PhotoIndex } from "./phot
 import { comparisonDelta } from "./plant-detail";
 import { parseStoredCareProfile } from "./watering";
 
+/** `created_at` is the assessment's EFFECTIVE time — the photo's takenAt when
+ * a walk knew it, the analysis time otherwise (store-adapters maps it, F39
+ * Phase 5) — so "latest" below means the newest photo, not the newest run. */
 export type AssessmentScoreRow = Pick<Assessment, "health_score" | "created_at"> & {
   /** jsonb from the embed — untrusted; only comparison.delta is read, safely. */
   diagnosis?: unknown;
@@ -102,8 +105,9 @@ export function latestScore(assessments: AssessmentScoreRow[] | null | undefined
   return latestAssessment(assessments)?.health_score ?? null;
 }
 
-/** When the plant was last assessed — the watering math's anchor of last
- * resort for a plant that has never been logged as watered (watering.ts). */
+/** When the plant was last assessed, by effective time (the newest PHOTO —
+ * an old roll analyzed today does not count as "today"). Feeds the card's
+ * last-assessed line and the staleness sort (walk-order). */
 export function latestAssessedAt(
   assessments: AssessmentScoreRow[] | null | undefined,
 ): string | null {

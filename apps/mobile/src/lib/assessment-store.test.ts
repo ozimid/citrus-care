@@ -4,11 +4,14 @@ import {
   COMPARISON_SAME_BAND,
   allAssessments,
   assessmentsForPlant,
-  byCreatedAtDesc,
+  assessmentsForWalk,
+  byEffectiveTimeDesc,
   comparisonAnchor,
   deltaFromScores,
+  effectiveTime,
   latestAssessmentId,
   parseAssessmentStore,
+  removeAssessment,
   removePlantAssessments,
   serializeAssessmentStore,
   upsertAssessment,
@@ -136,15 +139,15 @@ describe("parseAssessmentStore / serializeAssessmentStore", () => {
 // Two walk photos of one plant can land in the same second; the timeline,
 // the anchor and the cover must all agree on which is "newest" regardless of
 // the order the JSON map came back in.
-describe("byCreatedAtDesc", () => {
+describe("byEffectiveTimeDesc", () => {
   it("orders newest first, then higher id first on a tie", () => {
     const t = "2026-08-20T00:00:00Z";
     const older = assessment({ id: "a0", createdAt: "2026-08-19T00:00:00Z" });
     const x = assessment({ id: "ax", createdAt: t });
     const y = assessment({ id: "ay", createdAt: t });
-    expect([older, x, y].sort(byCreatedAtDesc).map((a) => a.id)).toEqual(["ay", "ax", "a0"]);
-    expect([y, older, x].sort(byCreatedAtDesc).map((a) => a.id)).toEqual(["ay", "ax", "a0"]);
-    expect(byCreatedAtDesc(x, x)).toBe(0);
+    expect([older, x, y].sort(byEffectiveTimeDesc).map((a) => a.id)).toEqual(["ay", "ax", "a0"]);
+    expect([y, older, x].sort(byEffectiveTimeDesc).map((a) => a.id)).toEqual(["ay", "ax", "a0"]);
+    expect(byEffectiveTimeDesc(x, x)).toBe(0);
   });
 
   it("is what assessmentsForPlant uses (stable across Object.values order)", () => {
@@ -234,5 +237,197 @@ describe("withComputedComparison", () => {
     const input = diagnosis({ health_score: 85 });
     withComputedComparison(input, 60);
     expect(input.comparison).toBeUndefined();
+  });
+});
+
+// F39 Phase 5 (D-W14): a photo imported from last month's roll is dated by
+// when it was TAKEN, not when the phone got round to analyzing it. The
+// timeline, "latest", the cover and the comparison anchor all read the
+// effective time — takenAt when the photo carried one, createdAt otherwise —
+// so an old import never becomes the plant's newest row.
+describe("effectiveTime", () => {
+  it("prefers takenAt and falls back to createdAt", () => {
+    expect(effectiveTime(assessment({ createdAt: "2026-09-19T10:00:00Z", takenAt: "2026-08-01T09:00:00Z" }))).toBe(
+      "2026-08-01T09:00:00Z",
+    );
+    expect(effectiveTime(assessment({ createdAt: "2026-09-19T10:00:00Z" }))).toBe("2026-09-19T10:00:00Z");
+  });
+});
+
+describe("takenAt / walkId on parse (Phase 5 / 6b)", () => {
+  const W1 = "w1-00000001";
+
+  it("accepts an absent takenAt and a string takenAt, and round-trips both fields", () => {
+    const plain = assessment({ id: A1, plantId: P1 });
+    const dated = assessment({ id: A2, plantId: P1, takenAt: "2026-08-01T09:00:00Z", walkId: W1 });
+    const store = upsertAssessment(upsertAssessment({}, plain), dated);
+    const parsed = parseAssessmentStore(serializeAssessmentStore(store));
+    expect(parsed).toEqual(store);
+    expect("takenAt" in parsed[A1]).toBe(false);
+    expect("walkId" in parsed[A1]).toBe(false);
+    expect(parsed[A2].takenAt).toBe("2026-08-01T09:00:00Z");
+    expect(parsed[A2].walkId).toBe(W1);
+  });
+
+  it("repairs a non-string takenAt to absent instead of dropping the record", () => {
+    const stored = JSON.stringify({ [A1]: { ...assessment({ id: A1, plantId: P1 }), takenAt: 1755000000000 } });
+    const parsed = parseAssessmentStore(stored);
+    expect(Object.keys(parsed)).toEqual([A1]);
+    expect("takenAt" in parsed[A1]).toBe(false);
+    expect(effectiveTime(parsed[A1])).toBe(parsed[A1].createdAt);
+  });
+
+  // D-W16: a walkId is a record id like any other — a crafted one is dropped,
+  // the assessment itself is kept.
+  it("drops a walkId that is not a safe record id, keeps the assessment", () => {
+    const stored = JSON.stringify({
+      [A1]: { ...assessment({ id: A1, plantId: P1 }), walkId: "../.." },
+      [A2]: { ...assessment({ id: A2, plantId: P1 }), walkId: 7 },
+      [A3]: { ...assessment({ id: A3, plantId: P1 }), walkId: W1 },
+    });
+    const parsed = parseAssessmentStore(stored);
+    expect(Object.keys(parsed).sort()).toEqual([A1, A2, A3]);
+    expect("walkId" in parsed[A1]).toBe(false);
+    expect("walkId" in parsed[A2]).toBe(false);
+    expect(parsed[A3].walkId).toBe(W1);
+  });
+});
+
+describe("ordering by effective time (Phase 5)", () => {
+  // Analyzed today (createdAt newest of all) but shot in July: an old import.
+  const imported = assessment({ id: "import", createdAt: "2026-09-19T12:00:00Z", takenAt: "2026-07-01T08:00:00Z" });
+  const august = assessment({ id: "aug", createdAt: "2026-08-10T10:00:00Z" });
+  const september = assessment({ id: "sep", createdAt: "2026-09-01T10:00:00Z" });
+  const store: AssessmentStore = { import: imported, aug: august, sep: september };
+
+  it("an old import does not become the plant's latest", () => {
+    expect(assessmentsForPlant(store, "p1").map((a) => a.id)).toEqual(["sep", "aug", "import"]);
+    expect(latestAssessmentId(store, "p1")).toBe("sep");
+    expect(allAssessments(store).map((a) => a.id)).toEqual(["sep", "aug", "import"]);
+  });
+
+  it("breaks an effective-time tie by id, whatever the createdAt says", () => {
+    const t = "2026-08-20T00:00:00Z";
+    const x = assessment({ id: "ax", createdAt: "2026-09-19T00:00:00Z", takenAt: t });
+    const y = assessment({ id: "ay", createdAt: t });
+    expect([x, y].sort(byEffectiveTimeDesc).map((a) => a.id)).toEqual(["ay", "ax"]);
+    expect([y, x].sort(byEffectiveTimeDesc).map((a) => a.id)).toEqual(["ay", "ax"]);
+  });
+
+  // D-W6 on effective time: a walk over last month's roll compares each photo
+  // against what the plant looked like BEFORE it was shot, and a row analyzed
+  // earlier but shot later is not "before" anything.
+  it("comparisonAnchor reads the effective time", () => {
+    // Shot in June, analyzed in September — precedes an August anchor.
+    const shotEarly = assessment({ id: "early", createdAt: "2026-09-19T12:00:00Z", takenAt: "2026-06-01T00:00:00Z" });
+    // Analyzed in July, but the photo was taken in September — does not precede it.
+    const shotLate = assessment({ id: "late", createdAt: "2026-07-01T00:00:00Z", takenAt: "2026-09-10T00:00:00Z" });
+    const s: AssessmentStore = { early: shotEarly, late: shotLate };
+    expect(comparisonAnchor(s, "p1", "2026-08-01T00:00:00Z")?.id).toBe("early");
+    expect(comparisonAnchor(s, "p1", "2026-06-01T00:00:00Z")).toBeNull();
+    expect(comparisonAnchor(s, "p1")?.id).toBe("late");
+  });
+});
+
+// F39 Phase 6b — "Undo this walk": misattribution is the failure mode, so a
+// whole walk's assessments can be taken back. Removing a row must leave no
+// dangling comparison behind it — a dependant is RE-ANCHORED against the next
+// older row it still has (a plant with history never reads "First assessment"
+// on the card), and only a row with nothing older loses its comparison.
+describe("removeAssessment", () => {
+  const base = assessment({ id: "a0", createdAt: "2026-07-01T00:00:00Z" });
+  const walk = assessment({
+    id: "a1",
+    createdAt: "2026-08-01T00:00:00Z",
+    comparedToId: "a0",
+    diagnosis: diagnosis({ comparison: { delta: "better", notes: "up" } }),
+  });
+  const after = assessment({
+    id: "a2",
+    createdAt: "2026-09-01T00:00:00Z",
+    comparedToId: "a1",
+    diagnosis: diagnosis({ comparison: { delta: "worse", notes: "down" } }),
+  });
+  const other = assessment({ id: "b1", plantId: "p2", comparedToId: "a1" });
+  const store: AssessmentStore = { a0: base, a1: walk, a2: after, b1: other };
+
+  it("returns the removed row and a store without it", () => {
+    const { store: next, removed } = removeAssessment(store, "a1");
+    expect(removed).toEqual(walk);
+    expect(Object.keys(next).sort()).toEqual(["a0", "a2", "b1"]);
+    expect(Object.keys(store).sort()).toEqual(["a0", "a1", "a2", "b1"]);
+  });
+
+  it("re-anchors a dependant against the next older row it still has", () => {
+    const { store: next } = removeAssessment(store, "a1");
+    // a2 still has a0 beneath it: the trend must survive, recomputed against
+    // a0 (80 → 80 = "same"), never left as the stale "worse" and never null —
+    // a null here makes the Plants card read "First assessment" over history.
+    expect(next.a2.comparedToId).toBe("a0");
+    expect(next.a2.diagnosis.comparison).toEqual({
+      delta: "same",
+      notes: "Health held around 80.",
+    });
+    expect(next.a2.diagnosis.health_score).toBe(80);
+    // Untouched rows keep their identity (no needless copies).
+    expect(next.a0).toBe(base);
+  });
+
+  it("nulls comparedToId and the comparison when the dependant has nothing older", () => {
+    const { store: next } = removeAssessment(store, "a1");
+    // b1 is p2's only row — it really is a first assessment now.
+    expect(next.b1.comparedToId).toBeNull();
+    expect(next.b1.diagnosis.comparison).toBeUndefined();
+  });
+
+  it("re-anchors a walk row PRE-walk, never against its own sibling angle (D-W6)", () => {
+    const pre = assessment({ id: "a0", createdAt: "2026-07-01T00:00:00Z" });
+    const first = assessment({
+      id: "a1",
+      createdAt: "2026-08-01T10:00:00Z",
+      walkId: "w1-00000001",
+      comparedToId: "a0",
+    });
+    const second = assessment({
+      id: "a2",
+      createdAt: "2026-08-01T10:00:40Z",
+      walkId: "w1-00000001",
+      comparedToId: "a0",
+      diagnosis: diagnosis({ health_score: 40 }),
+    });
+    const { store: next } = removeAssessment({ a0: pre, a1: first, a2: second }, "a0");
+    // Two angles of one tree, 40 s apart: with the pre-walk row gone both are
+    // first, and the later angle must not suddenly read "Worse" against its
+    // sibling — that is noise, not a trend.
+    expect(next.a1.comparedToId).toBeNull();
+    expect(next.a2.comparedToId).toBeNull();
+    expect(next.a2.diagnosis.comparison).toBeUndefined();
+  });
+
+  it("is a no-op with removed null for an unknown id", () => {
+    const { store: next, removed } = removeAssessment(store, "nope");
+    expect(removed).toBeNull();
+    expect(next).toBe(store);
+  });
+});
+
+describe("assessmentsForWalk", () => {
+  const W1 = "w1-00000001";
+  const W2 = "w2-00000001";
+  const store: AssessmentStore = {
+    a1: assessment({ id: "a1", createdAt: "2026-08-01T00:00:00Z", walkId: W1 }),
+    a2: assessment({ id: "a2", plantId: "p2", createdAt: "2026-08-01T00:00:10Z", walkId: W1 }),
+    a3: assessment({ id: "a3", createdAt: "2026-08-02T00:00:00Z", walkId: W2 }),
+    single: assessment({ id: "single", createdAt: "2026-08-03T00:00:00Z" }),
+  };
+
+  it("lists the walk's assessments across plants, newest first", () => {
+    expect(assessmentsForWalk(store, W1).map((a) => a.id)).toEqual(["a2", "a1"]);
+    expect(assessmentsForWalk(store, W2).map((a) => a.id)).toEqual(["a3"]);
+  });
+
+  it("never matches a single-shot row (no walkId) or an unknown walk", () => {
+    expect(assessmentsForWalk(store, "w9-00000001")).toEqual([]);
+    expect(assessmentsForWalk(store, "")).toEqual([]);
   });
 });

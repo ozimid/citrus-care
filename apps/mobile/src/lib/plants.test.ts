@@ -322,3 +322,24 @@ describe("gardenTrend", () => {
     expect(gardenTrend([withTrend("a", "Unknown"), withTrend("b", "First assessment")])).toBeNull();
   });
 });
+
+// F39 Phase 5: `created_at` on a score row is the EFFECTIVE time (the photo's
+// takenAt when known — store-adapters maps it), so "latest" here means the
+// newest photo, not the most recent analysis. Rows arrive newest-first from the
+// store; on an exact tie the first one (the store's own tiebreak) stays latest.
+describe("latestAssessedAt / latestScore read the effective time", () => {
+  it("an analysis that ran later but shows an older photo is not the latest", () => {
+    const rows = [
+      // Analyzed today, shot in July — the adapter already dated it July.
+      { health_score: 40, created_at: "2026-07-01T08:00:00Z" },
+      { health_score: 85, created_at: "2026-09-01T10:00:00Z" },
+    ];
+    expect(latestAssessedAt(rows)).toBe("2026-09-01T10:00:00Z");
+    expect(latestScore(rows)).toBe(85);
+  });
+
+  it("keeps the store's order on an exact tie (first row wins)", () => {
+    const t = "2026-08-20T00:00:00Z";
+    expect(latestScore([{ health_score: 70, created_at: t }, { health_score: 30, created_at: t }])).toBe(70);
+  });
+});

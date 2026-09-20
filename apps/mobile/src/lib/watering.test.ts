@@ -42,6 +42,8 @@ const MILD: WeatherSummary = {
 const HOT: WeatherSummary = { ...MILD, maxTempC: 34 };
 
 const NOW = new Date("2026-07-15T09:00:00.000Z");
+/** When the plant was added — the anchor of last resort (Phase 6). */
+const CREATED = "2026-07-01T09:00:00.000Z";
 
 function plan(overrides: Partial<WateringInput> = {}) {
   return wateringPlan({
@@ -49,7 +51,7 @@ function plan(overrides: Partial<WateringInput> = {}) {
     location: null,
     weather: MILD,
     lastWateredAt: "2026-07-15T09:00:00.000Z",
-    lastAssessedAt: null,
+    createdAt: CREATED,
     now: NOW,
     ...overrides,
   });
@@ -69,14 +71,26 @@ describe("wateringPlan — baseline", () => {
     expect(p.nextWaterDueAt).toBe("2026-07-20T09:00:00.000Z");
   });
 
-  it("falls back to the last assessment when the plant was never marked watered", () => {
-    const p = plan({ lastWateredAt: null, lastAssessedAt: "2026-07-12T09:00:00.000Z" });
+  // Phase 6 (D-W14): a walk that lands three photos of one tree used to move
+  // its watering clock three times — an assessment is not a watering. The
+  // only anchors are a logged watering or, failing that, the day the plant
+  // was added; the plan says which one it stands on.
+  it("anchors on the plant's creation date when nothing was ever logged", () => {
+    const p = plan({ lastWateredAt: null, createdAt: "2026-07-12T09:00:00.000Z" });
     expect(p.nextWaterDueAt).toBe("2026-07-22T09:00:00.000Z");
+    expect(p.anchor).toBe("created");
   });
 
-  it("falls back to now when there is neither — a fresh plant starts its clock today", () => {
-    const p = plan({ lastWateredAt: null, lastAssessedAt: null });
+  it("reports the anchor as the log when a watering was recorded", () => {
+    const p = plan({ lastWateredAt: "2026-07-10T09:00:00.000Z", createdAt: "2026-06-01T09:00:00.000Z" });
+    expect(p.anchor).toBe("log");
+    expect(p.nextWaterDueAt).toBe("2026-07-20T09:00:00.000Z");
+  });
+
+  it("falls back to now on an unreadable creation date — never NaN, never a throw", () => {
+    const p = plan({ lastWateredAt: null, createdAt: "not a date" });
     expect(p.nextWaterDueAt).toBe("2026-07-25T09:00:00.000Z");
+    expect(p.anchor).toBe("created");
   });
 
   it("flags due / overdue against now", () => {
@@ -272,7 +286,7 @@ describe("dueLabel", () => {
         location: null,
         weather: MILD,
         lastWateredAt: null,
-        lastAssessedAt: null,
+        createdAt: CREATED,
         now: NOW,
         ...overrides,
       }),
@@ -310,12 +324,42 @@ describe("dueLabel", () => {
       location: null,
       weather: MILD,
       lastWateredAt: NOW.toISOString(),
-      lastAssessedAt: null,
+      createdAt: CREATED,
       now: NOW,
     });
     const due = new Date(plan.nextWaterDueAt);
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     expect(dueLabel(plan)).toBe(`Due ${months[due.getMonth()]} ${due.getDate()}`);
+  });
+
+  // Phase 6: "Overdue by 4 days" counted from the day the plant was ADDED is
+  // a number the app made up — nobody logged a watering. Say that instead.
+  it("says 'Due — no watering logged yet' for an overdue plant anchored on its creation date", () => {
+    // Added 14 days ago, 10-day interval, nothing logged: overdue, but honestly.
+    expect(labelFor({ createdAt: new Date(NOW.getTime() - 14 * 86400000).toISOString() })).toBe(
+      "Due — no watering logged yet",
+    );
+  });
+
+  it("uses the same honest line the day a never-logged plant first comes due", () => {
+    expect(labelFor({ createdAt: new Date(NOW.getTime() - 10 * 86400000).toISOString() })).toBe(
+      "Due — no watering logged yet",
+    );
+  });
+
+  it("keeps the ordinary future wording before a never-logged plant is due", () => {
+    expect(labelFor({ createdAt: new Date(NOW.getTime() - 9 * 86400000).toISOString() })).toBe(
+      "Due tomorrow",
+    );
+  });
+
+  it("keeps 'Overdue by N days' once a watering has actually been logged", () => {
+    expect(
+      labelFor({
+        lastWateredAt: new Date(NOW.getTime() - 14 * 86400000).toISOString(),
+        createdAt: new Date(NOW.getTime() - 60 * 86400000).toISOString(),
+      }),
+    ).toBe("Overdue by 4 days");
   });
 });
 
@@ -330,7 +374,7 @@ describe("distinctZips", () => {
       zipCode: "90210",
       location: null,
       careProfile: PROFILE,
-      lastAssessedAt: null,
+      createdAt: CREATED,
       ...overrides,
     };
   }
@@ -361,12 +405,16 @@ describe("distinctZips", () => {
 });
 
 describe("wateringPlansFor", () => {
-  function candidate(overrides: Partial<PlanCandidate> = {}): PlanCandidate {
+  /** Shaped like a PlantListItem: it carries lastAssessedAt too, which the
+   * watering math must now IGNORE (Phase 6). */
+  type ListLike = PlanCandidate & { lastAssessedAt: string | null };
+  function candidate(overrides: Partial<ListLike> = {}): ListLike {
     return {
       id: "plant-1",
       zipCode: "90210",
       location: null,
       careProfile: PROFILE,
+      createdAt: CREATED,
       lastAssessedAt: null,
       ...overrides,
     };
@@ -397,24 +445,46 @@ describe("wateringPlansFor", () => {
     expect(plans["plant-1"].weatherAdjusted).toBe(false);
   });
 
-  it("marks an overdue plant due, anchoring on the last assessment when nothing was logged", () => {
+  it("threads the plant's creation date through as the anchor when nothing was logged", () => {
     const plans = wateringPlansFor(
-      [candidate({ lastAssessedAt: "2026-06-01T09:00:00.000Z" })],
+      [candidate({ createdAt: "2026-07-05T09:00:00.000Z" })],
       { "90210": MILD },
       {},
       NOW,
     );
+    expect(plans["plant-1"].nextWaterDueAt).toBe("2026-07-15T09:00:00.000Z");
+    expect(plans["plant-1"].anchor).toBe("created");
     expect(plans["plant-1"].isDue).toBe(true);
   });
 
-  it("prefers a logged watering over the last assessment as the anchor", () => {
+  it("does NOT move the due date when a newer assessment lands (an assessment is not a watering)", () => {
+    const before = wateringPlansFor(
+      [candidate({ createdAt: "2026-06-20T09:00:00.000Z", lastAssessedAt: null })],
+      { "90210": MILD },
+      {},
+      NOW,
+    );
+    // A walk just photographed the tree three times, the last one a minute ago.
+    const after = wateringPlansFor(
+      [candidate({ createdAt: "2026-06-20T09:00:00.000Z", lastAssessedAt: "2026-07-15T08:59:00.000Z" })],
+      { "90210": MILD },
+      {},
+      NOW,
+    );
+    expect(after["plant-1"].nextWaterDueAt).toBe(before["plant-1"].nextWaterDueAt);
+    expect(after["plant-1"].nextWaterDueAt).toBe("2026-06-30T09:00:00.000Z");
+    expect(after["plant-1"].isDue).toBe(true);
+  });
+
+  it("prefers a logged watering over the creation date as the anchor", () => {
     const plans = wateringPlansFor(
-      [candidate({ lastAssessedAt: "2026-06-01T09:00:00.000Z" })],
+      [candidate({ createdAt: "2026-06-01T09:00:00.000Z" })],
       { "90210": MILD },
       { "plant-1": "2026-07-15T09:00:00.000Z" },
       NOW,
     );
     expect(plans["plant-1"].isDue).toBe(false);
+    expect(plans["plant-1"].anchor).toBe("log");
   });
 });
 

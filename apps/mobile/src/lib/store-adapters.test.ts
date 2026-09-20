@@ -217,3 +217,32 @@ describe("F39 zone + walk order ride through the adapters", () => {
     expect(plantDetailRowFromStore(plant())).toMatchObject({ zone: null, walk_order: null });
   });
 });
+
+// F39 Phase 5 (D-W14): the mappers read `created_at` as "when this happened".
+// The adapters hand them the EFFECTIVE time — the photo's takenAt when the
+// walk knew it, createdAt otherwise — so an old roll imported today lands in
+// the timeline where it was shot and never becomes the plant's latest.
+describe("effective time rides through the adapters (Phase 5)", () => {
+  const imported = assessment({
+    id: "import",
+    createdAt: "2026-09-19T12:00:00Z",
+    takenAt: "2026-07-01T08:00:00Z",
+    diagnosis: diagnosis({ health_score: 40 }),
+  });
+  const recent = assessment({ id: "recent", createdAt: "2026-09-01T10:00:00Z", diagnosis: diagnosis({ health_score: 85 }) });
+
+  it("timelineRowsFromStore dates a row by takenAt when present and orders by it", () => {
+    const rows = timelineRowsFromStore([imported, recent], "p1");
+    expect(rows.map((r) => r.id)).toEqual(["recent", "import"]);
+    expect(rows[1].created_at).toBe("2026-07-01T08:00:00Z");
+    expect(rows[0].created_at).toBe("2026-09-01T10:00:00Z");
+  });
+
+  it("→ mapPlantRows takes latest score and last-assessed from the newest effective time", () => {
+    const [item] = mapPlantRows(plantRowsFromStore([plant()], [imported, recent]));
+    expect(item.latestScore).toBe(85);
+    expect(item.lastAssessedAt).toBe("2026-09-01T10:00:00Z");
+    const [alone] = mapPlantRows(plantRowsFromStore([plant()], [imported]));
+    expect(alone.lastAssessedAt).toBe("2026-07-01T08:00:00Z");
+  });
+});

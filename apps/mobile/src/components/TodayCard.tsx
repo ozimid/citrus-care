@@ -26,7 +26,12 @@ export function TodayCard({
   const month = new Date().getMonth() + 1;
   const lines = todayDigest({
     alert: alert ? { kind: alert.kind, tempC: alert.tempC, plantNames: alert.plantNames } : null,
-    dueWater: items.filter((item) => plans[item.id]?.isDue === true).map((item) => item.name),
+    // Phase 6: a plan anchored on the day the plant was added is a projection,
+    // not a due date — "Water: A, B, C" on day one of every plant would be a
+    // number the app made up. Only a logged watering makes the list.
+    dueWater: items
+      .filter((item) => plans[item.id]?.isDue === true && plans[item.id]?.anchor === "log")
+      .map((item) => item.name),
     // Real identity, real hemisphere — a pet name must not pick the pack, and
     // a southern grower must not get northern windows (D-P5).
     pruneWindowOpen: items

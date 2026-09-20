@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -32,7 +32,10 @@ import {
   type TimelineEntry,
 } from "../lib/plant-detail";
 import { GENERIC_DELETE_PLANT_ERROR } from "../lib/plant-mutations";
-import { deletePlantWithPhotos, fetchPlantDetail } from "../lib/plants-io";
+import { deletePlantWithPhotos, deleteWalkIo, fetchPlantDetail } from "../lib/plants-io";
+import { assessmentsForWalk } from "../lib/assessment-store";
+import { loadAssessmentStore } from "../lib/assessment-store-io";
+import { newestFirst } from "../lib/local-id";
 import { loadPhotoIndex } from "../lib/photo-store-io";
 import { plantSubLabel } from "../lib/plants";
 import { RADIUS, type Tokens } from "../lib/theme";
@@ -49,6 +52,23 @@ import { DiagnosisScreen } from "./DiagnosisScreen";
 // assessments without a local photo render a neutral placeholder.
 
 const ROW_OPEN_ERROR = "Couldn't open this assessment. Please try again.";
+/** deleteWalkIo removes one assessment at a time, so a failure part-way leaves
+ * part of the walk gone — the message must not claim nothing happened. */
+const UNDO_WALK_ERROR_BODY =
+  "Some of the walk may already be removed. Check the timeline, then try again.";
+
+/** F39 Phase 6b — the "Undo this walk" offer: the walk this plant was most
+ * recently ANALYZED in. Not the newest row by effective time: the headline
+ * case is a roll imported from last month, whose rows sit below every later
+ * single shot and would otherwise never be undoable. `rowIds` are this plant's
+ * rows from that walk, so the link sits under the timeline group it removes. */
+interface WalkUndo {
+  walkId: string;
+  /** Every assessment the walk produced, across all plants. */
+  count: number;
+  plants: number;
+  rowIds: Set<string>;
+}
 
 interface Props {
   plantId: string;
@@ -70,16 +90,39 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
   const [viewingPhoto, setViewingPhoto] = useState<{ uri: string; caption?: string } | null>(null);
   /** F39: bumps per load so the pending-photos strip re-reads the queue. */
   const [loadCount, setLoadCount] = useState(0);
+  /** F39 Phase 6b: null when the newest assessment is not part of a walk (or
+   * the walk produced nothing else) — then there is nothing to undo as a unit. */
+  const [walkUndo, setWalkUndo] = useState<WalkUndo | null>(null);
+  const [undoingWalk, setUndoingWalk] = useState(false);
 
   const load = useCallback(async () => {
     setLoadCount((c) => c + 1);
     try {
-      const [detail, index] = await Promise.all([
+      const [detail, index, store] = await Promise.all([
         fetchPlantDetail(plantId),
         // Join the synced assessments to their on-phone photos (D-16).
         loadPhotoIndex(),
+        // The walk id rides the stored record, not the timeline row.
+        loadAssessmentStore(),
       ]);
       setData({ ...detail, timeline: attachLocalPhotos(detail.timeline, index) });
+      // The walk this plant was analyzed in last (createdAt — when the rows
+      // were written), so an imported old roll is undoable even though its
+      // rows are dated months back.
+      const walkId = Object.values(store)
+        .filter((a) => a.plantId === plantId && a.walkId)
+        .sort((a, b) => newestFirst(a.createdAt, a.id, b.createdAt, b.id))[0]?.walkId;
+      const walk = walkId ? assessmentsForWalk(store, walkId) : [];
+      setWalkUndo(
+        walkId && walk.length > 0
+          ? {
+              walkId,
+              count: walk.length,
+              plants: new Set(walk.map((a) => a.plantId)).size,
+              rowIds: new Set(walk.filter((a) => a.plantId === plantId).map((a) => a.id)),
+            }
+          : null,
+      );
       setError(null);
     } catch {
       // fetchPlantDetail already logged the details.
@@ -129,8 +172,57 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
     );
   }, [data, onChanged, onClose, plantId]);
 
+  /** Undo the whole walk this plant was analyzed in last — every plant it
+   * touched, their photos on this phone, covers repointed (deleteWalkIo).
+   * Queued, not-yet-analyzed photos are untouched: nothing was scored. */
+  const confirmUndoWalk = useCallback(() => {
+    if (!walkUndo) return;
+    const { walkId, count, plants } = walkUndo;
+    const scope = plants > 1 ? ` across ${plants} plants` : "";
+    const rows = count === 1 ? "1 assessment" : `${count} assessments`;
+    Alert.alert(
+      "Undo this walk?",
+      `This removes ${rows} from this walk${scope}, and their photos stored on this phone. Photos still waiting for analysis are kept. This can't be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Undo walk",
+          style: "destructive",
+          onPress: async () => {
+            setUndoingWalk(true);
+            try {
+              await deleteWalkIo(walkId);
+              onChanged();
+              await load();
+            } catch (e) {
+              console.error("[PlantDetailScreen] undo walk failed:", (e as Error).message);
+              // Say it where the tap happened: the link sits deep in the
+              // timeline, and a banner above the ScrollView is off-screen.
+              onChanged();
+              await load();
+              Alert.alert("Couldn't undo this walk", UNDO_WALK_ERROR_BODY);
+            } finally {
+              setUndoingWalk(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [load, onChanged, walkUndo]);
+
   const plant = data?.plant ?? null;
   const timeline = data?.timeline ?? [];
+  // The "Undo this walk" link goes under the walk's contiguous group — from
+  // its first row in the timeline down to where the group ends. The group is
+  // not necessarily at the top: an imported roll sits at its shooting date.
+  let undoAfterIndex = walkUndo ? timeline.findIndex((e) => walkUndo.rowIds.has(e.id)) : -1;
+  while (
+    undoAfterIndex >= 0 &&
+    undoAfterIndex + 1 < timeline.length &&
+    walkUndo?.rowIds.has(timeline[undoAfterIndex + 1].id)
+  ) {
+    undoAfterIndex += 1;
+  }
   const pair = data ? sliderPair(timeline) : null;
   const trend = data ? trendChipLabel(timeline) : null;
   const latest = timeline[0] ?? null;
@@ -205,12 +297,7 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           {/* F20 — weather-aware watering. Renders from the plant row's care
               profile + the ZIP's cached forecast; degrades to a hint (no ZIP)
               or a retry (no profile) rather than an error. */}
-          <WateringCard
-            plant={plant}
-            lastAssessedAt={latest?.createdAt ?? null}
-            t={t}
-            onProfileGenerated={load}
-          />
+          <WateringCard plant={plant} createdAt={plant.created_at} t={t} onProfileGenerated={load} />
 
           {/* F37 — the AI-generated plant reference (difficulty, light, temps,
               size, seasons). Renders only once a care profile exists. */}
@@ -294,23 +381,58 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
               </Text>
             </View>
           ) : (
-            timeline.map((entry) => (
-              <TimelineRowCard
-                key={entry.id}
-                entry={entry}
-                onPress={() => openRow(entry)}
-                onViewPhoto={
-                  entry.localUri
-                    ? () =>
-                        setViewingPhoto({
-                          uri: entry.localUri!,
-                          caption: `${data?.plant.name ?? "Plant"} · ${entry.dateLabel}`,
-                        })
-                    : undefined
-                }
-                t={t}
-                scheme={scheme}
-              />
+            timeline.map((entry, i) => (
+              <Fragment key={entry.id}>
+                <TimelineRowCard
+                  entry={entry}
+                  onPress={() => openRow(entry)}
+                  onViewPhoto={
+                    entry.localUri
+                      ? () =>
+                          setViewingPhoto({
+                            uri: entry.localUri!,
+                            caption: `${data?.plant.name ?? "Plant"} · ${entry.dateLabel}`,
+                          })
+                      : undefined
+                  }
+                  t={t}
+                  scheme={scheme}
+                />
+                {/* F39 Phase 6b: a misattributed walk is the failure mode
+                    (garden-walk.md §2) — one confirmed tap takes the whole
+                    run back out, under the rows it would remove. */}
+                {i === undoAfterIndex && walkUndo ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    // An explicit label replaces the children in the a11y tree,
+                    // so the blast radius has to be IN it — this deletes rows
+                    // and photo files on plants that are not on this screen.
+                    accessibilityLabel={
+                      `Undo this walk. Removes ${walkUndo.count} ${walkUndo.count === 1 ? "assessment" : "assessments"}` +
+                      (walkUndo.plants > 1 ? ` on ${walkUndo.plants} plants` : "") +
+                      `, ${walkUndo.rowIds.size} of them here, and their photos`
+                    }
+                    accessibilityState={{ disabled: undoingWalk }}
+                    disabled={undoingWalk}
+                    onPress={confirmUndoWalk}
+                    hitSlop={8}
+                    style={[styles.undoWalk, { opacity: undoingWalk ? 0.6 : 1 }]}
+                  >
+                    {undoingWalk ? (
+                      <ActivityIndicator color={t.danger} />
+                    ) : (
+                      <Text style={[styles.undoWalkText, { color: t.danger }]}>Undo this walk</Text>
+                    )}
+                    {/* The part on screen first — "5 assessments" under two
+                        visible rows reads as a miscount, not as a warning. */}
+                    <Text style={[styles.undoWalkMeta, { color: t.text }]}>
+                      {walkUndo.plants > 1
+                        ? `${walkUndo.rowIds.size} here · ${walkUndo.count} in all`
+                        : `${walkUndo.count} ${walkUndo.count === 1 ? "assessment" : "assessments"}`}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </Fragment>
             ))
           )}
         </ScrollView>
@@ -547,6 +669,19 @@ const styles = StyleSheet.create({
   rowSummary: { fontSize: 13, lineHeight: 18 },
   emptyTitle: { fontSize: 15, fontWeight: "600" },
   emptyBody: { fontSize: 13, lineHeight: 19 },
+  undoWalk: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    alignSelf: "flex-start",
+    // A destructive control: a full 48 dp target, not a 32 dp one padded out
+    // by hit slop.
+    minHeight: 48,
+    paddingHorizontal: 4,
+    marginTop: -4,
+  },
+  undoWalkText: { fontSize: 13, fontWeight: "600", textDecorationLine: "underline" },
+  undoWalkMeta: { fontSize: 12 },
   ring: {
     width: 44,
     height: 44,

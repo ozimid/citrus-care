@@ -11,6 +11,7 @@ import {
 } from "../components/WalkSummary";
 import { persistDeferredAssessment, runAssess, type AssessDeps, type AssessPhase, type AssessResult } from "../lib/assess";
 import { saveLastAssessDebug } from "../lib/assess-debug-io";
+import { assessmentsForWalk, effectiveTime } from "../lib/assessment-store";
 import { loadAssessmentStore } from "../lib/assessment-store-io";
 import { useKeepAwakeWhile } from "../lib/keep-awake-io";
 import { persistLocalAssessment } from "../lib/local-engine-io";
@@ -73,7 +74,9 @@ export function WalkRunScreen({ items, plants, onFinished, onClose }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
   const stopRef = useRef(false);
   const retryRef = useRef(new Set<string>());
-  /** The anchor each photo was marked with — per (plant, walk) by the runner (D-W6). */
+  /** The anchor each photo was actually compared against — the runner's per
+   * (plant, walk) anchor (D-W6) narrowed by depsFor to the effective one
+   * (Phase 5), which is what the summary's "vs. before <date>" names. */
   const anchorsRef = useRef<Record<string, string>>({});
   const startedRef = useRef(false);
   const running = result === null;
@@ -103,16 +106,62 @@ export function WalkRunScreen({ items, plants, onFinished, onClose }: Props) {
     return () => sub.remove();
   }, [requestStop, running]);
 
-  /** Per-photo production wiring with this walk's anchor (D-W6) and no cover
-   * writes (D-W9); a record whose dims were unreadable is measured here. */
+  /** Phase 5 (D-W6 on effective time): the anchor is the EARLIEST of the run's
+   * per-(plant, walk) anchor, the first time this plant was SHOT in this walk
+   * and the effective time of any row this walk already landed for it (a
+   * resumed walk's earlier run — those rows are not in `items`), so a roll
+   * from last month compares against what the plant looked like before it was
+   * shot — never against today, and never against a sibling angle from the
+   * same walk. ISO strings of one format, so min is a string compare. */
+  const compareBeforeFor = useCallback(async (item: QueuedPhoto, anchorIso: string): Promise<string> => {
+    let earliest = anchorIso;
+    for (const sibling of items) {
+      if (sibling.plantId !== item.plantId || sibling.walkId !== item.walkId) continue;
+      if (sibling.takenAt !== null && sibling.takenAt < earliest) earliest = sibling.takenAt;
+    }
+    try {
+      for (const row of assessmentsForWalk(await loadAssessmentStore(), item.walkId)) {
+        if (row.plantId === item.plantId && effectiveTime(row) < earliest) earliest = effectiveTime(row);
+      }
+    } catch (e) {
+      // Best-effort: the run's own items still bound the anchor.
+      console.error("[WalkRunScreen] walk rows not read for the anchor:", (e as Error).message);
+    }
+    return earliest;
+  }, [items]);
+
+  /** Per-photo production wiring with this walk's anchor (D-W6), the photo's
+   * own date and walk on the row (Phase 5 / 6b) and no cover writes (D-W9); a
+   * record whose dims were unreadable is measured here. */
   const depsFor = useCallback(async (item: QueuedPhoto, anchorIso: string, context: string): Promise<AssessDeps> => {
     const known = { width: item.width, height: item.height };
     const size = item.needsDims ? await Image.getSize(queuedPhotoUri(item)).catch(() => known) : known;
+    // The summary's "vs. before <date>" must name the date the comparison
+    // ACTUALLY used, not the runner's wall clock: for an imported roll the two
+    // are months apart. This is the effective anchor, so the label is true.
+    const compareBeforeIso = await compareBeforeFor(item, anchorIso);
+    anchorsRef.current[item.id] = compareBeforeIso;
+    const options = {
+      compareBeforeIso,
+      updateCover: false,
+      takenAt: item.takenAt ?? undefined,
+      walkId: item.walkId,
+    };
     const base = buildAssessDeps(localEngine, size, context, {
-      persist: (a) => lock(() => persistLocalAssessment(a, { compareBeforeIso: anchorIso, updateCover: false })),
+      persist: (a) => lock(() => persistLocalAssessment(a, options)),
     });
-    return { ...base, linkPhoto: (id, entry) => lock(() => linkPhotoToAssessment(id, entry)) };
-  }, [localEngine, lock]);
+    // Phase 5: the index entry is dated by the PHOTO too, not by the moment
+    // the link was written — photosForPlant/latestPhotoForPlant feed the card
+    // cover fallback and "Where to prune"'s default, and a July roll analyzed
+    // today must not out-rank September there while the timeline says
+    // otherwise. Two definitions of "newest" would disagree on the one surface
+    // the user sees first.
+    return {
+      ...base,
+      linkPhoto: (id, entry) =>
+        lock(() => linkPhotoToAssessment(id, { ...entry, createdAt: item.takenAt ?? entry.createdAt })),
+    };
+  }, [compareBeforeFor, localEngine, lock]);
 
   /** The assess flow returns the model's raw parse; the deterministic
    * better/same/worse is injected on persist and only the id comes back — so
@@ -141,6 +190,8 @@ export function WalkRunScreen({ items, plants, onFinished, onClose }: Props) {
         return stored(await runAssess(assessDeps, { plantId, photoUri: uri, savedUri: uri, force: false }, { onDebug: (d) => void saveLastAssessDebug(d) }));
       },
       markAnalyzing: (item, nowIso, anchorIso) => {
+        // A fallback only: depsFor replaces this with the effective anchor the
+        // comparison used. It stands when the item never reaches depsFor.
         anchorsRef.current[item.id] = anchorIso;
         return lock(() => markAnalyzingIo(item.id, nowIso, anchorIso));
       },
@@ -234,6 +285,12 @@ export function WalkRunScreen({ items, plants, onFinished, onClose }: Props) {
     [plants, result],
   );
   const assessedCount = result ? result.outcomes.filter((o) => o.kind === "assessed").length : 0;
+  /** Phase 6b: the walks this run landed assessments in — what "Undo this walk" takes back. */
+  const walkIds = useMemo(() => {
+    if (!result) return [];
+    const assessed = new Set(result.outcomes.filter((o) => o.kind === "assessed").map((o) => o.id));
+    return [...new Set(items.filter((i) => assessed.has(i.id)).map((i) => i.walkId))];
+  }, [items, result]);
   const openDiagnosis = useCallback((row: WalkSummaryRow) => {
     const latest = result ? latestAssessedFor(result.outcomes, row.plantId) : null;
     if (latest) setOpened({ row, diagnosis: latest.diagnosis });
@@ -260,7 +317,7 @@ export function WalkRunScreen({ items, plants, onFinished, onClose }: Props) {
       {result && !showItems ? (
         <WalkSummary
           result={result} rows={summaryRows} note={paused ? PAUSED_LINE : null} needsYou={needsYou} onShowItems={() => setShowItems(true)}
-          onOpenDiagnosis={openDiagnosis} onRemindAll={remindAll} onDone={finish} t={t} scheme={scheme}
+          onOpenDiagnosis={openDiagnosis} onRemindAll={remindAll} walkIds={walkIds} onDone={finish} t={t} scheme={scheme}
         />
       ) : (
         <View style={[styles.root, { backgroundColor: t.canvas }]}>

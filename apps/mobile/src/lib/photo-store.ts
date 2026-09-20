@@ -50,6 +50,14 @@ export function removePlantPhotos(index: PhotoIndex, plantId: string): PhotoInde
   return next;
 }
 
+/** Drop one assessment's entry ("Undo this walk", F39 Phase 6b). The io
+ * deletes the file; a plant delete still goes through removePlantPhotos. */
+export function removePhotoEntry(index: PhotoIndex, assessmentId: string): PhotoIndex {
+  if (!(assessmentId in index)) return index;
+  const { [assessmentId]: _gone, ...rest } = index;
+  return rest;
+}
+
 export function photoForAssessment(
   index: PhotoIndex,
   assessmentId: string,

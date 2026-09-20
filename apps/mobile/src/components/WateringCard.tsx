@@ -46,14 +46,15 @@ type Phase =
 
 interface Props {
   plant: PlantInput;
-  /** Newest assessment timestamp — the watering anchor when nothing is logged. */
-  lastAssessedAt: string | null;
+  /** plants.created_at — the watering anchor when nothing is logged (Phase 6:
+   * never the newest assessment; a photo is not a watering). */
+  createdAt: string;
   t: Tokens;
   /** The stored profile changed (a retry generated one) — reload the plant row. */
   onProfileGenerated?: () => void;
 }
 
-export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: Props) {
+export function WateringCard({ plant, createdAt, t, onProfileGenerated }: Props) {
   const localEngine = useLocalEngine();
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
@@ -87,7 +88,7 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
       location: plant.location,
       weather: weather?.summary ?? null,
       lastWateredAt: lastWateredAt(log, plant.id),
-      lastAssessedAt,
+      createdAt,
       now,
     });
     setPhase({
@@ -99,6 +100,13 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
 
     // Keep an ALREADY-permitted reminder in step with the new due date. This
     // never prompts — that only happens on the "Remind me" tap below.
+    //
+    // Phase 6: not from a created_at anchor. That due date is a projection
+    // from the day the plant was added, and it is usually already in the past
+    // — syncWateringReminder would move it to now+60s and fire "time to water"
+    // a minute after the user opened the plant. Only a logged watering moves a
+    // scheduled reminder; the explicit "Remind me" tap is still the user's.
+    if (plan.anchor === "created") return;
     const outcome = await syncWateringReminder(notificationScheduler, {
       plantId: plant.id,
       plantName: plant.name,
@@ -107,7 +115,7 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
       now,
     });
     setReminderSet(outcome.ok);
-  }, [lastAssessedAt, plant.id, plant.location, plant.name, profile, zip]);
+  }, [createdAt, plant.id, plant.location, plant.name, profile, zip]);
 
   useEffect(() => {
     compute();
@@ -216,6 +224,16 @@ export function WateringCard({ plant, lastAssessedAt, t, onProfileGenerated }: P
         <>
           <Text style={[styles.due, { color: t.text }]}>{dueLabel(phase.plan)}</Text>
           <Text style={[styles.body, { color: t.sub }]}>{phase.plan.reason}</Text>
+          {/* Phase 6: the clock is only the day the plant was added — say so
+              at the weight of the line it hedges (the due line above is 15/600
+              and reads as fact), and say how to start a real one. Disappears
+              on the first log. */}
+          {phase.plan.anchor === "created" ? (
+            <Text style={[styles.body, { color: t.text }]}>
+              This counts from the day you added this plant — no watering logged yet. Tap Watered
+              today to start the real schedule.
+            </Text>
+          ) : null}
           {phase.place ? (
             <Text style={[styles.meta, { color: t.sub }]}>
               {phase.place}

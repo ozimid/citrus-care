@@ -7,13 +7,17 @@
 
 import type { AssessmentScoreRow, PlantRow } from "./plants";
 import type { PlantDetailRow, TimelineRow } from "./plant-detail";
-import { byCreatedAtDesc, type StoredAssessment } from "./assessment-store";
+import { byEffectiveTimeDesc, effectiveTime, type StoredAssessment } from "./assessment-store";
 import type { StoredPlant } from "./plant-store";
 
+// F39 Phase 5 (D-W14): the mappers read `created_at` as "when this happened",
+// so the adapters hand them the EFFECTIVE time — the photo's own takenAt when
+// a walk knew it, the analysis time otherwise. A roll imported today lands in
+// the timeline where it was shot and never becomes the plant's latest.
 function scoreRow(assessment: StoredAssessment): AssessmentScoreRow {
   return {
     health_score: assessment.diagnosis.health_score,
-    created_at: assessment.createdAt,
+    created_at: effectiveTime(assessment),
     diagnosis: assessment.diagnosis,
   };
 }
@@ -84,10 +88,10 @@ export function plantDetailRowFromStore(
 export function timelineRowsFromStore(assessments: StoredAssessment[], plantId: string): TimelineRow[] {
   return assessments
     .filter((a) => a.plantId === plantId)
-    .sort(byCreatedAtDesc)
+    .sort(byEffectiveTimeDesc)
     .map((assessment) => ({
       id: assessment.id,
-      created_at: assessment.createdAt,
+      created_at: effectiveTime(assessment),
       health_score: assessment.diagnosis.health_score,
       diagnosis: assessment.diagnosis,
       is_cut_care: assessment.diagnosis.subject === "cut",

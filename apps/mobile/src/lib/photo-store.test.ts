@@ -4,6 +4,7 @@ import {
   photoFileName,
   photoForAssessment,
   photosForPlant,
+  removePhotoEntry,
   removePlantPhotos,
   serializePhotoIndex,
   upsertPhoto,
@@ -168,5 +169,25 @@ describe("latestPhotoForPlant", () => {
       "file:///p1/a2.jpg",
       "file:///p1/a1.jpg",
     ]);
+  });
+});
+
+// F39 Phase 6b — "Undo this walk" removes one assessment at a time; its index
+// entry goes with it (the io deletes the file), everything else stays.
+describe("removePhotoEntry", () => {
+  const index = upsertPhoto(
+    upsertPhoto({}, "a1", entry()),
+    "a2",
+    entry({ localUri: "file:///2.jpg" }),
+  );
+
+  it("drops the one entry, keeps the rest, does not mutate", () => {
+    const after = removePhotoEntry(index, "a1");
+    expect(Object.keys(after)).toEqual(["a2"]);
+    expect(Object.keys(index).sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("returns the same index for an unknown assessment", () => {
+    expect(removePhotoEntry(index, "missing")).toBe(index);
   });
 });

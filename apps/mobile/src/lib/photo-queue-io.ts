@@ -24,6 +24,7 @@ import { File, Paths } from "expo-file-system";
 import type { ImagePickerAsset } from "expo-image-picker";
 import { Image } from "react-native";
 import type { AssessmentDiagnosis } from "@citrus/shared";
+import { effectiveTime } from "./assessment-store";
 import { loadAssessmentStore } from "./assessment-store-io";
 import { newLocalId } from "./local-id";
 import {
@@ -257,14 +258,16 @@ export async function importGalleryAssets(
   }
   // D-W13: the EXIF whitelist runs inside takenAtFromAsset here, before the
   // first await; the staged copy carries no raw exif, so GPS and the rest are
-  // never read, stored or logged.
+  // never read, stored or logged. The clock goes in so a camera running fast
+  // cannot date a photo into the future and sit at the top of the plant.
+  const nowIso = new Date().toISOString();
   const staged = orderImportedPhotos<StagedAsset>(
     assets.map((a) => ({
       uri: a.uri,
       width: a.width,
       height: a.height,
       fileName: a.fileName ?? null,
-      takenAt: takenAtFromAsset({ exif: a.exif, fileName: a.fileName }),
+      takenAt: takenAtFromAsset({ exif: a.exif, fileName: a.fileName }, nowIso),
     })),
   );
   // Rungs 3 and 5 read the plants once; one added mid-import is simply not
@@ -656,7 +659,12 @@ export async function recoverInterruptedWalk(): Promise<void> {
           localUri: file.uri,
           plantId: link.plantId,
           engine: "on-device",
-          createdAt: assessments[link.assessmentId]?.createdAt ?? new Date().toISOString(),
+          // The row's effective time (Phase 5), so a relink after a kill dates
+          // the entry exactly as the original link would have.
+          createdAt: (() => {
+            const row = assessments[link.assessmentId];
+            return row ? effectiveTime(row) : new Date().toISOString();
+          })(),
         });
       } catch (e) {
         console.error("[photo-queue-io] relink failed:", (e as Error).message);

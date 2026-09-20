@@ -7,6 +7,7 @@ const guideRoutes = [
   "/guides/roses",
   "/guides/flowering-shrubs",
   "/guides/trees-and-shrubs",
+  "/guides/labeling-trees",
 ];
 
 async function expectDirectApkDownload(page: Page, route: string) {

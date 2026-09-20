@@ -9,13 +9,17 @@
 // orchestration it is.
 
 import { useCallback, useRef, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { assessmentsForWalk, latestAssessmentId, type AssessmentStore } from "../lib/assessment-store";
+import { loadAssessmentStore } from "../lib/assessment-store-io";
 import { bandColor, healthBand } from "../lib/health";
 import { MAX_AUTO_ATTEMPTS, pickWalkCover, type QueuedPhoto } from "../lib/photo-queue";
 import { queuedPhotoUri } from "../lib/photo-queue-io";
 import { formatTimelineDate } from "../lib/plant-detail";
 import { setPlantCover } from "../lib/plant-store-io";
-import { batchReminderPlan } from "../lib/reminders";
+import { deleteWalkIo } from "../lib/plants-io";
+import { batchReminderPlan, cancelReminder, RECHECK_REMINDER_KIND } from "../lib/reminders";
+import { notificationScheduler } from "../lib/reminders-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import {
   WALK_SLOW_LABEL,
@@ -78,7 +82,12 @@ export function useWriteLock() {
   }, []);
 }
 
-/** D-W9: one cover per plant, whole-plant first, once the run is over. Best-effort per plant. */
+/** D-W9: one cover per plant, whole-plant first, once the run is over.
+ * Phase 5: "newest" is effective time everywhere else (the timeline, the
+ * trend, the comparison anchor), so a roll imported from July must not take
+ * the card thumbnail off a September photo. The run only claims the cover
+ * when one of ITS shots is the plant's newest row; otherwise the existing
+ * cover stands. Best-effort per plant. */
 export async function setWalkCovers(items: QueuedPhoto[], rows: Record<string, RowState>): Promise<void> {
   const byPlant = new Map<string, { assessmentId: string; subject: string; takenAt: string | null }[]>();
   for (const item of items) {
@@ -87,9 +96,42 @@ export async function setWalkCovers(items: QueuedPhoto[], rows: Record<string, R
       byPlant.set(o.plantId, [...(byPlant.get(o.plantId) ?? []), { assessmentId: o.assessmentId, subject: o.diagnosis.subject ?? "", takenAt: item.takenAt }]);
     }
   }
+  if (byPlant.size === 0) return;
+  // Best-effort: with no store `latest` is null and the pre-Phase-5 behaviour
+  // (the run sets the cover) stands. A thumbnail must never fail the run — the
+  // caller reads a throw here as "storage-error" for every photo.
+  let store: AssessmentStore = {};
+  try {
+    store = await loadAssessmentStore();
+  } catch (e) {
+    console.error("[WalkSummary] cover guard could not read the store:", (e as Error).message);
+  }
   for (const [plantId, shots] of byPlant) {
     const cover = pickWalkCover(shots);
-    if (cover) await setPlantCover(plantId, cover).catch((e: Error) => console.error("[WalkSummary] cover not set:", e.message));
+    if (!cover) continue;
+    const latest = latestAssessmentId(store, plantId);
+    if (latest && !shots.some((s) => s.assessmentId === latest)) continue;
+    await setPlantCover(plantId, cover).catch((e: Error) => console.error("[WalkSummary] cover not set:", e.message));
+  }
+}
+
+/** Best-effort: drop the recheck reminders this summary scheduled for these
+ * plants once their assessments are undone. Cancelling a notification is never
+ * worth an error in front of the user (the cancelWateringReminders stance);
+ * only rows tagged `recheck` are touched, so a legacy kind-less reminder from
+ * a diagnosis screen is left alone. */
+async function cancelRecheckReminders(plantIds: string[]): Promise<void> {
+  if (plantIds.length === 0) return;
+  const wanted = new Set(plantIds);
+  try {
+    for (const req of await notificationScheduler.getScheduled()) {
+      const data = req.content.data ?? {};
+      if (data.kind === RECHECK_REMINDER_KIND && typeof data.plantId === "string" && wanted.has(data.plantId)) {
+        await cancelReminder(notificationScheduler, req.identifier);
+      }
+    }
+  } catch (e) {
+    console.error("[WalkSummary] recheck reminders not cancelled:", (e as Error).message);
   }
 }
 
@@ -109,6 +151,8 @@ const NO_HISTORY_LINE = "Up to 2 minutes per photo — often much less";
 const REMIND_DENIED_NOTE =
   "Notifications are off for Citrus Care. Enable them in your device settings to get reminders.";
 const REMIND_FAILED_NOTE = "Couldn't set the reminders. Please try again.";
+/** Phase 6b. Generic and honest (CLAUDE.md): details go to console.error. */
+const UNDO_FAILED_NOTE = "Couldn't undo this walk. Please try again.";
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -349,9 +393,42 @@ interface SummaryProps {
   onShowItems?: () => void;
   onOpenDiagnosis: (row: WalkSummaryRow) => void;
   onRemindAll: () => Promise<{ scheduled: number; denied: boolean }>;
+  /** Phase 6b: the walks whose assessments this run landed (usually one;
+   * "Analyze all pending" can mix walks). Empty / absent hides "Undo this walk". */
+  walkIds?: string[];
   onDone: () => void;
   t: Tokens;
   scheme: "light" | "dark";
+}
+
+type UndoState = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; message: string };
+
+/** Phase 6b — the whole walk's assessments, photos included, taken back. The
+ * count in the confirm is read from the STORE, not the run's outcomes: a walk
+ * resumed across two runs has rows this run never saw, and they go too — so
+ * the dialog names how many plants it reaches and that it can't be undone,
+ * word for word the way PlantDetailScreen's does. */
+async function confirmUndoWalk(walkIds: string[]): Promise<boolean> {
+  const store = await loadAssessmentStore();
+  const all = walkIds.flatMap((id) => assessmentsForWalk(store, id));
+  if (all.length === 0) return false;
+  const plants = new Set(all.map((a) => a.plantId)).size;
+  const which = walkIds.length === 1 ? "this walk" : "these walks";
+  const rows = all.length === 1 ? "1 assessment" : `${all.length} assessments`;
+  const on = plants === 1 ? "1 plant" : `${plants} plants`;
+  return new Promise((resolve) => {
+    Alert.alert(
+      `Undo ${which}?`,
+      `This removes ${rows} on ${on}, and their photos stored on this phone. Photos still waiting for analysis are kept. This can't be undone.`,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: "Undo walk", style: "destructive", onPress: () => resolve(true) },
+      ],
+      // Android back / tap-outside dismisses without a button: settle as a
+      // cancel, or the button would stay busy forever.
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
 }
 
 function deltaLine(row: WalkSummaryRow): string | null {
@@ -396,12 +473,39 @@ export function WalkSummary({
   onShowItems,
   onOpenDiagnosis,
   onRemindAll,
+  walkIds = [],
   onDone,
   t,
   scheme,
 }: SummaryProps) {
   const [remind, setRemind] = useState<RemindState>({ kind: "idle" });
+  const [undo, setUndo] = useState<UndoState>({ kind: "idle" });
   const scorable = rows.filter((r) => r.latestScore !== null).length;
+  const assessed = result.outcomes.some((o) => o.kind === "assessed");
+
+  /** Confirm (with the store's true count) → deleteWalkIo per walk → leave.
+   * A failure keeps the summary up with an honest note; nothing is half-done
+   * silently (each assessment is removed whole, in order). */
+  async function undoWalk() {
+    setUndo({ kind: "busy" });
+    try {
+      if (!(await confirmUndoWalk(walkIds))) {
+        setUndo({ kind: "idle" });
+        return;
+      }
+      for (const walkId of walkIds) await deleteWalkIo(walkId);
+      // The re-check reminders this summary just set point at assessments that
+      // no longer exist — nothing else would ever clear them. "done" and not
+      // ok still means some may have been scheduled before the failure.
+      if (remind.kind === "done") {
+        await cancelRecheckReminders(batchReminderPlan(rows).map((p) => p.plantId));
+      }
+      onDone();
+    } catch (e) {
+      console.error("[WalkSummary] undo walk failed:", (e as Error).message);
+      setUndo({ kind: "failed", message: UNDO_FAILED_NOTE });
+    }
+  }
   const counts = summaryCounts(result);
   // The same register as DiagnosisScreen's rationale: say WHY the intervals
   // differ, when they do (suggestedReminderInterval: lower score or a worse
@@ -508,6 +612,33 @@ export function WalkSummary({
         <Pressable accessibilityRole="button" accessibilityLabel="Back to plants" onPress={onDone} style={[styles.done, { backgroundColor: t.green }]}>
           <Text style={[styles.doneText, { color: t.onGreen }]}>Back to plants</Text>
         </Pressable>
+
+        {/* Phase 6b: last, quiet and destructive-coloured — the way back when a
+            photo landed on the wrong tree. Word + colour, never colour alone. */}
+        {assessed && walkIds.length > 0 ? (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={walkIds.length === 1 ? "Undo this walk" : "Undo these walks"}
+              accessibilityHint="Removes every assessment from this walk and deletes its photos"
+              accessibilityState={{ disabled: undo.kind === "busy" }}
+              disabled={undo.kind === "busy"}
+              onPress={undoWalk}
+              style={[styles.undo, { borderColor: t.danger, opacity: undo.kind === "busy" ? 0.6 : 1 }]}
+            >
+              {undo.kind === "busy" ? (
+                <ActivityIndicator color={t.danger} />
+              ) : (
+                <Text style={[styles.remindText, { color: t.danger }]}>{walkIds.length === 1 ? "Undo this walk" : "Undo these walks"}</Text>
+              )}
+            </Pressable>
+            {undo.kind === "failed" ? (
+              <Text style={[styles.remindNote, { color: t.text }]} accessibilityLiveRegion="assertive">
+                {undo.message}
+              </Text>
+            ) : null}
+          </>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -553,4 +684,5 @@ const styles = StyleSheet.create({
   remindNote: { fontSize: 13, textAlign: "center", lineHeight: 18, marginTop: 4 },
   done: { borderRadius: RADIUS, minHeight: 50, alignItems: "center", justifyContent: "center" },
   doneText: { fontSize: 16, fontWeight: "600" },
+  undo: { borderWidth: 1, borderRadius: RADIUS, minHeight: 48, alignItems: "center", justifyContent: "center", marginTop: 12, paddingHorizontal: 12 },
 });

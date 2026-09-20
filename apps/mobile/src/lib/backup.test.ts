@@ -393,3 +393,36 @@ describe("backup v3 carries zone and walk order (F39 Phase 3b)", () => {
     expect(merged.plants[P1]).toMatchObject({ zone: "NORTH", walk_order: 1 });
   });
 });
+
+// F39 Phase 5 / 6b (D-W11): takenAt and walkId ride the assessment store into
+// backup v3 with no version bump — a restored roll keeps its shooting dates
+// and "Undo this walk" still knows which rows belong together. A file written
+// before either existed parses exactly as before.
+describe("backup v3 carries takenAt and walkId (F39 Phase 5 / 6b)", () => {
+  const W1 = "w1-00000001";
+
+  it("round-trips a dated walk assessment", () => {
+    const dated: StoredAssessment = { ...assessment(A1, P1), takenAt: "2026-07-01T08:00:00Z", walkId: W1 };
+    const doc = buildBackup(stores({ assessments: { [A1]: dated } }), "2026-09-19T12:00:00Z");
+    expect(parseBackup(serializeBackup(doc))?.stores.assessments[A1]).toEqual(dated);
+  });
+
+  it("parses an older file with neither field, leaving both absent", () => {
+    const doc = { app: "citrus-care", version: 3, exportedAt: "t", assessments: { [A1]: assessment(A1, P1) } };
+    const parsed = parseBackup(JSON.stringify(doc))!.stores.assessments[A1];
+    expect(parsed).toEqual(assessment(A1, P1));
+    expect("takenAt" in parsed).toBe(false);
+    expect("walkId" in parsed).toBe(false);
+  });
+
+  it("repairs a crafted takenAt / walkId instead of dropping the assessment", () => {
+    const doc = {
+      app: "citrus-care",
+      version: 3,
+      exportedAt: "t",
+      assessments: { [A1]: { ...assessment(A1, P1), takenAt: 12345, walkId: "../.." } },
+    };
+    const parsed = parseBackup(JSON.stringify(doc))!.stores.assessments[A1];
+    expect(parsed).toEqual(assessment(A1, P1));
+  });
+});

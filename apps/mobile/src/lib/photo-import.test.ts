@@ -125,6 +125,29 @@ describe("takenAtFromAsset (the chain)", () => {
     expect(takenAtFromAsset({ fileName: "IMG_2026091_101533.jpg" })).toBeNull();
     expect(takenAtFromAsset({ fileName: "IMG_20261319_101533.jpg" })).toBeNull();
   });
+
+  // Phase 5 ranks the timeline, the cover and the comparison anchor by the
+  // photo's own time, so a camera whose clock runs fast would otherwise pin a
+  // row at the top of the plant until real time caught up. Unknown is honest.
+  it("refuses a time in the future when the clock is passed", () => {
+    const now = "2026-09-19T10:00:00.000Z";
+    const exif = { DateTimeOriginal: "2026:09:19 12:00:00", OffsetTimeOriginal: "+00:00" };
+    expect(takenAtFromAsset({ exif })).toBe("2026-09-19T12:00:00.000Z");
+    expect(takenAtFromAsset({ exif }, now)).toBeNull();
+    // The file-name fallback is clamped too, and it never falls back to a
+    // rejected EXIF time.
+    const future = new Date(Date.parse(now) + 60_000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const name = `IMG_${future.getFullYear()}${pad(future.getMonth() + 1)}${pad(future.getDate())}_${pad(future.getHours())}${pad(future.getMinutes())}${pad(future.getSeconds())}.jpg`;
+    expect(takenAtFromAsset({ exif, fileName: name }, now)).toBeNull();
+  });
+
+  it("keeps a past time, and stays unclamped when no clock is passed", () => {
+    const now = "2026-09-19T10:00:00.000Z";
+    const exif = { DateTimeOriginal: "2026:09:19 09:59:59", OffsetTimeOriginal: "+00:00" };
+    expect(takenAtFromAsset({ exif }, now)).toBe("2026-09-19T09:59:59.000Z");
+    expect(takenAtFromAsset({ exif: { DateTimeOriginal: "2026:09:19 10:00:00", OffsetTimeOriginal: "+00:00" } }, now)).toBe(now);
+  });
 });
 
 describe("orderImportedPhotos", () => {

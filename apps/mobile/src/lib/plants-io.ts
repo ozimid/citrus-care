@@ -3,14 +3,21 @@
 // feeds the tested list/detail mappers. Replaces the old Supabase queries — no
 // client, no user_id, no network. Generic client-facing errors; details logged.
 
+import { File } from "expo-file-system";
 import type { NewPlantInput } from "@citrus/shared";
-import { allAssessments, type AssessmentStore } from "./assessment-store";
-import { deletePlantAssessments, loadAssessmentStore } from "./assessment-store-io";
+import {
+  allAssessments,
+  assessmentsForWalk,
+  latestAssessmentId,
+  removeAssessment,
+  type AssessmentStore,
+} from "./assessment-store";
+import { deletePlantAssessments, loadAssessmentStore, saveAssessmentStore } from "./assessment-store-io";
 import { deletePlantChat } from "./plant-chat-io";
 import { deletePlantQueuedPhotos } from "./photo-queue-io";
-import { deletePlantPrunePlans } from "./prune-io";
+import { deletePlantPrunePlans, loadPruneStore } from "./prune-io";
 import { buildStoredPlant, bulkPlantInputs, GENERIC_CREATE_PLANT_ERROR, ZONE_FORMAT_ERROR } from "./new-plant";
-import { newLocalId } from "./local-id";
+import { isSafeBasename, newLocalId } from "./local-id";
 import {
   applyPlantUpdate,
   applyWalkOrders,
@@ -28,7 +35,8 @@ import { attachCoverPhotos, mapPlantRows, type PlantListItem } from "./plants";
 import { allPlants, getPlant, upsertPlant, type PlantStore } from "./plant-store";
 import { deletePlantRecord, loadPlantStore, savePlantStore } from "./plant-store-io";
 import { normalizeTag } from "./plant-tags";
-import { deleteLocalPlantPhotos, loadPhotoIndex } from "./photo-store-io";
+import { removePhotoEntry, type PhotoIndex } from "./photo-store";
+import { deleteLocalPlantPhotos, loadPhotoIndex, plantPhotoDir, replacePhotoIndex } from "./photo-store-io";
 import { buildDiagnosisContext } from "./spike-vlm";
 import {
   plantDetailRowFromStore,
@@ -230,4 +238,89 @@ export async function deletePlantWithPhotos(plantId: string): Promise<void> {
     console.error("[deletePlantWithPhotos] plant delete failed:", (e as Error).message);
     throw new Error(GENERIC_DELETE_PLANT_ERROR);
   }
+}
+
+// F39 Phase 6b — "Undo this walk". Misattribution is the failure mode (design
+// contract §2): a photo analyzed onto the wrong tree corrupts a timeline the
+// user cannot re-shoot, so a whole walk's assessments can be taken back. One
+// assessment at a time: its index entry goes and its file is deleted unless
+// another record still shows it, then the row leaves the store (its dependants
+// are re-anchored — pure, tested), then a cover that pointed at it moves to
+// the plant's newest remaining row (or none). The store write must succeed;
+// the photo and cover steps are best-effort (a stale thumbnail costs nothing,
+// a row that outlived a failed delete would). The photo goes FIRST on purpose:
+// a kill between the two writes then leaves a row whose photo is missing —
+// still listed, so undoing again finishes the job — instead of an index entry
+// with no row, which nothing ever revisits and which keeps serving the undone
+// photo as the plant's cover and as "Where to prune"'s default.
+
+/** A photo file can be shown by more than the assessment being removed: a
+ * pruning plan reuses the plant's latest photo as its own (PruneScreen passes
+ * `savedUri`), and a re-link could leave two entries on one uri. Never delete
+ * a file something else still points at. */
+function fileStillReferenced(uri: string, index: PhotoIndex, plans: Record<string, { photoUri: string }>): boolean {
+  return (
+    Object.values(index).some((e) => e.localUri === uri) ||
+    Object.values(plans).some((p) => p.photoUri === uri)
+  );
+}
+
+/** Delete documents/photos/{plantId}/{basename} through the one guarded
+ * directory constructor (D-W16) — the uri is never handed to File directly. */
+function deletePhotoFileBestEffort(plantId: string, uri: string): void {
+  try {
+    const basename = uri.split("/").pop() ?? "";
+    if (!isSafeBasename(basename)) return;
+    const file = new File(plantPhotoDir(plantId), basename);
+    if (file.exists) file.delete();
+  } catch (e) {
+    console.error("[deleteAssessmentIo] photo file not deleted:", (e as Error).message);
+  }
+}
+
+/** Remove one assessment, its photo-index entry and (when nothing else shows
+ * it) its file; repoint the plant's cover if it was this row. Throws only when
+ * the assessment store cannot be written. A stale index entry with no row is
+ * still cleaned up. */
+export async function deleteAssessmentIo(assessmentId: string): Promise<void> {
+  const store = await loadAssessmentStore();
+  const { store: next, removed } = removeAssessment(store, assessmentId);
+
+  try {
+    const index = await loadPhotoIndex();
+    const entry = index[assessmentId];
+    if (entry) {
+      const remaining = removePhotoEntry(index, assessmentId);
+      await replacePhotoIndex(remaining);
+      if (!fileStillReferenced(entry.localUri, remaining, await loadPruneStore())) {
+        deletePhotoFileBestEffort(entry.plantId, entry.localUri);
+      }
+    }
+  } catch (e) {
+    console.error("[deleteAssessmentIo] photo cleanup failed:", (e as Error).message);
+  }
+
+  if (!removed) return;
+  await saveAssessmentStore(next);
+
+  try {
+    const plants = await loadPlantStore();
+    const plant = getPlant(plants, removed.plantId);
+    if (plant && plant.cover_assessment_id === assessmentId) {
+      await savePlantStore(
+        upsertPlant(plants, { ...plant, cover_assessment_id: latestAssessmentId(next, removed.plantId) }),
+      );
+    }
+  } catch (e) {
+    console.error("[deleteAssessmentIo] cover repoint failed:", (e as Error).message);
+  }
+}
+
+/** "Undo this walk": every assessment the walk landed, across plants. Returns
+ * how many were removed. Sequential on purpose — each step is a
+ * read-modify-write of the same blobs. */
+export async function deleteWalkIo(walkId: string): Promise<number> {
+  const rows = assessmentsForWalk(await loadAssessmentStore(), walkId);
+  for (const row of rows) await deleteAssessmentIo(row.id);
+  return rows.length;
 }

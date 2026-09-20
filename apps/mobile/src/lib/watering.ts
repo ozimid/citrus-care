@@ -1,7 +1,8 @@
-// F20 — the deterministic core. Gemini generates a plant's care profile ONCE
-// (POST /care-profile); from then on EVERY watering decision the user sees is
-// made here, by arithmetic, on the phone. No model in this path: same inputs,
-// same answer, and every rule below is a test in watering.test.ts.
+// F20 — the deterministic core. The on-device model generates a plant's care
+// profile ONCE (care-profile-local.ts); from then on EVERY watering decision
+// the user sees is made here, by arithmetic, on the phone. No model in this
+// path: same inputs, same answer, and every rule below is a test in
+// watering.test.ts.
 //
 // Pure module (no react-native/expo imports) so vitest runs it in Node; the
 // AsyncStorage wiring is the thin watering-io.ts.
@@ -46,10 +47,17 @@ export interface WateringInput {
   weather: WeatherSummary | null;
   /** ISO, from the local watering log. */
   lastWateredAt: string | null;
-  /** ISO, the newest assessment — a decent proxy when nothing was logged. */
-  lastAssessedAt: string | null;
+  /** ISO, the plant's created_at — the anchor of last resort when nothing was
+   * ever logged. NOT the newest assessment (Phase 6, D-W14): a photo is not a
+   * watering, and a walk that shot one tree three times used to reset its
+   * clock three times. */
+  createdAt: string;
   now: Date;
 }
+
+/** What the schedule counts from: a logged "Watered today" tap, or — when the
+ * user never logged one — the day the plant was added. */
+export type WateringAnchor = "log" | "created";
 
 export interface WateringPlan {
   /** Fair-weather interval straight from the profile. */
@@ -64,6 +72,10 @@ export interface WateringPlan {
   daysUntilDue: number;
   /** True when weather actually moved the interval (drives the card's chip). */
   weatherAdjusted: boolean;
+  /** Which date the clock stands on. "created" means every due date below is
+   * a projection from the day the plant was added, not from a real watering —
+   * the card says so, and dueLabel refuses to count "overdue" days from it. */
+  anchor: WateringAnchor;
 }
 
 function clamp(days: number): number {
@@ -106,9 +118,12 @@ export function wateringPlan(input: WateringInput): WateringPlan {
 
   const intervalDays = clamp(roundDays(base * factor));
 
-  const anchorIso = input.lastWateredAt ?? input.lastAssessedAt;
-  const anchor = anchorIso ? new Date(anchorIso) : now;
-  const anchorMs = isNaN(anchor.getTime()) ? now.getTime() : anchor.getTime();
+  // A logged watering wins; otherwise the day the plant was added. Never an
+  // assessment date — that made every new photo look like a watering.
+  const anchor: WateringAnchor = input.lastWateredAt ? "log" : "created";
+  const anchorDate = new Date(input.lastWateredAt ?? input.createdAt);
+  // An unreadable timestamp degrades to "the clock starts now", never NaN.
+  const anchorMs = isNaN(anchorDate.getTime()) ? now.getTime() : anchorDate.getTime();
   const dueMs = anchorMs + intervalDays * DAY_MS;
 
   return {
@@ -119,6 +134,7 @@ export function wateringPlan(input: WateringInput): WateringPlan {
     isDue: now.getTime() >= dueMs,
     daysUntilDue: Math.ceil((dueMs - now.getTime()) / DAY_MS),
     weatherAdjusted: hot || rained,
+    anchor,
   };
 }
 
@@ -155,6 +171,9 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
  * day, and it lines up with the 09:00-18:00 notification window.
  */
 export function dueLabel(plan: WateringPlan): string {
+  // Due, but the clock was only ever the day the plant was added: "Overdue by
+  // 4 days" would be a number the app made up. Say what is actually known.
+  if (plan.isDue && plan.anchor === "created") return "Due — no watering logged yet";
   if (plan.daysUntilDue <= -1) {
     const n = -plan.daysUntilDue;
     return `Overdue by ${n} ${dayWord(n)}`;
@@ -174,9 +193,10 @@ export interface PlanCandidate {
   id: string;
   zipCode: string | null;
   location: string | null;
-  /** Null until /care-profile has generated one — no baseline, no plan. */
+  /** Null until a care profile has been generated on-device — no baseline, no plan. */
   careProfile: CareProfile | null;
-  lastAssessedAt: string | null;
+  /** plants.created_at — the anchor when the log has nothing for this plant. */
+  createdAt: string;
 }
 
 /**
@@ -222,7 +242,7 @@ export function wateringPlansFor(
       location: c.location,
       weather: zip ? (weatherByZip[zip] ?? null) : null,
       lastWateredAt: lastWateredAt(log, c.id),
-      lastAssessedAt: c.lastAssessedAt,
+      createdAt: c.createdAt,
       now,
     });
   }
