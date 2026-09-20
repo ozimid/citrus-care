@@ -8,27 +8,37 @@
 // this file is never evaluated, and a failure to load it degrades to
 // "Setup failed" — retryable, exactly like any other local failure (D-17).
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { initExecutorch, models, useLLM } from "react-native-executorch";
 import { ExpoResourceFetcher } from "react-native-executorch-expo-resource-fetcher";
 import type { LocalEngineRuntime } from "../lib/local-engine";
+import type { ModelId } from "../lib/model-catalogue";
 
 initExecutorch({ resourceFetcher: ExpoResourceFetcher });
 
-/** Gemma 4 E2B multimodal (~1.3 GB quantized, Apache 2.0) — the research
- * doc's pick; vulkan on Android, mlx on iOS, resolved by the model registry.
- * Same model the Stage 1 spike measured against the go/no-go bar.
+/** THE single model swap point (F40): the registry entry for the model this
+ * phone is set to run. Both are multimodal LLMs on the same hook — LFM2.5-VL
+ * 450M (Liquid AI, xnnpack) or Gemma 4 E2B (Google, vulkan on Android) — so
+ * the prompts, the FIFO mutex and the budget are unchanged by the choice.
+ * Anything the catalogue doesn't recognise can't reach here: ModelId is the
+ * only input, and model-catalogue's parse falls back to the default.
  *
- * THE single model swap point: the spike screen imports this constant, so a
- * future substitution (a newer multimodal registry entry, or a self-hosted
- * .pte via a custom source) changes app + measurement lab together. Prompts
- * and the go/no-go bar are tuned per model — re-run the spike before shipping
- * a swap. */
+ * Prompts and the go/no-go bar were tuned on Gemma; neither model has been
+ * measured on real plant photos, which is exactly what the setup copy says. */
+export function localModelFor(id: ModelId) {
+  return id === "gemma4-e2b"
+    ? models.llm.gemma4_e2b_multimodal()
+    : models.llm.lfm2_5_vl_450m();
+}
+
+/** The Stage 1 measurement lab (VlmSpikeScreen) stays pinned to Gemma on
+ * purpose: its numbers are only comparable against the model they were taken
+ * on. The app itself never reads this — it goes through localModelFor(). */
 export const LOCAL_MODEL = models.llm.gemma4_e2b_multimodal();
 
 /** One generation request. `imageUri` set = a multimodal (diagnosis) call;
- * absent = a text-only (care-profile) call — Gemma 4 is an LLM with vision, so
- * mediaPath is optional. The prompts live in the pure lib modules and are
+ * absent = a text-only (care-profile) call — both models are LLMs with vision,
+ * so mediaPath is optional. The prompts live in the pure lib modules and are
  * passed in, keeping this session dumb and stateless per call. */
 export interface LocalGenerateRequest {
   system: string;
@@ -39,6 +49,9 @@ export interface LocalGenerateRequest {
 export type LocalGenerate = (req: LocalGenerateRequest) => Promise<string>;
 
 interface Props {
+  /** Which model to load. The provider remounts this component when it
+   * changes, so a session never straddles two models. */
+  modelId: ModelId;
   onRuntime: (runtime: LocalEngineRuntime) => void;
   /** Registers (or clears) the generate closure the router / care profile call. */
   onGenerate: (fn: LocalGenerate | null) => void;
@@ -46,8 +59,11 @@ interface Props {
   onInterrupt: (fn: (() => void) | null) => void;
 }
 
-export function LocalEngineSession({ onRuntime, onGenerate, onInterrupt }: Props) {
-  const llm = useLLM({ model: LOCAL_MODEL });
+export function LocalEngineSession({ modelId, onRuntime, onGenerate, onInterrupt }: Props) {
+  // useLLM reloads on the model's source strings, not on object identity, but
+  // memoizing keeps the hook's dependency list quiet and the intent obvious.
+  const model = useMemo(() => localModelFor(modelId), [modelId]);
+  const llm = useLLM({ model });
 
   useEffect(() => {
     onRuntime({

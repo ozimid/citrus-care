@@ -6,8 +6,9 @@
 // on Profile instead of failing silently mid-run. Pure; the measuring is
 // storage-budget-io.ts.
 
+import { formatModelBytes } from "./model-catalogue";
+
 const MiB = 1024 * 1024;
-const GiB = 1024 * MiB;
 
 /** Android AsyncStorage default database size (`AsyncStorage_db_size_in_MB`). */
 export const ASYNC_STORAGE_LIMIT_BYTES = 6 * MiB;
@@ -35,18 +36,20 @@ function safeBytes(bytes: number): number {
   return Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
 }
 
-/** "0 MB" / "411 MB" / "1.3 GB" — binary units, labelled the way phones do.
- * Sibling of local-engine's formatGigabytes (which trims the trailing ".0"
- * for the setup card); fold the two into one once a copy change is allowed. */
-export function formatStorageSize(bytes: number): string {
-  const b = safeBytes(bytes);
-  if (b === 0) return "0 MB";
-  if (b >= GiB) return `${(b / GiB).toFixed(1)} GB`;
-  return `${Math.floor(b / MiB)} MB`;
-}
-
-/** The Profile → Your data line: records against their cap, photos as-is. */
+/** The Profile → Your data line: records against their cap, photos as-is.
+ *
+ * ONE size convention for space on the phone (F40): the photo total goes
+ * through the catalogue's decimal formatModelBytes, the same formatter every
+ * model size and the free-space check use, and the same units Android's
+ * Storage screen counts in. This file used to carry its own BINARY formatter,
+ * so the identical byte count read ~7% smaller here than in the model sizes
+ * two cards above it.
+ *
+ * The records figure stays binary deliberately: it is a ratio against
+ * Android's own AsyncStorage cap (`AsyncStorage_db_size_in_MB`, which the
+ * platform counts in MiB), not a number the user compares with the Storage
+ * screen — both sides of "1.2 of 6 MB" are in that same platform unit. */
 export function storageSummary(recordBytes: number, photoBytes: number): string {
   const limitMb = Math.round(ASYNC_STORAGE_LIMIT_BYTES / MiB);
-  return `Records: ${(safeBytes(recordBytes) / MiB).toFixed(1)} of ${limitMb} MB · Photos: ${formatStorageSize(photoBytes)}`;
+  return `Records: ${(safeBytes(recordBytes) / MiB).toFixed(1)} of ${limitMb} MB · Photos: ${formatModelBytes(safeBytes(photoBytes))}`;
 }

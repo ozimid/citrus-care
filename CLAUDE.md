@@ -6,7 +6,7 @@ Photo-driven plant care, **fully on-device (D-17)**. User snaps a leaf / whole-p
 ## Tech Stack
 - **Product:** Expo/React Native Android app (`apps/mobile`) — THE product, fully local
 - **Backend:** **none.** No server, no database, no auth, no secrets.
-- **On-device AI:** `react-native-executorch` + Gemma 4 E2B multimodal (~1.3 GB, Apache-2.0). Diagnosis (image) + care profile (text-only) on one session (FIFO mutex). No cloud fallback.
+- **On-device AI:** `react-native-executorch`, with the model chosen by the user (F40): **LFM2.5-VL-450M** (Liquid AI, 654 MB, LFM Open License v1.0 — the default) or **Gemma 4 E2B multimodal** (Google, 4.4 GB, Apache-2.0). Sizes are measured, not estimated, and live in `src/lib/model-catalogue.ts` — never hand-type a model size. Diagnosis (image) + care profile (text-only) on one session (FIFO mutex). No cloud fallback.
 - **Storage:** on-device only — AsyncStorage keyed stores (`plant-store` / `assessment-store` / watering log / photo index) + photo files under app documents.
 - **Web:** Next.js 16 (App Router), React 19, Tailwind CSS 4 — static landing only
 - **Testing:** Vitest (unit, pure modules), Playwright (e2e, landing only)

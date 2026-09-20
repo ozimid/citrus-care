@@ -15,15 +15,26 @@ import {
 } from "react-native";
 import { useLocalEngine } from "../components/LocalEngineProvider";
 import {
-  LOCAL_MODEL_DOWNLOAD_WARNING,
-  LOCAL_MODEL_REQUIREMENTS,
-  hasRoomForLocalModel,
   insufficientStorageMessage,
   localEngineStatusLabel,
   localEngineSubtitle,
-  needsDownloadWarning,
+  localModelDownloadWarning,
+  localModelRequirements,
+  modelWeightsLikelyPresent,
 } from "../lib/local-engine";
 import { availableDiskSpaceBytes, deviceCapabilitySnapshot } from "../lib/local-engine-io";
+import {
+  MODEL_CATALOGUE,
+  formatModelBytes,
+  hasRoomFor,
+  modelAttribution,
+  modelLicenceLinks,
+  modelSpec,
+  modelTestingNote,
+  modelThatFits,
+  type ModelId,
+} from "../lib/model-catalogue";
+import { deleteModelWeights, modelWeightsBytes } from "../lib/model-choice-io";
 import { BACKUP_IMPORT_INVALID, exportBackup, importBackup } from "../lib/backup-io";
 import { exportPlantsCsv } from "../lib/csv-export-io";
 import { pendingCount } from "../lib/photo-queue";
@@ -114,6 +125,8 @@ export function ProfileScreen() {
       </View>
 
       <LocalEngineCard />
+
+      <ModelCard />
 
       <DataCard />
 
@@ -372,38 +385,50 @@ function SupportCard() {
 }
 
 /** D-17: the on-device engine is opt-in and reversible. The toggle states the
- * requirements and checks free space BEFORE the 1.3 GB download (once), then
- * reports the session state; a failed session is honest and retries on tap. */
+ * requirements and checks free space BEFORE the download (once), then reports
+ * the session state; a failed session is honest and retries on tap. F40: every
+ * size here is the SELECTED model's, read from the catalogue. */
 function LocalEngineCard() {
   const { t } = useTheme();
-  const { state, settings, setEnabled, retry } = useLocalEngine();
+  const { state, settings, modelId, modelResolved, downloadedIds, setEnabled, retry } =
+    useLocalEngine();
+  const spec = modelSpec(modelId);
+  // Per-model truth beats the old single "downloaded" flag — but the disk
+  // listing degrades to [] on a read failure, so an empty listing falls back
+  // to that flag rather than sending a legacy Gemma user into a free-space
+  // check for a download that would never happen.
+  const alreadyHere = modelWeightsLikelyPresent(modelId, downloadedIds, settings);
 
   function toggle(next: boolean) {
-    // F33 pre-flight: incapable phones learn it here, not after 1.3 GB.
+    // F33 pre-flight: incapable phones learn it here, not after a download.
     if (next) {
-      const capability = deviceCapabilitySnapshot();
+      const capability = deviceCapabilitySnapshot(modelId);
       if (capability.level === "block") {
         Alert.alert("This phone can't run the AI", capability.reason ?? undefined);
         return;
       }
     }
-    if (!next || !needsDownloadWarning(settings)) {
+    if (!next || alreadyHere) {
       setEnabled(next);
       return;
     }
-    // A phone with no room downloads 1.3 GB and then fails — check first. Not
-    // an error: a full phone is a fact about the phone, so it is said once, in
-    // the Alert, with the user's actual number, and never logged.
+    // A phone with no room downloads gigabytes and then fails — check first.
+    // Not an error: a full phone is a fact about the phone, so it is said once,
+    // in the Alert, with the user's actual number, and never logged.
     const available = availableDiskSpaceBytes();
-    if (available !== null && !hasRoomForLocalModel(available)) {
-      Alert.alert("Not enough space", insufficientStorageMessage(available), [
-        { text: "OK", style: "cancel" },
-      ]);
+    if (available !== null && !hasRoomFor(modelId, available)) {
+      // Name the model that WOULD fit — the Model card below is where they
+      // switch to it, so the refusal stops being a dead end.
+      Alert.alert(
+        "Not enough space",
+        insufficientStorageMessage(modelId, available, modelThatFits(modelId, available)),
+        [{ text: "OK", style: "cancel" }],
+      );
       return;
     }
-    Alert.alert("Download the on-device model?", LOCAL_MODEL_DOWNLOAD_WARNING, [
+    Alert.alert(`Download ${spec.label}?`, localModelDownloadWarning(modelId), [
       { text: "Not now", style: "cancel" },
-      { text: "Download", onPress: () => setEnabled(true) },
+      { text: `Download ${spec.sizeLabel}`, onPress: () => setEnabled(true) },
     ]);
   }
 
@@ -418,15 +443,20 @@ function LocalEngineCard() {
         <Switch
           accessibilityLabel="On-device AI"
           value={settings.enabled}
+          // Off until the startup model resolve lands: enabling in that window
+          // would persist a placeholder default as the user's explicit choice.
+          disabled={!modelResolved}
           onValueChange={toggle}
           trackColor={{ true: t.green }}
         />
       </View>
       <Text style={[styles.engineSubtitle, { color: t.sub }]}>
-        {localEngineSubtitle(state, settings)}
+        {localEngineSubtitle(state, settings, modelId)}
       </Text>
-      {/* Stated up front, not after a 1.3 GB download. */}
-      <Text style={[styles.engineRequirements, { color: t.sub }]}>{LOCAL_MODEL_REQUIREMENTS}</Text>
+      {/* Stated up front, not after a multi-gigabyte download. */}
+      <Text style={[styles.engineRequirements, { color: t.sub }]}>
+        {localModelRequirements(modelId)}
+      </Text>
       {failed ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Retry on-device model setup" onPress={retry} hitSlop={8}>
           <Text style={[styles.devRow, { color: t.green }]}>Try again</Text>
@@ -434,6 +464,249 @@ function LocalEngineCard() {
       ) : null}
     </View>
   );
+}
+
+/** F40 — which model this phone runs, what the other one would cost, and the
+ * only way to get multi-gigabyte weights back off the phone. Everything
+ * numeric comes from the catalogue; the attribution line is required by the
+ * LFM Open License v1.0 and is simply true of both models. */
+function ModelCard() {
+  const { t } = useTheme();
+  const { state, settings, modelId, modelResolved, setModelId, downloadedIds, refreshDownloaded } =
+    useLocalEngine();
+  const spec = modelSpec(modelId);
+  const otherId =
+    (Object.keys(MODEL_CATALOGUE) as ModelId[]).find((id) => id !== modelId) ?? modelId;
+  const other = modelSpec(otherId);
+  // The delete offer must only ever appear for weights this app positively
+  // SAW, so it keeps the raw listing. Everything else uses the fallback.
+  const otherOnPhone = downloadedIds.includes(otherId);
+  const inUseOnPhone = modelWeightsLikelyPresent(modelId, downloadedIds, settings);
+  /** Defensive: a one-model catalogue has nothing to switch to or free. */
+  const hasAlternative = otherId !== modelId;
+  /** Bytes the unused model is holding — measured, not the catalogue's figure,
+   * because that is what the delete will actually hand back. */
+  const [reclaimable, setReclaimable] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const measure = useCallback(async () => {
+    if (!otherOnPhone) {
+      setReclaimable(null);
+      return;
+    }
+    try {
+      setReclaimable(await modelWeightsBytes(otherId));
+    } catch (e) {
+      console.error("[ProfileScreen] model size read failed:", (e as Error).message);
+      setReclaimable(null);
+    }
+  }, [otherId, otherOnPhone]);
+
+  useEffect(() => {
+    measure();
+  }, [measure]);
+
+  function switchModel() {
+    // A switch mid-download would start the second download while the first
+    // keeps writing to the cache directory — two downloads sized by one
+    // free-space check, and the abandoned partial is invisible to "Free up
+    // space" (that only lists the finished-weights directory).
+    if (state.kind === "downloading") {
+      Alert.alert(
+        "A download is already running",
+        `${spec.label} is still downloading. Let it finish, or turn the on-device AI off to stop it, then switch — starting a second download now would use the space twice.`,
+      );
+      return;
+    }
+    // The same F33 pre-flight the enable path runs: the RAM bar is per model,
+    // so a phone that can run the light one may be unable to run the heavy
+    // one — better to say so than to spend 4.4 GB finding out.
+    const capability = deviceCapabilitySnapshot(otherId);
+    if (capability.level === "block") {
+      Alert.alert("This phone can't run that model", capability.reason ?? undefined);
+      return;
+    }
+    const warnPrefix =
+      capability.level === "warn" && capability.reason ? capability.reason + "\n\n" : "";
+    if (!otherOnPhone) {
+      const available = availableDiskSpaceBytes();
+      if (available !== null && !hasRoomFor(otherId, available)) {
+        Alert.alert(
+          "Not enough space",
+          insufficientStorageMessage(otherId, available, modelThatFits(otherId, available)),
+          [{ text: "OK", style: "cancel" }],
+        );
+        return;
+      }
+    }
+    const cost = otherOnPhone
+      ? `${other.label} is already on this phone — nothing to download.`
+      : `This downloads ${other.label}: ${other.sizeLabel} over Wi-Fi, once.`;
+    Alert.alert(
+      `Switch to ${other.label}?`,
+      warnPrefix +
+        `${cost}\n\n` +
+        `Diagnoses you already have were made by ${spec.label}. They stay exactly as they are — a new reading from ${other.label} is a different model's opinion, not a correction of the old one.\n\n` +
+        // The forward consequence, which is the one that actually bites: the
+        // trend is computed from health scores alone (assessment-store's
+        // withComputedComparison), and nothing records which model scored one.
+        `Better, same or worse is worked out by comparing health scores. Your next diagnosis will be scored by ${other.label} and compared against a score from ${spec.label} — the first comparison after a switch may say more about the models than about the plant.\n\n` +
+        `${spec.label} stays on this phone until you free the space.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Switch", onPress: () => setModelId(otherId) },
+      ],
+    );
+  }
+
+  function confirmFreeUp() {
+    const size = reclaimable !== null ? formatModelBytes(reclaimable) : other.sizeLabel;
+    // Don't promise "everything keeps working" when the model in use hasn't
+    // finished downloading — that is exactly the moment the promise is false.
+    const consequence = inUseOnPhone
+      ? `${other.label} isn't in use — ${spec.label} keeps running.`
+      : `${other.label} isn't in use, but ${spec.label} isn't downloaded yet either: until it finishes, no diagnosis can run.`;
+    Alert.alert(
+      `Delete ${other.label}?`,
+      `Frees about ${size}. ${consequence} Your plants, photos and history are untouched, and you can download ${other.label} again later.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: `Free ${size}`, style: "destructive", onPress: freeUp },
+      ],
+    );
+  }
+
+  async function freeUp() {
+    setBusy(true);
+    const size = reclaimable !== null ? formatModelBytes(reclaimable) : other.sizeLabel;
+    try {
+      // The live model is passed in, not re-derived: the guard must compare
+      // against what is actually mounted, not a second read that could differ.
+      await deleteModelWeights(otherId, modelId);
+      Alert.alert("Space freed", `${other.label} was removed from this phone — about ${size}.`);
+    } catch (e) {
+      console.error("[ProfileScreen] freeing model weights failed:", (e as Error).message);
+      Alert.alert(
+        "Couldn't free the space",
+        "Something went wrong removing those files. Please try again.",
+      );
+    } finally {
+      setBusy(false);
+      refreshDownloaded();
+      void measure();
+    }
+  }
+
+  return (
+    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+      <Text style={[styles.label, { color: t.sub }]}>Model</Text>
+      <View style={styles.engineRow}>
+        <Text style={[styles.engineStatus, { color: t.text }]} numberOfLines={1}>
+          {spec.label}
+        </Text>
+        <Text style={[styles.modelSize, { color: t.green }]}>In use · {spec.sizeLabel}</Text>
+      </View>
+      <Text style={[styles.engineSubtitle, { color: t.sub }]}>
+        {spec.maker} · {spec.licence} · {spec.blurb}
+      </Text>
+      <Text style={[styles.engineSubtitle, { color: t.sub }]}>
+        {inUseOnPhone
+          ? "Its files are on this phone."
+          : "Its files aren't on this phone yet — turning the AI on downloads them."}
+      </Text>
+
+      {hasAlternative ? (
+        <>
+          <Text style={[styles.modelOther, { color: t.text }]}>
+            The other option: {other.label} — {other.maker}, {other.licence},{" "}
+            {otherOnPhone ? "already on this phone" : other.sizeLabel}. {other.blurb}
+          </Text>
+          {/* The one claim that must never be made here is "better" — and the
+              parity claim that used to sit here was just as unmeasured. */}
+          <Text style={[styles.engineRequirements, { color: t.sub }]}>{modelTestingNote()}</Text>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Switch to ${other.label}`}
+            disabled={busy || !modelResolved}
+            onPress={switchModel}
+            style={[
+              styles.dataButton,
+              styles.modelButton,
+              { borderColor: t.border, opacity: busy || !modelResolved ? 0.6 : 1 },
+            ]}
+          >
+            <Text style={[styles.dataButtonText, { color: t.text }]}>
+              Switch to {other.label}
+              {otherOnPhone ? "" : ` · ${other.sizeLabel}`}
+            </Text>
+          </Pressable>
+
+          {/* The user this feature exists for is the one already holding the
+              heavy model: they see a Switch button and no way to the space.
+              Say the sequence here, where they are, not only inside the switch
+              confirmation they have not opened. */}
+          {inUseOnPhone && !otherOnPhone ? (
+            <Text style={[styles.engineRequirements, { color: t.sub }]}>
+              To free {spec.sizeLabel}, switch to {other.label} first — a model that&apos;s in use
+              can&apos;t be deleted.
+            </Text>
+          ) : null}
+
+          {/* Only shown when those files were positively found on this phone —
+              never an offer to delete something we couldn't see. */}
+          {otherOnPhone ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Free up space by deleting ${other.label}`}
+              disabled={busy}
+              onPress={confirmFreeUp}
+              style={[
+                styles.dataButton,
+                styles.destructiveButton,
+                { borderColor: t.danger, opacity: busy ? 0.6 : 1 },
+              ]}
+            >
+              {busy ? (
+                <ActivityIndicator color={t.danger} />
+              ) : (
+                <Text style={[styles.dataButtonText, { color: t.danger }]}>
+                  Free up {reclaimable !== null ? formatModelBytes(reclaimable) : other.sizeLabel}{" "}
+                  — delete {other.label}
+                </Text>
+              )}
+            </Pressable>
+          ) : null}
+        </>
+      ) : null}
+
+      <Text style={[styles.engineRequirements, { color: t.sub }]}>{modelAttribution()}</Text>
+      {/* Naming a licence the user can't open is hedging aimed at a lawyer.
+          The LFM Open License v1.0 (§4(a), §4(d)) requires the licence and the
+          notice to travel with the work — so each one is one tap away. Nothing
+          is fetched until the user taps: the app still transmits nothing. */}
+      {modelLicenceLinks().map((link) => (
+        <Pressable
+          key={link.id}
+          accessibilityRole="link"
+          accessibilityLabel={`Read the ${link.licence} for ${link.id}`}
+          onPress={() => openLicence(link.url, link.licence)}
+          hitSlop={6}
+        >
+          <Text style={[styles.devRow, { color: t.green }]}>{link.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+/** Opens a model licence in the browser. A failure is a generic, honest
+ * message with the address in it — never the raw platform error. */
+function openLicence(url: string, licence: string) {
+  Linking.openURL(url).catch((e) => {
+    console.error("[ProfileScreen] licence link failed:", (e as Error).message);
+    Alert.alert("Couldn't open the browser", `The ${licence} is published at ${url}.`);
+  });
 }
 
 const styles = StyleSheet.create({
@@ -486,6 +759,12 @@ const styles = StyleSheet.create({
     minHeight: 32,
   },
   engineStatus: { fontSize: 15, fontWeight: "600", flexShrink: 1 },
+  modelSize: { fontSize: 12, fontWeight: "700" },
+  modelOther: { fontSize: 12, lineHeight: 17, marginTop: 8 },
+  modelButton: { flex: 0, marginTop: 8, paddingHorizontal: 12 },
+  /** The delete sits apart from Switch on purpose: 8 px between two
+   * same-shaped buttons, one destructive, is a mis-tap waiting to happen. */
+  destructiveButton: { flex: 0, marginTop: 20, paddingHorizontal: 12 },
   engineSubtitle: { fontSize: 12, lineHeight: 17 },
   engineRequirements: { fontSize: 11, lineHeight: 16, marginTop: 4 },
   devRow: { fontSize: 13, fontWeight: "600", paddingVertical: 6 },

@@ -27,6 +27,7 @@ import {
   LOAD_SENTINEL_STORAGE_KEY,
   deviceCapability,
 } from "./local-engine";
+import type { ModelId } from "./model-catalogue";
 
 export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
   try {
@@ -39,10 +40,13 @@ export async function loadLocalEngineSettings(): Promise<LocalEngineSettings> {
 }
 
 /** F33: the live pre-flight verdict (expo-device + Platform feed the pure
- * deviceCapability). Sync — both readings are constants. */
-export function deviceCapabilitySnapshot(): ReturnType<typeof deviceCapability> {
+ * deviceCapability). Sync — both readings are constants. F40: the model id is
+ * required, not defaulted — the RAM bar and the wasted-download size are the
+ * chosen model's, and a caller that forgot which model it is asking about
+ * would quietly quote the wrong one. */
+export function deviceCapabilitySnapshot(id: ModelId): ReturnType<typeof deviceCapability> {
   const api = Platform.OS === "android" && typeof Platform.Version === "number" ? Platform.Version : null;
-  return deviceCapability(Device.totalMemory, api);
+  return deviceCapability(Device.totalMemory, api, id);
 }
 
 /** P0 crash sentinel: present = the last model load never reported back (the
@@ -71,7 +75,7 @@ export async function saveLocalEngineSettings(settings: LocalEngineSettings): Pr
 
 /** F22 — free bytes on internal storage, for the pre-download precheck
  * (expo-file-system SDK 57; a sync native getter). Null when the platform
- * won't say: hasRoomForLocalModel treats that as "don't block". */
+ * won't say: hasRoomFor treats that as "don't block". */
 export function availableDiskSpaceBytes(): number | null {
   try {
     const bytes = Paths.availableDiskSpace;

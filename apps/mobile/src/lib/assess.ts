@@ -25,8 +25,11 @@ import { parseDiagnosisOutput } from "./spike-vlm";
 export { LOCAL_HARD_CEILING_MS, LOCAL_SLOW_THRESHOLD_MS };
 
 export const PHOTO_SAVE_FAILED_ERROR = "Couldn't save the photo. Please try again.";
+// F40: deliberately states NO size. This module doesn't know which model the
+// user picked, and the two differ by nearly 4 GB — Profile's setup card is the
+// one place that quotes a number, and it reads it from model-catalogue.ts.
 export const LOCAL_UNAVAILABLE_ERROR =
-  "On-device AI isn't ready on this phone yet. Set it up in Profile (needs ~2 GB free and a recent phone), then try again.";
+  "On-device AI isn't ready on this phone yet. Set it up in Profile — it needs a recent phone and free space for the model — then try again.";
 export const ANALYSIS_FAILED_ERROR =
   "Your phone couldn't run the analysis — it may be low on memory. Close other apps and try again.";
 export const ANALYSIS_UNREADABLE_ERROR =

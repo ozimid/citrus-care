@@ -38,7 +38,18 @@ import {
   type LocalEngineState,
 } from "../lib/local-engine";
 import { loadLocalEngineSettings, saveLocalEngineSettings } from "../lib/local-engine-io";
+import { DEFAULT_MODEL_ID, type ModelId } from "../lib/model-catalogue";
+import {
+  downloadedModelIds,
+  resolveStartupModel,
+  saveModelChoice,
+} from "../lib/model-choice-io";
 import type { LocalGenerate } from "./LocalEngineSession";
+
+/** How long a model switch waits for an interrupted generation to return
+ * before remounting anyway. The interrupt lands in well under a second in
+ * practice; this is only the ceiling that keeps the control from hanging. */
+const SWITCH_DRAIN_MS = 2000;
 
 const LocalEngineSession = lazy(() =>
   import("./LocalEngineSession").then((m) => ({ default: m.LocalEngineSession })),
@@ -47,6 +58,24 @@ const LocalEngineSession = lazy(() =>
 export interface LocalEngineContextValue {
   state: LocalEngineState;
   settings: LocalEngineSettings;
+  /** F40 — the model this phone runs. Resolved once at startup: an explicit
+   * choice, else whatever weights are already here (a pre-F40 Gemma install
+   * keeps Gemma), else the catalogue's default. */
+  modelId: ModelId;
+  /** False until resolveStartupModel() has answered — `modelId` is a DEFAULT
+   * placeholder in that window, so nothing may persist it as a choice. A
+   * pre-F40 Gemma user who taps the toggle then would be switched to the light
+   * model for good: an explicit stored choice beats the on-disk inference on
+   * every later launch. Controls that commit a model gate on this. */
+  modelResolved: boolean;
+  /** Switch models: persists the choice and remounts the session on the new
+   * one. The old model's files stay on the phone until they are deleted. */
+  setModelId: (id: ModelId) => void;
+  /** Which models have weights on this phone — what makes "download" vs
+   * "already here" honest, per model. Best-effort: [] when the read fails. */
+  downloadedIds: ModelId[];
+  /** Re-read the weights on disk (after a download or a delete). */
+  refreshDownloaded: () => void;
   setEnabled: (enabled: boolean) => void;
   /** Remount the session — retries a failed download/init. */
   retry: () => void;
@@ -79,6 +108,13 @@ export interface LocalEngineContextValue {
 const OFF_CONTEXT: LocalEngineContextValue = {
   state: { kind: "off" },
   settings: DEFAULT_LOCAL_ENGINE_SETTINGS,
+  modelId: DEFAULT_MODEL_ID,
+  // No provider = no engine: there is no resolved model, and nothing here can
+  // commit one, so the controls that would gate on this stay disabled.
+  modelResolved: false,
+  setModelId: () => {},
+  downloadedIds: [],
+  refreshDownloaded: () => {},
   setEnabled: () => {},
   retry: () => {},
   isReady: () => false,
@@ -100,6 +136,10 @@ export function useLocalEngine(): LocalEngineContextValue {
 export function LocalEngineProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<LocalEngineSettings>(DEFAULT_LOCAL_ENGINE_SETTINGS);
   const [runtime, setRuntime] = useState<LocalEngineRuntime | null>(null);
+  // null until resolveStartupModel() answers — the session must not mount on a
+  // guess, or a pre-F40 Gemma phone would start re-downloading the other model.
+  const [modelId, setModelIdState] = useState<ModelId | null>(null);
+  const [downloadedIds, setDownloadedIds] = useState<ModelId[]>([]);
   // P0 (S23): true when the previous model load killed the process (stale
   // sentinel). Blocks the auto-mount until the user explicitly retries.
   const [crashedLastLoad, setCrashedLastLoad] = useState(false);
@@ -112,6 +152,14 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
   // diagnosis call must not overlap on the one session).
   const generateTailRef = useRef<Promise<unknown>>(Promise.resolve());
 
+  const refreshDownloaded = useCallback(() => {
+    downloadedModelIds()
+      .then(setDownloadedIds)
+      .catch((e) =>
+        console.error("[LocalEngineProvider] weights listing failed:", (e as Error).message),
+      );
+  }, []);
+
   useEffect(() => {
     loadLocalEngineSettings()
       .then(setSettings)
@@ -120,18 +168,28 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
       );
     // Read BEFORE any mount decision: a stale sentinel = last load crashed.
     loadLoadSentinel().then(setCrashedLastLoad);
-  }, []);
+    // Likewise BEFORE any mount: which model this phone runs (F40).
+    resolveStartupModel()
+      .then(setModelIdState)
+      .catch((e) => {
+        console.error("[LocalEngineProvider] model choice load failed:", (e as Error).message);
+        setModelIdState(DEFAULT_MODEL_ID);
+      });
+    refreshDownloaded();
+  }, [refreshDownloaded]);
 
   const state = localEngineState(settings, runtime, crashedLastLoad);
 
-  // Screen-off suspends the app's network and kills the 1.3 GB model download
-  // (user report 2026-07-16) — hold the screen awake for the download only.
+  // Screen-off suspends the app's network and kills a multi-gigabyte model
+  // download (user report 2026-07-16) — hold the screen awake for it only.
   useKeepAwakeWhile(state.kind === "downloading", "model-download");
   // Read by the router's isReady() at tap time, not at render time.
   const stateRef = useRef(state);
   stateRef.current = state;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const modelIdRef = useRef(modelId);
+  modelIdRef.current = modelId;
 
   const update = useCallback((next: LocalEngineSettings) => {
     setSettings(next);
@@ -140,15 +198,19 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  // Remember that the 1.3 GB landed on this phone: re-enabling later must not
-  // warn about a download that won't happen.
+  // Remember that a model landed on this phone: re-enabling later must not
+  // warn about a download that won't happen. Per-model truth lives in
+  // downloadedIds (re-read the moment a session reports ready); this flag is
+  // kept for the pre-F40 installs whose only model was Gemma.
   useEffect(() => {
-    if (state.kind === "ready" && !settingsRef.current.downloaded) {
-      update({ ...settingsRef.current, downloaded: true });
-    }
-  }, [state.kind, update]);
+    if (state.kind !== "ready") return;
+    if (!settingsRef.current.downloaded) update({ ...settingsRef.current, downloaded: true });
+    refreshDownloaded();
+  }, [state.kind, update, refreshDownloaded]);
 
-  const mountAllowed = settings.enabled && !crashedLastLoad;
+  // Never mount on a guessed model (F40): a pre-F40 Gemma phone would start
+  // downloading the other one before resolveStartupModel() could answer.
+  const mountAllowed = settings.enabled && !crashedLastLoad && modelId !== null;
 
   useEffect(() => {
     if (!mountAllowed) return;
@@ -178,9 +240,67 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
       if (!enabled) clearSession();
       setCrashedLastLoad(false);
       if (!enabled) clearLoadSentinel().catch(() => {});
+      // Turning it on commits to a model: whatever is about to be downloaded
+      // becomes the stored choice, so the next launch never has to infer it.
+      // But NOT while the startup resolve is still in flight — modelId is a
+      // placeholder default then, and persisting it would silently switch a
+      // pre-F40 Gemma phone to the light model (a stored choice outranks the
+      // on-disk inference for ever after). The resolved value gets persisted
+      // by the next explicit action; the UI gates on `modelResolved` too.
+      if (enabled && modelIdRef.current !== null) {
+        saveModelChoice(modelIdRef.current).catch((e) =>
+          console.error("[LocalEngineProvider] model choice save failed:", (e as Error).message),
+        );
+      }
       update({ ...settingsRef.current, enabled });
     },
     [clearSession, update],
+  );
+
+  /** Switch models. Persists first (so a crash mid-switch still lands on the
+   * model the user picked), then remounts the session — the old one is torn
+   * down by the key change, exactly like retry(). The previous model's files
+   * are left alone: Profile → Free up space is the only thing that deletes.
+   *
+   * The remount must NOT happen under a running generation. The key change
+   * unmounts LocalEngineSession, useLLM's cleanup calls controller.delete(),
+   * and delete() THROWS while the native model is generating ("You cannot
+   * delete the model now. You need to interrupt it first.") — from a commit-
+   * phase cleanup, with the boundary itself being torn down. Background
+   * generation is reachable from a screen the user can leave (the care-profile
+   * call), so this is not hypothetical. Interrupt, let the FIFO tail settle,
+   * then swap — and give the new session a FRESH tail, or its first request
+   * would queue behind the abandoned promise for ever. */
+  const setModelId = useCallback(
+    (id: ModelId) => {
+      saveModelChoice(id).catch((e) =>
+        console.error("[LocalEngineProvider] model choice save failed:", (e as Error).message),
+      );
+      if (modelIdRef.current === id) return;
+      // Claimed immediately so a second tap can't queue a second swap.
+      modelIdRef.current = id;
+      interruptRef.current?.();
+      const settled = generateTailRef.current.then(
+        () => undefined,
+        () => undefined,
+      );
+      const swap = () => {
+        generateTailRef.current = Promise.resolve();
+        setModelIdState(id);
+        setCrashedLastLoad(false);
+        clearSession();
+        setSession((s) => s + 1);
+      };
+      // Bounded wait: an interrupt only makes the native call return once it
+      // honours the stop. If it never does, the switch still has to happen —
+      // a control that silently does nothing is worse than the rare throw the
+      // boundary already catches.
+      void Promise.race([
+        settled,
+        new Promise<void>((resolve) => setTimeout(resolve, SWITCH_DRAIN_MS)),
+      ]).then(swap);
+    },
+    [clearSession],
   );
 
   const retry = useCallback(() => {
@@ -195,6 +315,11 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
     () => ({
       state,
       settings,
+      modelId: modelId ?? DEFAULT_MODEL_ID,
+      modelResolved: modelId !== null,
+      setModelId,
+      downloadedIds,
+      refreshDownloaded,
       setEnabled,
       retry,
       isReady: () => shouldRouteLocal(stateRef.current) && generateRef.current !== null,
@@ -213,7 +338,7 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
       // The tail already swallows errors; settle to void either way.
       whenIdle: () => generateTailRef.current.then(() => undefined, () => undefined),
     }),
-    [state, settings, setEnabled, retry],
+    [state, settings, modelId, setModelId, downloadedIds, refreshDownloaded, setEnabled, retry],
   );
 
   const onGenerate = useCallback((fn: LocalGenerate | null) => {
@@ -233,12 +358,17 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
   return (
     <LocalEngineContext.Provider value={value}>
       {children}
-      {mountAllowed && (
+      {mountAllowed && modelId !== null && (
         // Headless and fallback-less: the session renders nothing, so there is
         // nothing to show while it loads — the Profile row reports progress.
-        <SessionBoundary key={session} onError={onSessionCrash}>
+        // The model id is part of the key: switching models tears the old
+        // session down and builds a new one, never swaps weights underneath a
+        // live one — setModelId interrupts and drains the FIFO tail before it
+        // lets the key change, so the unmount never meets a running generate.
+        <SessionBoundary key={`${modelId}:${session}`} onError={onSessionCrash}>
           <Suspense fallback={null}>
             <LocalEngineSession
+              modelId={modelId}
               onRuntime={setRuntime}
               onGenerate={onGenerate}
               onInterrupt={onInterrupt}

@@ -4,9 +4,9 @@ import {
   ASYNC_STORAGE_LIMIT_BYTES,
   ASYNC_STORAGE_SOFT_LIMIT_BYTES,
   canRunBatch,
-  formatStorageSize,
   storageSummary,
 } from "./storage-budget";
+import { formatModelBytes } from "./model-catalogue";
 
 // D-W17: Android's AsyncStorage is one 6 MB SQLite database and every store is
 // a whole-blob rewrite, so the cliff is real and today it is silent. The guard
@@ -45,27 +45,26 @@ describe("canRunBatch", () => {
   });
 });
 
-describe("formatStorageSize", () => {
-  it("shows whole megabytes below a gigabyte", () => {
-    expect(formatStorageSize(0)).toBe("0 MB");
-    expect(formatStorageSize(431_000_000)).toBe("411 MB");
-    expect(formatStorageSize(1023 * MiB)).toBe("1023 MB");
+// F40 follow-up: the phone-storage figure had its own binary formatter, so the
+// same byte count read ~7% smaller here than in every model size on the same
+// Profile screen. There is now ONE convention for space on the phone — the
+// catalogue's decimal formatModelBytes, which is what Android's Storage screen
+// counts in. (The records figure stays binary on purpose: it is a ratio
+// against Android's own 6 MiB AsyncStorage cap, not a figure a user compares
+// with the Storage screen.)
+describe("storageSummary", () => {
+  it("renders the photo total in the catalogue's one size convention", () => {
+    expect(storageSummary(1.2 * MiB, 412 * MiB)).toBe(
+      `Records: 1.2 of 6 MB · Photos: ${formatModelBytes(412 * MiB)}`,
+    );
+    expect(storageSummary(1.2 * MiB, 412 * MiB)).toContain("Photos: 432 MB");
   });
 
-  it("switches to one-decimal gigabytes at 1 GB", () => {
-    expect(formatStorageSize(1.4e9)).toBe("1.3 GB");
-    expect(formatStorageSize(1024 * MiB)).toBe("1.0 GB");
+  it("renders both budgets on one line, and reads zero as zero", () => {
+    expect(storageSummary(0, 0)).toBe("Records: 0.0 of 6 MB · Photos: 0 MB");
   });
 
   it("never renders garbage for a bad measurement", () => {
-    expect(formatStorageSize(-5)).toBe("0 MB");
-    expect(formatStorageSize(Number.NaN)).toBe("0 MB");
-  });
-});
-
-describe("storageSummary", () => {
-  it("renders both budgets on one line", () => {
-    expect(storageSummary(1.2 * MiB, 412 * MiB)).toBe("Records: 1.2 of 6 MB · Photos: 412 MB");
-    expect(storageSummary(0, 0)).toBe("Records: 0.0 of 6 MB · Photos: 0 MB");
+    expect(storageSummary(Number.NaN, -5)).toBe("Records: 0.0 of 6 MB · Photos: 0 MB");
   });
 });

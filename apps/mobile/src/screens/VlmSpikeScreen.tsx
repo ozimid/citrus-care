@@ -24,6 +24,10 @@ import { initExecutorch, useLLM } from "react-native-executorch";
 import { ExpoResourceFetcher } from "react-native-executorch-expo-resource-fetcher";
 import { GardenWalkProbe } from "../components/GardenWalkProbe";
 import { LOCAL_MODEL } from "../components/LocalEngineSession";
+// The lab is pinned to Gemma (its numbers are only comparable on the model
+// they were taken on) — but its size still comes from the catalogue, never a
+// hand-typed string. F40: that is how "~1.3 GB" outlived a 4.4 GB download.
+import { modelSpec } from "../lib/model-catalogue";
 import { SPIKE_MAX_DIMENSION } from "../lib/photo";
 import { downscalePhoto, type PreparedPhoto } from "../lib/photo-io";
 import {
@@ -107,10 +111,12 @@ export function VlmSpikeScreen({ onClose }: { onClose: () => void }) {
       <ScrollView contentContainerStyle={styles.scroll}>
         {!started ? (
           <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
-            <Text style={[styles.label, { color: t.sub }]}>Gemma 4 E2B · react-native-executorch</Text>
+            <Text style={[styles.label, { color: t.sub }]}>
+              {modelSpec("gemma4-e2b").label} · react-native-executorch
+            </Text>
             <Text style={[styles.body, { color: t.text }]}>
-              First use downloads the model — about 1.3 GB. Use WiFi; it is cached on this phone
-              afterwards. Nothing leaves the device.
+              First use downloads the model — about {modelSpec("gemma4-e2b").sizeLabel}. Use WiFi;
+              it is cached on this phone afterwards. Nothing leaves the device.
             </Text>
             <Pressable
               accessibilityRole="button"
