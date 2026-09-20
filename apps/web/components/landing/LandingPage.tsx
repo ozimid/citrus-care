@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Coffee,
   Download,
+  Footprints,
   History,
   Leaf,
   Lock,
@@ -23,6 +24,7 @@ const modeIcons = {
   scissors: Scissors,
   shield: ShieldAlert,
   history: History,
+  footprints: Footprints,
 } as const;
 
 export function LandingPage({
@@ -108,11 +110,18 @@ function CareModesSection({ content }: { content: LandingContent }) {
         </div>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          {content.careModes.map((mode) => {
+          {content.careModes.map((mode, index) => {
             const Icon = modeIcons[mode.icon];
+            // An odd number of cards would leave the last one stranded beside
+            // a gap at sm+ — let it take the full row instead.
+            const fillsRow =
+              content.careModes.length % 2 === 1 && index === content.careModes.length - 1;
 
             return (
-              <article key={mode.title} className="rounded-lg border bg-background p-6 sm:p-7">
+              <article
+                key={mode.title}
+                className={cn("rounded-lg border bg-background p-6 sm:p-7", fillsRow && "sm:col-span-2")}
+              >
                 <div className="flex size-10 items-center justify-center rounded-md bg-lime-100 text-lime-900 dark:bg-lime-400/15 dark:text-lime-200">
                   <Icon className="size-5" aria-hidden="true" />
                 </div>

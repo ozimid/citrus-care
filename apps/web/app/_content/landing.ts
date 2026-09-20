@@ -58,6 +58,16 @@ export const landingContent = {
       description:
         "Each plant gets a forecast-adjusted watering rhythm, smart re-check reminders, and one Today card saying what actually needs doing.",
     },
+    // F39 (2026-09-19): the whole-garden pass. There is no OCR — a stake
+    // number is typed or picked, a bound QR code is scanned. Keep-awake
+    // through a long run is unproven on device, so the copy promises a
+    // queue you come back to, never an unattended run.
+    {
+      icon: "footprints",
+      title: "Garden walk",
+      description:
+        "Shoot every tree or import a whole roll at once, then say which plant each photo belongs to — scan a code you bound to the tree, or pick it by its number. The queue waits until you ask for the analysis.",
+    },
   ],
   focusAreas: [
     "Citrus trees",
