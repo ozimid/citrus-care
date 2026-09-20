@@ -2,15 +2,20 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { File } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import {
   CaptureHint,
   PermissionState,
+  PlantChip,
   RoundButton,
   SnapTipsOverlay,
+  useWalkMode,
+  WalkControls,
+  WalkModeLine,
 } from "../components/CaptureOverlay";
 import { ImportSheet, type ImportProgress } from "../components/ImportSheet";
 import { PlantPickerSheet } from "../components/PlantPickerSheet";
+import { TagScanSheet, useTagScan } from "../components/TagScanSheet";
 import type { AssessedResult } from "../lib/assess";
 import { preselectedPlantId } from "../lib/capture-modes";
 import { loadSnapTipsSeen, markSnapTipsSeen } from "../lib/capture-modes-io";
@@ -44,32 +49,43 @@ import { WalkRunScreen } from "./WalkRunScreen";
 // unchanged; several go into the durable photo queue (D-W2) and open the
 // review screen, which asks "Analyze now / Later" every time (D-W7); "Analyze
 // now" hands the runnable photos to WalkRunScreen, which runs them one at a
-// time (D-W5) and reports once, at the end, how many assessments landed. "Save
-// for later" on the review screen queues a single camera shot the same way and
-// returns to the viewfinder — the next tree is one shutter tap away, not a
-// full capture re-entry. (Phase 3's walk mode owns the stay-in-camera loop
-// proper; this is the honest minimum until then.)
+// time (D-W5) and reports once, at the end, how many assessments landed.
+// F39 walk mode (D-W7, useWalkMode): a remembered, visibly checked toggle.
+// ON, the shutter saves straight to the queue under the sticky chip and the
+// viewfinder comes back at once; a chip idle ≥ CARRY_IDLE_MS goes amber and
+// its shots carry `carried` evidence (D-W3); "Scan tag" (useTagScan) takes one
+// still and decodes it in pure JS (D-W15) — a bound code switches the chip to
+// its owner, an unknown one is bound through the picker; Done · N opens the
+// review. OFF is today's flow, verbatim.
+// Scan-to-bind (`scanTarget`, from a plant's Tags card): the same viewfinder
+// with only Scan tag — one successful scan binds and closes.
 
 const GENERIC_PHOTO_ERROR = "Couldn't process that photo. Please try again.";
 const GENERIC_PLANTS_ERROR = "Could not load your plants. Close and try again.";
 const GENERIC_GALLERY_ERROR = "Couldn't open your photos. Please try again.";
 const IMPORT_FAILED_ERROR = "Couldn't import those photos. Please try again.";
 const SAVED_LATER_NOTICE = "Saved for later — find it on the Plants tab";
-/** How long the saved-for-later toast stays on the viewfinder. */
+const SCAN_TO_BIND_HINT = "Fill the frame with the code, then tap Scan tag";
+/** How long a viewfinder toast stays. */
 const SAVED_NOTICE_MS = 1800;
+/** "N photos kept" is read, then the capture closes. */
+const KEEP_NOTICE_MS = 1400;
 
 interface Props {
   onClose: () => void;
-  /** An assessment was saved server-side (before the modal closes). */
+  /** An assessment was saved (before the modal closes). */
   onAssessed?: () => void;
   /** Preselect this plant (detail screen's "Assess this plant"). */
   initialPlantId?: string;
+  /** Scan-to-bind from PlantTagsCard: bind the scanned code to this plant. */
+  scanTarget?: string;
 }
 
-export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
+export function CaptureScreen({ onClose, onAssessed, initialPlantId, scanTarget }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const askedRef = useRef(false);
+  const bindMode = scanTarget !== undefined;
 
   const [plants, setPlants] = useState<PlantListItem[] | null>(null);
   const [plantsError, setPlantsError] = useState(false);
@@ -93,16 +109,18 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
    * the tap — the review may have created one). */
   const [walkRun, setWalkRun] = useState<{ items: QueuedPhoto[]; plants: PlantListItem[] } | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  /** Close with saved walk shots: the "kept" toast is read, then we leave. */
+  const [closing, setClosing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     loadSnapTipsSeen().then((seen) => {
-      if (!cancelled && !seen) setTipsOpen(true);
+      if (!cancelled && !seen && !bindMode) setTipsOpen(true);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [bindMode]);
 
   // Request camera permission on open (once); the denied state below offers
   // the settings hint and keeps gallery import available.
@@ -132,15 +150,40 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     };
   }, [initialPlantId]);
 
-  const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
-  const ready = !busy;
+  // Toasts are read on the viewfinder, then fade; the camera stays up.
+  useEffect(() => {
+    if (!savedNotice) return;
+    const timer = setTimeout(() => setSavedNotice(null), SAVED_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [savedNotice]);
 
-  /** Leave after the import was reviewed: the Plants tab refreshes so its
-   * pending-walk card is right, then close. */
+  const selectedPlant = plants?.find((p) => p.id === selectedPlantId) ?? null;
+  const ready = !busy && !closing;
+  const havePlants = !!plants && plants.length > 0;
+
+  const walkMode = useWalkMode({ enabled: !bindMode, selectedPlant, walkId, cameraRef, setBusy, setError });
+  // D-W7: walk mode is disabled with zero plants. The remembered flag is left
+  // as it is; the EFFECTIVE mode is off until there is a plant to save to, so
+  // a first-time user always gets the snap-first flow.
+  const walk = walkMode.walk && havePlants;
+  const { walkCount } = walkMode;
+
+  /** Leave after the walk: the Plants tab refreshes so its pending-walk card
+   * is right, then close. */
   const finishWalk = useCallback(() => {
     onAssessed?.();
     onClose();
   }, [onAssessed, onClose]);
+
+  /** Close never discards (D-W2): saved shots stay queued; the user is told
+   * where they are, then the capture closes. */
+  const close = useCallback(() => {
+    if (closing) return finishWalk();
+    if (walkCount === 0) return onClose();
+    setClosing(true);
+    setSavedNotice(`${walkCount} photo${walkCount === 1 ? "" : "s"} kept — find them on the Plants tab`);
+    setTimeout(finishWalk, KEEP_NOTICE_MS);
+  }, [closing, finishWalk, onClose, walkCount]);
 
   const startWalkRun = useCallback(async (items: QueuedPhoto[]) => {
     let named: PlantListItem[] = plants ?? [];
@@ -152,13 +195,49 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     setWalkRun({ items, plants: named });
   }, [plants]);
 
-  // The saved-for-later toast is read on the viewfinder, then fades; the
-  // camera stays up for the next tree.
-  useEffect(() => {
-    if (!savedNotice) return;
-    const timer = setTimeout(() => setSavedNotice(null), SAVED_NOTICE_MS);
-    return () => clearTimeout(timer);
-  }, [savedNotice]);
+  /** A hand pick is a confirm: the chip is fresh and no code run is active. */
+  const pickPlant = useCallback(
+    (id: string) => {
+      setSelectedPlantId(id);
+      walkMode.setScanDigest(null);
+      walkMode.touchActivity();
+      setPickerOpen(false);
+    },
+    [walkMode],
+  );
+
+  const tagScan = useTagScan({
+    cameraRef,
+    plants,
+    selectedPlantId,
+    scanTarget,
+    onSwitch: (plantId, digest) => {
+      setSelectedPlantId(plantId);
+      walkMode.setScanDigest(digest);
+      walkMode.touchActivity();
+    },
+    onBound: async (plantId, digest) => {
+      if (bindMode) {
+        onAssessed?.();
+        onClose();
+        return;
+      }
+      let named = plants ?? [];
+      try {
+        named = await fetchPlants();
+        setPlants(named);
+      } catch {
+        // fetchPlants already logged; the chip still switches.
+      }
+      setSelectedPlantId(plantId);
+      walkMode.setScanDigest(digest);
+      walkMode.touchActivity();
+      setSavedNotice(`Code bound to ${named.find((p) => p.id === plantId)?.name ?? "that plant"}`);
+    },
+    onTypeInstead: () => setPickerOpen(true),
+    notify: setSavedNotice,
+    fail: setError,
+  });
 
   /** Downscale into the review photo. True when the copy exists (the caller
    * may then drop its own original); the user sees only the generic error. */
@@ -181,6 +260,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
   );
 
   const takePhoto = useCallback(async () => {
+    if (walk) return walkMode.takeWalkShot();
     const camera = cameraRef.current;
     if (!camera) return;
     setBusy(true);
@@ -202,7 +282,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
       setError(GENERIC_PHOTO_ERROR);
       setBusy(false);
     }
-  }, [prepare]);
+  }, [prepare, walk, walkMode]);
 
   const pickFromGallery = useCallback(async () => {
     setError(null);
@@ -219,15 +299,15 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         exif: true,
       });
       if (result.canceled || result.assets.length === 0) return;
-      if (result.assets.length === 1) {
+      if (result.assets.length === 1 && !walk) {
         // One photo: today's single-shot flow, unchanged.
         setImporting(null);
         const asset = result.assets[0];
         await prepare(asset.uri, asset.width, asset.height);
         return;
       }
-      // Several: each becomes durable before the next starts (D-W2); the
-      // sheet's count is true because of that.
+      // Several (or walk mode): each becomes durable before the next starts
+      // (D-W2); the sheet's count is true because of that.
       setImporting({ kind: "importing", done: 0, total: result.assets.length });
       // D-W3: the chip is hard evidence only when it was set for THIS import
       // (this plant's own screen, or the only plant). A chip that merely
@@ -247,6 +327,13 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
         setError(IMPORT_FAILED_ERROR);
         return;
       }
+      if (walk) {
+        // Same walk as the shutter: stay in the viewfinder, count them.
+        walkMode.addImported(imported);
+        setSavedNotice(imported === 1 ? "1 photo saved to this walk" : `${imported} photos saved to this walk`);
+        if (failed > 0) setError(IMPORT_PARTIAL_ERROR(failed));
+        return;
+      }
       setWalkReview({ notice: failed > 0 ? IMPORT_PARTIAL_ERROR(failed) : null });
     } catch (e) {
       console.error("[CaptureScreen] gallery import failed:", (e as Error).message);
@@ -255,7 +342,7 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     } finally {
       setImporting(null);
     }
-  }, [initialPlantId, plants, prepare, selectedPlant, walkId]);
+  }, [initialPlantId, plants, prepare, selectedPlant, walk, walkId, walkMode]);
 
   /** F39 "Save for later": the reviewed shot goes to the durable queue under
    * the chosen plant (or none); the Plants tab behind refreshes and the
@@ -333,9 +420,14 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
     );
   }
 
+  const cameraOn = permission?.granted === true;
+  // A sheet is up (scanning / no code / picker). The walk-mode "Switched to …"
+  // toast is not one: the chip already moved and the next shot must be free.
+  const scanBusy = tagScan.scan !== null && tagScan.scan.state !== "bound";
+
   return (
     <View style={styles.root}>
-      {permission?.granted ? (
+      {cameraOn ? (
         <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
       ) : (
         <PermissionState
@@ -345,19 +437,28 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
       )}
 
       <View style={styles.topBar}>
-        <RoundButton label="Close" glyph="✕" onPress={onClose} />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Choose plant"
-          onPress={() => setPickerOpen(true)}
-          disabled={!plants || plants.length === 0}
-          style={styles.plantChip}
-        >
-          <Text style={styles.plantChipText} numberOfLines={1}>
-            {selectedPlant ? `🪴 ${selectedPlant.name}` : "New plant ✨ (tap to pick)"}
+        {/* 48 dp: in walk mode Close is the keep-and-leave exit, load-bearing
+            for a gloved thumb; held while a walk shot is still being saved
+            so the "N photos kept" count is true. */}
+        <RoundButton label="Close" glyph="✕" size={48} disabled={walk && busy} onPress={close} />
+        {bindMode ? (
+          <Text style={styles.bindHeader} accessibilityRole="header">
+            Point at the code on this plant
           </Text>
-        </Pressable>
-        <RoundButton label="Photo tips" glyph="?" onPress={() => setTipsOpen(true)} />
+        ) : (
+          <PlantChip
+            walk={walk}
+            plantName={selectedPlant?.name ?? null}
+            stale={walkMode.stale}
+            disabled={!havePlants}
+            onPress={() => setPickerOpen(true)}
+          />
+        )}
+        {bindMode ? (
+          <View style={styles.topSpacer} />
+        ) : (
+          <RoundButton label="Photo tips" glyph="?" size={48} onPress={() => setTipsOpen(true)} />
+        )}
       </View>
 
       <View style={styles.bottomArea}>
@@ -368,36 +469,29 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
             ✓ {savedNotice}
           </Text>
         ) : null}
-        <CaptureHint />
-        <View style={styles.controls}>
-          <View style={styles.sideControl}>
-            <RoundButton
-              label={`Import from gallery, up to ${MAX_IMPORT} photos`}
-              glyph="🖼️"
-              size={56}
-              disabled={busy || importing !== null}
-              onPress={pickFromGallery}
-            />
-            <Text style={styles.controlCaption}>Gallery</Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Take photo"
-            disabled={!ready || !permission?.granted}
-            onPress={takePhoto}
-            style={[
-              styles.shutter,
-              { opacity: !ready || !permission?.granted ? 0.4 : 1 },
-            ]}
-          >
-            {busy ? <ActivityIndicator color="#111" /> : <View style={styles.shutterInner} />}
-          </Pressable>
-          <View style={styles.sideControl}>
-            {/* Spacer mirroring the gallery button keeps the shutter centered. */}
-            <View style={{ width: 56, height: 56 }} />
-            <Text style={styles.controlCaption}> </Text>
-          </View>
-        </View>
+        {bindMode ? (
+          <CaptureHint text={SCAN_TO_BIND_HINT} />
+        ) : walk ? (
+          <WalkModeLine />
+        ) : (
+          <CaptureHint />
+        )}
+        <WalkControls
+          mode={bindMode ? "bind" : walk ? "walk" : "single"}
+          busy={busy}
+          canShoot={ready && cameraOn && !scanBusy}
+          onShutter={() => void takePhoto()}
+          galleryLabel={`Import from gallery, up to ${MAX_IMPORT} photos`}
+          galleryDisabled={!ready || importing !== null || scanBusy}
+          onGallery={() => void pickFromGallery()}
+          scanDisabled={!ready || !cameraOn || scanBusy || !havePlants}
+          onScan={tagScan.start}
+          walkEnabled={havePlants && !closing}
+          onToggleWalk={walkMode.toggleWalk}
+          doneCount={walkCount}
+          onDone={() => setWalkReview({ notice: null })}
+          flashUri={walkMode.flashUri}
+        />
       </View>
 
       <SnapTipsOverlay
@@ -410,14 +504,13 @@ export function CaptureScreen({ onClose, onAssessed, initialPlantId }: Props) {
 
       <ImportSheet progress={importing} />
 
+      {tagScan.sheetProps ? <TagScanSheet {...tagScan.sheetProps} /> : null}
+
       <PlantPickerSheet
         visible={pickerOpen}
         plants={plants ?? []}
         selectedId={selectedPlantId}
-        onSelect={(id) => {
-          setSelectedPlantId(id);
-          setPickerOpen(false);
-        }}
+        onSelect={pickPlant}
         onClose={() => setPickerOpen(false)}
       />
     </View>
@@ -437,15 +530,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  plantChip: {
+  topSpacer: { width: 48, height: 48 },
+  bindHeader: {
     flex: 1,
-    alignItems: "center",
+    minHeight: 48,
+    textAlignVertical: "center",
+    textAlign: "center",
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "600",
     backgroundColor: "rgba(0,0,0,0.45)",
-    borderRadius: 999,
+    borderRadius: RADIUS + 6,
     paddingHorizontal: 14,
-    paddingVertical: 9,
+    overflow: "hidden",
   },
-  plantChipText: { color: "#ffffff", fontSize: 14, fontWeight: "600" },
   bottomArea: {
     position: "absolute",
     left: 0,
@@ -454,33 +552,6 @@ const styles = StyleSheet.create({
     paddingBottom: 42,
     paddingHorizontal: 24,
     gap: 12,
-  },
-  controls: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 6,
-  },
-  /** Both sides flex equally so a longer caption never shifts the shutter. */
-  sideControl: { flex: 1, alignItems: "center", gap: 4 },
-  controlCaption: { color: "#ffffff", fontSize: 11, fontWeight: "600", textAlign: "center" },
-  shutter: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    borderWidth: 5,
-    borderColor: "rgba(255,255,255,0.7)",
-    backgroundColor: "#ffffff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  shutterInner: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: "#ffffff",
-    borderWidth: 2,
-    borderColor: "#d4d4d4",
   },
   error: {
     color: "#ffffff",

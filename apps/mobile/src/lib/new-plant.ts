@@ -7,8 +7,12 @@
 
 import { PLANT_TYPES, newPlantSchema, type AssessmentDiagnosis, type NewPlantInput } from "@citrus/shared";
 import type { StoredPlant } from "./plant-store";
+import { TAG_MAX_LENGTH, normalizeTag } from "./plant-tags";
 
 export const GENERIC_CREATE_PLANT_ERROR = "Could not add the plant. Please try again.";
+/** F39 D-W4: the human tag is unique across the garden. */
+export const TAG_TAKEN_ERROR = "Another plant already has this tag";
+export const TAG_FORMAT_ERROR = `Use up to ${TAG_MAX_LENGTH} letters, numbers, spaces or - _ . #`;
 
 export interface NewPlantForm {
   name: string;
@@ -17,6 +21,8 @@ export interface NewPlantForm {
   cultivar: string;
   location: string;
   zip_code: string;
+  /** F39: the number/label on the physical tag; "" = none. */
+  tag: string;
 }
 
 export const emptyNewPlantForm: NewPlantForm = {
@@ -26,6 +32,7 @@ export const emptyNewPlantForm: NewPlantForm = {
   cultivar: "",
   location: "",
   zip_code: "",
+  tag: "",
 };
 
 /** Prefill for the edit sheet: DB row (nulls) → form state (empty strings). */
@@ -56,6 +63,9 @@ export function formFromPlant(plant: {
   cultivar: string | null;
   location: string | null;
   zip_code: string | null;
+  /** Optional so every existing caller compiles; a tagged plant MUST pass it
+   * or saving the edit would clear the tag (the whole form is written). */
+  tag?: string | null;
 }): NewPlantForm {
   return {
     name: plant.name,
@@ -64,6 +74,7 @@ export function formFromPlant(plant: {
     cultivar: plant.cultivar ?? "",
     location: plant.location ?? "",
     zip_code: plant.zip_code ?? "",
+    tag: plant.tag ?? "",
   };
 }
 
@@ -80,14 +91,43 @@ export type NewPlantValidation =
   | { ok: true; data: NewPlantInput }
   | { ok: false; errors: NewPlantFieldErrors };
 
-export function validateNewPlant(form: NewPlantForm): NewPlantValidation {
+export interface NewPlantValidationOptions {
+  /** Tags held by OTHER plants (any casing — compared after normalizeTag). The
+   * caller excludes the plant being edited. */
+  takenTags?: Iterable<string>;
+}
+
+function isIterable(value: unknown): value is Iterable<string> {
+  return typeof value === "object" && value !== null && Symbol.iterator in value;
+}
+
+/** `taken` may be the options object or, for the two sheets that only need the
+ * uniqueness check, the other plants' tags directly (an array or a Set). */
+export function validateNewPlant(
+  form: NewPlantForm,
+  taken: NewPlantValidationOptions | Iterable<string> = {},
+): NewPlantValidation {
   const errors: NewPlantFieldErrors = {};
+  const takenTags = isIterable(taken) ? taken : taken.takenTags ?? [];
 
   // Mobile-only tightening: the shared schema allows any <=10-char string, but
   // the native sheet asks for a US 5-digit ZIP (numeric keyboard, maxLength 5).
   const zip = form.zip_code.trim();
   if (zip.length > 0 && !/^\d{5}$/.test(zip)) {
     errors.zip_code = "Enter a 5-digit ZIP code";
+  }
+
+  // F39 D-W4: whitelisted, ≤ 24, unique. Normalized here so the stored form
+  // ("L3") is what the picker grid and the walk chip compare against.
+  let tag: string | null = null;
+  if (form.tag.trim().length > 0) {
+    tag = normalizeTag(form.tag);
+    if (tag === null) {
+      errors.tag = TAG_FORMAT_ERROR;
+    } else {
+      const takenNormalized = new Set(Array.from(takenTags, (t) => normalizeTag(t)));
+      if (takenNormalized.has(tag)) errors.tag = TAG_TAKEN_ERROR;
+    }
   }
 
   const parsed = newPlantSchema.safeParse({
@@ -97,6 +137,7 @@ export function validateNewPlant(form: NewPlantForm): NewPlantValidation {
     cultivar: form.cultivar,
     location: form.location,
     zip_code: form.zip_code,
+    tag: form.tag,
   });
 
   if (!parsed.success) {
@@ -111,7 +152,7 @@ export function validateNewPlant(form: NewPlantForm): NewPlantValidation {
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   if (!parsed.success) return { ok: false, errors: { name: "Invalid input" } };
-  return { ok: true, data: parsed.data };
+  return { ok: true, data: { ...parsed.data, tag } };
 }
 
 /** Validated form input → a new on-device plant record. No user_id (no
@@ -130,5 +171,9 @@ export function buildStoredPlant(data: NewPlantInput, id: string, createdAt: str
     cover_assessment_id: null,
     care_profile: null,
     created_at: createdAt,
+    // F39: the tag is normalized (idempotent after validateNewPlant); codes
+    // start empty — a sticker is bound by scanning, never typed.
+    tag: normalizeTag(data.tag) ?? null,
+    codes: [],
   };
 }

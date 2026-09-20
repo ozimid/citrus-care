@@ -187,6 +187,7 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
             <PlantCard
               item={item}
               needsWater={plans[item.id]?.isDue === true}
+              tagMissing={item.tagMissing}
               t={t}
               scheme={scheme}
               onPress={() => setDetailId(item.id)}
@@ -227,6 +228,7 @@ export function PlantsScreen({ refreshToken = 0 }: { refreshToken?: number }) {
 function PlantCard({
   item,
   needsWater,
+  tagMissing,
   t,
   scheme,
   onPress,
@@ -236,6 +238,8 @@ function PlantCard({
   /** F20: this plant's watering plan says it's due (chip appears once the
    * list's weather pass lands — never blocks the card). */
   needsWater: boolean;
+  /** F39: the physical tag is flagged missing on the record. */
+  tagMissing: boolean;
   t: Tokens;
   scheme: "light" | "dark";
   onPress: () => void;
@@ -243,10 +247,12 @@ function PlantCard({
    * when the plant has no photo yet). */
   onViewPhoto: () => void;
 }) {
+  const tag = item.tag ?? null;
+  const amber = bandColor("fair", scheme);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${item.name}${needsWater ? ", needs water" : ""}`}
+      accessibilityLabel={`Open ${item.name}${tag ? `, number ${tag}` : ""}${needsWater ? ", needs water" : ""}${tagMissing ? ", tag missing" : ""}`}
       onPress={onPress}
       style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}
     >
@@ -268,9 +274,20 @@ function PlantCard({
         )}
       </Pressable>
       <View style={styles.cardText}>
-        <Text style={[styles.cardName, { color: t.text }]} numberOfLines={1}>
-          {item.name}
-        </Text>
+        <View style={styles.cardNameRow}>
+          <Text style={[styles.cardName, { color: t.text }]} numberOfLines={1}>
+            {item.name}
+          </Text>
+          {/* F39 (D-W4): the number on the stake — how a walk photo finds
+              this plant. */}
+          {tag ? (
+            <View style={[styles.tagChip, { borderColor: t.border }]}>
+              <Text style={[styles.tagChipText, { color: t.text }]} numberOfLines={1}>
+                #{tag}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         {item.subLabel ? (
           <Text style={[styles.cardSub, { color: t.sub }]} numberOfLines={1}>
             {item.subLabel}
@@ -282,6 +299,9 @@ function PlantCard({
             <View style={[styles.trendChip, { backgroundColor: t.green + "22" }]}>
               <Text style={[styles.trendChipText, { color: t.green }]}>💧 Needs water</Text>
             </View>
+          ) : null}
+          {tagMissing ? (
+            <Text style={[styles.tagMissing, { color: amber }]}>⚠ tag missing</Text>
           ) : null}
         </View>
       </View>
@@ -401,7 +421,17 @@ const styles = StyleSheet.create({
   },
   thumbGlyph: { fontSize: 24 },
   cardText: { flex: 1, gap: 2, alignItems: "flex-start" },
-  cardName: { fontSize: 16, fontWeight: "600" },
+  cardNameRow: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "stretch" },
+  cardName: { fontSize: 16, fontWeight: "600", flexShrink: 1 },
+  tagChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    maxWidth: 120,
+  },
+  tagChipText: { fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  tagMissing: { fontSize: 11, fontWeight: "700", marginTop: 3, paddingVertical: 2 },
   cardSub: { fontSize: 13 },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   trendChip: {

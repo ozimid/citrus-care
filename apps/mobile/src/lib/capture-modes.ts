@@ -5,6 +5,7 @@
 // What survives is the photo-quality nudge the capture research earned —
 // closer is better — now stated once, for every shot.
 
+import { normalizeTag, numericTagOrder } from "./plant-tags";
 import type { PlantListItem } from "./plants";
 
 /** The one viewfinder hint. It asks for a good photo without asking the user
@@ -50,16 +51,36 @@ export const SNAP_TIPS: SnapTip[] = [
 
 export const SNAP_TIPS_SEEN_KEY = "citrus.snap-tips-seen.v1";
 
+/** F39 D-W7: walk mode is a remembered, visibly checked viewfinder toggle
+ * (default off). The -io half reads/writes this key; reads degrade to off. */
+export const WALK_MODE_KEY = "citrus.capture-walk.v1";
+
 // F39 (Garden Walk): the plant picker in the review screen gains a search
 // field. Numeric-aware ordering, because a garden of numbered trees is browsed
 // as "L2, L3, L10" — the way the tags read on the stakes — not "L10, L2, L3".
 
-/** Plants matching `query` on name, species or sub-label (case-insensitive),
- * in numeric-aware name order; an empty query lists every plant. Pure. */
+const byNumericName = (a: PlantListItem, b: PlantListItem) =>
+  a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+
+/** Plants matching `query`, ranked for a garden of numbered stakes (D-W4, the
+ * tag is co-primary): an exact tag match first, then plants whose tag starts
+ * with the query (numeric order — "2, 20, 21"), then the contains match on
+ * name / species / sub-label / tag in numeric-aware name order. An empty
+ * query lists every plant in name order. Pure. */
 export function filterPlantsByQuery(items: PlantListItem[], query: string): PlantListItem[] {
   const needle = query.trim().toLowerCase();
-  const matches = needle
-    ? items.filter((plant) => [plant.name, plant.species, plant.subLabel].some((v) => v?.toLowerCase().includes(needle)))
-    : [...items];
-  return matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  if (!needle) return [...items].sort(byNumericName);
+  const tagNeedle = normalizeTag(query);
+  const exact: PlantListItem[] = [];
+  const prefix: PlantListItem[] = [];
+  const contains: PlantListItem[] = [];
+  for (const plant of items) {
+    const tag = plant.tag ?? null;
+    if (tagNeedle !== null && tag === tagNeedle) exact.push(plant);
+    else if (tagNeedle !== null && tag !== null && tag.startsWith(tagNeedle)) prefix.push(plant);
+    else if ([plant.name, plant.species, plant.subLabel, tag].some((v) => v?.toLowerCase().includes(needle))) {
+      contains.push(plant);
+    }
+  }
+  return [...exact.sort(numericTagOrder), ...prefix.sort(numericTagOrder), ...contains.sort(byNumericName)];
 }

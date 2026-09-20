@@ -116,6 +116,9 @@ export interface EnqueueWalkShotArgs {
   source: "camera" | "gallery";
   takenAt: string | null;
   fileName?: string | null;
+  /** The bound code's digest when `evidence` is "code-scan" — provenance for
+   * the review, never a payload. Ignored for any other evidence. */
+  codeDigest?: string | null;
 }
 
 /** Downscale → move into the inbox → move on into the plant directory →
@@ -150,7 +153,7 @@ export async function enqueueWalkShot(args: EnqueueWalkShotArgs): Promise<Queued
       takenAt: args.takenAt,
       addedAt: new Date().toISOString(),
       source: args.source,
-      codeDigest: null,
+      codeDigest: plantId !== null && args.evidence === "code-scan" ? (args.codeDigest ?? null) : null,
       fileName: args.fileName ? args.fileName.slice(0, MAX_FILE_NAME) : null,
       status: "pending",
       startedAt: null,

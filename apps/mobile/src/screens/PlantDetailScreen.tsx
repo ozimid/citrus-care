@@ -17,6 +17,7 @@ import { NewPlantSheet } from "../components/NewPlantSheet";
 import { PendingPhotosStrip } from "../components/PendingPhotosStrip";
 import { QuarantineCard } from "../components/QuarantineCard";
 import { PlantInfoCard } from "../components/PlantInfoCard";
+import { PlantTagsCard } from "../components/PlantTagsCard";
 import { PlantToolsCard } from "../components/PlantToolsCard";
 import { WateringCard } from "../components/WateringCard";
 import { bandColor, healthBand } from "../lib/health";
@@ -73,9 +74,11 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
   const load = useCallback(async () => {
     setLoadCount((c) => c + 1);
     try {
-      const detail = await fetchPlantDetail(plantId);
-      // Join the synced assessments to their on-phone photos (D-16).
-      const index = await loadPhotoIndex();
+      const [detail, index] = await Promise.all([
+        fetchPlantDetail(plantId),
+        // Join the synced assessments to their on-phone photos (D-16).
+        loadPhotoIndex(),
+      ]);
       setData({ ...detail, timeline: attachLocalPhotos(detail.timeline, index) });
       setError(null);
     } catch {
@@ -131,6 +134,12 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
   const pair = data ? sliderPair(timeline) : null;
   const trend = data ? trendChipLabel(timeline) : null;
   const latest = timeline[0] ?? null;
+  // F39 Phase 3: tag, codes, tag photo and the missing flag ride the detail
+  // row (plantDetailRowFromStore) — one read, one record, for the header chip,
+  // the Tags card and the edit sheet alike.
+  const tag = plant?.tag ?? null;
+  const tagMissing = plant?.tag_missing === true;
+  const amber = bandColor("fair", scheme);
 
   return (
     <View style={[styles.root, { backgroundColor: t.canvas }]}>
@@ -145,9 +154,27 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
           <Text style={[styles.backGlyph, { color: t.text }]}>‹</Text>
         </Pressable>
         <View style={styles.headerText}>
-          <Text style={[styles.heading, { color: t.text }]} numberOfLines={1}>
-            {plant?.name ?? " "}
-          </Text>
+          <View style={styles.headingRow}>
+            <Text style={[styles.heading, { color: t.text }]} numberOfLines={1}>
+              {plant?.name ?? " "}
+            </Text>
+            {/* F39 (D-W4): the number on the stake, and the flag when the
+                physical tag is gone — colour plus the word, both. */}
+            {tag ? (
+              <View style={[styles.tagChip, { borderColor: t.border }]} accessibilityLabel={`Number ${tag}`}>
+                <Text style={[styles.tagChipText, { color: t.text }]} numberOfLines={1}>
+                  #{tag}
+                </Text>
+              </View>
+            ) : null}
+            {tagMissing ? (
+              <View style={[styles.tagChip, { borderColor: amber, backgroundColor: amber + "22" }]}>
+                <Text style={[styles.tagChipText, { color: amber }]} numberOfLines={1}>
+                  ⚠ Tag missing
+                </Text>
+              </View>
+            ) : null}
+          </View>
           {plant ? (
             <Text style={[styles.subLabel, { color: t.sub }]} numberOfLines={1}>
               {plantSubLabel(plant) || "No details provided"}
@@ -202,6 +229,19 @@ export function PlantDetailScreen({ plantId, onClose, onChanged }: Props) {
 
           {/* F38 + F23 — the two per-plant on-device tools (ask / prune). */}
           <PlantToolsCard plant={plant} t={t} onChanged={load} />
+
+          {/* F39 (D-W4) — how a walk photo finds this plant: stake number,
+              bound codes, tag photo, tag-missing flag. */}
+          <PlantTagsCard
+            plant={plant}
+            t={t}
+            scheme={scheme}
+            onChanged={() => {
+              load();
+              onChanged();
+            }}
+          />
+
           <View style={styles.secondaryRow}>
             <Pressable
               accessibilityRole="button"
@@ -444,7 +484,16 @@ const styles = StyleSheet.create({
   },
   backGlyph: { fontSize: 22, fontWeight: "600", marginTop: -2 },
   headerText: { flex: 1, gap: 2 },
-  heading: { fontSize: 22, fontWeight: "600", letterSpacing: -0.4 },
+  headingRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  heading: { fontSize: 22, fontWeight: "600", letterSpacing: -0.4, flexShrink: 1 },
+  tagChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    maxWidth: 160,
+  },
+  tagChipText: { fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
   subLabel: { fontSize: 13 },
   errorBanner: { fontSize: 13, paddingHorizontal: 20, marginBottom: 8 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },

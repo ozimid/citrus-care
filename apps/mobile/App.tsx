@@ -43,7 +43,13 @@ export default function App() {
         <Modal
           visible={capturing}
           animationType="slide"
-          onRequestClose={() => setCapturing(false)}
+          // Hardware back bypasses CaptureScreen's close(): walk shots are
+          // already durable (D-W2), so the only thing to keep is the Plants
+          // tab's pending-walk card — refresh it on this exit too.
+          onRequestClose={() => {
+            setPlantsVersion((v) => v + 1);
+            setCapturing(false);
+          }}
         >
           <CaptureScreen
             onClose={() => setCapturing(false)}

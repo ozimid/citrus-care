@@ -39,6 +39,10 @@ export function plantRowsFromStore(plants: StoredPlant[], assessments: StoredAss
     care_profile: plant.care_profile,
     created_at: plant.created_at,
     assessments: byPlant.get(plant.id) ?? [],
+    // F39 (D-W4): defaults for pre-F39 plants, so the mapper sees one shape.
+    tag: plant.tag ?? null,
+    codes: plant.codes ?? [],
+    tag_missing: plant.tag_missing === true,
   }));
 }
 
@@ -54,6 +58,11 @@ export function plantDetailRowFromStore(plant: StoredPlant): PlantDetailRow {
     zip_code: plant.zip_code,
     care_profile: plant.care_profile,
     created_at: plant.created_at,
+    // F39 (D-W4): everything PlantTagsCard shows and edits.
+    tag: plant.tag ?? null,
+    codes: plant.codes ?? [],
+    tag_photo: plant.tag_photo ?? null,
+    tag_missing: plant.tag_missing === true,
   };
 }
 

@@ -170,6 +170,10 @@ describe("mapPlantRows", () => {
       coverAssessmentId: null,
       coverUri: null,
       lastAssessedAt: "2026-07-11T00:00:00Z",
+      tag: null,
+      codes: [],
+      codeCount: 0,
+      tagMissing: false,
     });
     expect(items[1].latestScore).toBeNull();
     expect(items[1].trend).toBeNull();
@@ -189,6 +193,17 @@ describe("mapPlantRows", () => {
   it("returns an empty list for null/undefined data", () => {
     expect(mapPlantRows(null)).toEqual([]);
     expect(mapPlantRows(undefined)).toEqual([]);
+  });
+
+  // F39 D-W4: the human tag, the bound-code digests and the "tag missing" flag
+  // reach the card and the picker through the list item.
+  it("carries tag, codes, codeCount and tagMissing (F39)", () => {
+    const D1 = "a".repeat(64);
+    const D2 = "b".repeat(64);
+    const [tagged] = mapPlantRows([row({ tag: "L3", codes: [D1, D2], tag_missing: true })]);
+    expect(tagged).toMatchObject({ tag: "L3", codes: [D1, D2], codeCount: 2, tagMissing: true });
+    const [absent] = mapPlantRows([row({ codes: null, tag_missing: undefined })]);
+    expect(absent).toMatchObject({ tag: null, codes: [], codeCount: 0, tagMissing: false });
   });
 });
 

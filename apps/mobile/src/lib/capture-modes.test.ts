@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { CAPTURE_HINT, SNAP_TIPS, SNAP_TIPS_SEEN_KEY, filterPlantsByQuery, preselectedPlantId } from "./capture-modes";
+import {
+  CAPTURE_HINT,
+  SNAP_TIPS,
+  SNAP_TIPS_SEEN_KEY,
+  WALK_MODE_KEY,
+  filterPlantsByQuery,
+  preselectedPlantId,
+} from "./capture-modes";
 import type { PlantListItem } from "./plants";
 
 // F21 deleted the three capture modes: classifying the photo was the user's
@@ -85,6 +92,10 @@ describe("filterPlantsByQuery", () => {
       lastAssessedAt: null,
       coverAssessmentId: null,
       coverUri: null,
+      tag: null,
+      codes: [],
+      codeCount: 0,
+      tagMissing: false,
       ...extra,
     };
   }
@@ -114,5 +125,62 @@ describe("filterPlantsByQuery", () => {
     const before = plants.map((p) => p.id);
     filterPlantsByQuery(plants, "");
     expect(plants.map((p) => p.id)).toEqual(before);
+  });
+
+  // F39 D-W4: the human tag is co-primary, so typing a stake number must land
+  // on that plant first — exact tag, then tag prefix, then the old contains
+  // match on name / species / sub-label.
+  describe("tag ranking", () => {
+    const tagged = [
+      plant("a", "Meyer lemon", { tag: "3" }),
+      plant("b", "Lime", { tag: "30" }),
+      plant("c", "Orange", { tag: "13" }),
+      plant("d", "Tree 3 by the gate"),
+      plant("e", "Kumquat", { tag: "L3" }),
+    ];
+
+    it("puts the exact tag first, tag prefixes next, then contains matches in name order", () => {
+      expect(filterPlantsByQuery(tagged, "3").map((p) => p.name)).toEqual([
+        "Meyer lemon",
+        "Lime",
+        "Kumquat",
+        "Orange",
+        "Tree 3 by the gate",
+      ]);
+    });
+
+    it("matches tags case-insensitively and ignores surrounding whitespace", () => {
+      expect(filterPlantsByQuery(tagged, " l3 ").map((p) => p.name)).toEqual(["Kumquat"]);
+      expect(filterPlantsByQuery(tagged, "1").map((p) => p.name)).toEqual(["Orange"]);
+    });
+
+    it("orders the prefix group numerically, the way the tags read on the stakes", () => {
+      const rows = [
+        plant("a", "D", { tag: "21" }),
+        plant("b", "C", { tag: "2" }),
+        plant("c", "B", { tag: "20" }),
+        plant("d", "A", { tag: "200" }),
+      ];
+      expect(filterPlantsByQuery(rows, "2").map((p) => p.tag)).toEqual(["2", "20", "21", "200"]);
+    });
+
+    it("leaves the empty-query listing in numeric-aware name order, tags or not", () => {
+      expect(filterPlantsByQuery(tagged, "").map((p) => p.name)).toEqual([
+        "Kumquat",
+        "Lime",
+        "Meyer lemon",
+        "Orange",
+        "Tree 3 by the gate",
+      ]);
+    });
+  });
+});
+
+// F39 D-W7: walk mode is a REMEMBERED viewfinder toggle (default off) — its
+// key follows the store convention so the -io half and the backup exclusion
+// list can name it.
+describe("WALK_MODE_KEY", () => {
+  it("follows the store key convention", () => {
+    expect(WALK_MODE_KEY).toBe("citrus.capture-walk.v1");
   });
 });

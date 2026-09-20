@@ -39,7 +39,24 @@ describe("formFromPlant", () => {
       cultivar: "Meyer Lemon",
       location: "",
       zip_code: "92866",
+      tag: "",
     });
+  });
+
+  // F39: the tag is edited on the same sheet, so the prefill must carry it or
+  // every edit of a tagged plant would silently clear the tag on save.
+  it("prefills the tag when the plant has one", () => {
+    expect(
+      formFromPlant({
+        name: "Mr Lemon",
+        plant_type: "tree",
+        species: null,
+        cultivar: null,
+        location: null,
+        zip_code: null,
+        tag: "L3",
+      }).tag,
+    ).toBe("L3");
   });
 });
 
@@ -64,6 +81,7 @@ describe("validateNewPlant", () => {
       cultivar: "Meyer Lemon",
       location: "South patio",
       zip_code: "90210",
+      tag: null,
     });
   });
 
@@ -109,6 +127,44 @@ describe("validateNewPlant", () => {
     }
     expect(validateNewPlant(filled({ zip_code: " 90210 " })).ok).toBe(true);
   });
+
+  // F39 D-W4: the human tag — whitelisted, ≤ 24, unique across the garden.
+  describe("tag", () => {
+    it("normalizes a tag (trim, uppercase) and turns an empty one into null", () => {
+      const tagged = validateNewPlant(filled({ tag: " l3 " }));
+      expect(tagged.ok).toBe(true);
+      if (tagged.ok) expect(tagged.data.tag).toBe("L3");
+      const untagged = validateNewPlant(filled({ tag: "   " }));
+      expect(untagged.ok).toBe(true);
+      if (untagged.ok) expect(untagged.data.tag).toBeNull();
+    });
+
+    it("rejects characters outside the whitelist and tags over 24 characters", () => {
+      for (const bad of ["L3!", "L/3", "A".repeat(25)]) {
+        const result = validateNewPlant(filled({ tag: bad }));
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.errors.tag).toMatch(/24|letters|numbers/);
+      }
+    });
+
+    it("rejects a tag another plant already has, comparing normalized forms", () => {
+      for (const taken of [["L3"], [" l3 "], new Set(["L3"])]) {
+        const result = validateNewPlant(filled({ tag: "l3" }), { takenTags: taken });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.errors.tag).toBe("Another plant already has this tag");
+      }
+      expect(validateNewPlant(filled({ tag: "L3" }), { takenTags: ["L4"] }).ok).toBe(true);
+      expect(validateNewPlant(filled({ tag: "" }), { takenTags: ["L3"] }).ok).toBe(true);
+    });
+
+    it("also takes the other plants' tags directly (the sheets pass a plain array)", () => {
+      const result = validateNewPlant(filled({ tag: "L3" }), ["l3"]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.tag).toBe("Another plant already has this tag");
+      expect(validateNewPlant(filled({ tag: "L3" }), new Set(["L4"])).ok).toBe(true);
+      expect(validateNewPlant(filled({ tag: "L3" }), []).ok).toBe(true);
+    });
+  });
 });
 
 describe("buildStoredPlant", () => {
@@ -129,7 +185,18 @@ describe("buildStoredPlant", () => {
       cover_assessment_id: null,
       care_profile: null,
       created_at: "2026-07-15T00:00:00Z",
+      tag: null,
+      codes: [],
     });
+  });
+
+  it("stores the normalized tag and starts with no bound codes (F39)", () => {
+    const result = validateNewPlant(filled({ tag: " l3 " }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const stored = buildStoredPlant(result.data, "plant-1", "2026-07-15T00:00:00Z");
+    expect(stored.tag).toBe("L3");
+    expect(stored.codes).toEqual([]);
   });
 });
 

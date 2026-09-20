@@ -37,7 +37,9 @@ export default function PrivacyPage() {
             Your plants, diagnoses, and photos are stored only on your device. Photos are analyzed
             by an AI model that runs on the phone — they are never uploaded. Because nothing is
             synced, uninstalling the app or losing the phone loses the data, so the app lets you
-            export a backup file to keep wherever you like.
+            export a backup file to keep wherever you like. If you scan a QR sticker to identify a
+            plant, only a fingerprint of the code is kept on the phone — its contents are never
+            stored, opened or included in a backup.
           </p>
         </section>
 

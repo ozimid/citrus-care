@@ -161,3 +161,34 @@ describe("cover assessment id rides through to the list", () => {
     expect(row.cover_assessment_id).toBe("assess-7");
   });
 });
+
+// F39 D-W4: tag / codes / tag_photo / tag_missing ride the same adapters, so
+// the picker's tag grid, the card badges and PlantTagsCard read one shape.
+describe("F39 identifiers ride through the adapters", () => {
+  const D1 = "a".repeat(64);
+  const D2 = "b".repeat(64);
+
+  it("plantRowsFromStore carries tag, codes and tag_missing, with defaults for a legacy plant", () => {
+    const [tagged, legacy] = plantRowsFromStore(
+      [plant({ tag: "L3", codes: [D1], tag_missing: true }), plant({ id: "p2" })],
+      [],
+    );
+    expect(tagged).toMatchObject({ tag: "L3", codes: [D1], tag_missing: true });
+    expect(legacy).toMatchObject({ tag: null, codes: [], tag_missing: false });
+  });
+
+  it("→ mapPlantRows exposes tag, codes, codeCount and tagMissing on the list item", () => {
+    const [item] = mapPlantRows(plantRowsFromStore([plant({ tag: "L3", codes: [D1, D2], tag_missing: true })], []));
+    expect(item).toMatchObject({ tag: "L3", codes: [D1, D2], codeCount: 2, tagMissing: true });
+    const [plain] = mapPlantRows(plantRowsFromStore([plant()], []));
+    expect(plain).toMatchObject({ tag: null, codes: [], codeCount: 0, tagMissing: false });
+  });
+
+  it("plantDetailRowFromStore carries tag, codes, tag_photo and tag_missing", () => {
+    const row = plantDetailRowFromStore(
+      plant({ tag: "L3", codes: [D1], tag_photo: "x1-00000001.jpg", tag_missing: false }),
+    );
+    expect(row).toMatchObject({ tag: "L3", codes: [D1], tag_photo: "x1-00000001.jpg", tag_missing: false });
+    expect(plantDetailRowFromStore(plant())).toMatchObject({ tag: null, codes: [], tag_photo: null, tag_missing: false });
+  });
+});

@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { CareProfile } from "@citrus/shared";
 import {
+  addPlantCode,
   allPlants,
   getPlant,
   parsePlantStore,
   removePlant,
+  removePlantCode,
   serializePlantStore,
   upsertPlant,
   type PlantStore,
   type StoredPlant,
 } from "./plant-store";
+import { MAX_CODES_PER_PLANT } from "./plant-tags";
 
 // D-17: plants live only on the phone now (no Supabase). Same pure/-io split as
 // photo-store: this module holds the keyed store + never-throwing parse; the
@@ -148,5 +151,96 @@ describe("parsePlantStore refuses ids that could not name a directory", () => {
   it("keeps legacy UUID ids (pre-D-17 plants)", () => {
     const stored = JSON.stringify({ [LEGACY_UUID]: plant({ id: LEGACY_UUID }) });
     expect(parsePlantStore(stored)[LEGACY_UUID]?.name).toBe("Lemon");
+  });
+});
+
+// F39 D-W4: two identifiers on the plant record — the human tag and the bound
+// code digests — plus the tag photo slot and the "tag missing" flag. Stored
+// data is untrusted, so the parser REPAIRS these fields (never drops the plant
+// for them): the plant is still the plant when its sticker digest is garbage.
+describe("F39 identifiers: tag / codes / tag_photo / tag_missing", () => {
+  const D1 = "a".repeat(64);
+  const D2 = "b".repeat(64);
+  const stored = (extra: Record<string, unknown>) => JSON.stringify({ [P1]: { ...plant({ id: P1 }), ...extra } });
+
+  it("round-trips valid identifiers", () => {
+    const store = upsertPlant(
+      {},
+      plant({ id: P1, tag: "L3", codes: [D1, D2], tag_photo: "x1-00000001.jpg", tag_missing: true }),
+    );
+    expect(parsePlantStore(serializePlantStore(store))).toEqual(store);
+  });
+
+  it("leaves a legacy plant without identifier fields exactly as it was (no keys invented)", () => {
+    const parsed = parsePlantStore(stored({}))[P1];
+    expect("tag" in parsed).toBe(false);
+    expect("codes" in parsed).toBe(false);
+    expect("tag_photo" in parsed).toBe(false);
+    expect("tag_missing" in parsed).toBe(false);
+  });
+
+  it("repairs a non-string or non-whitelisted tag to null and normalizes a sloppy one", () => {
+    expect(parsePlantStore(stored({ tag: 7 }))[P1].tag).toBeNull();
+    expect(parsePlantStore(stored({ tag: "L3!" }))[P1].tag).toBeNull();
+    expect(parsePlantStore(stored({ tag: "A".repeat(25) }))[P1].tag).toBeNull();
+    expect(parsePlantStore(stored({ tag: " l3 " }))[P1].tag).toBe("L3");
+    expect(parsePlantStore(stored({ tag: null }))[P1].tag).toBeNull();
+  });
+
+  it("repairs codes: non-array → [], bad digests dropped, duplicates removed, capped", () => {
+    expect(parsePlantStore(stored({ codes: "nope" }))[P1].codes).toEqual([]);
+    expect(parsePlantStore(stored({ codes: { 0: D1 } }))[P1].codes).toEqual([]);
+    expect(parsePlantStore(stored({ codes: null }))[P1].codes).toEqual([]);
+    const messy = [D1, "CC1-TEST01", D1.toUpperCase(), 42, null, D1.slice(1), `${D1}0`, D2, D1];
+    expect(parsePlantStore(stored({ codes: messy }))[P1].codes).toEqual([D1, D2]);
+    const many = Array.from({ length: 12 }, (_, i) => i.toString(16).padStart(64, "0"));
+    expect(parsePlantStore(stored({ codes: many }))[P1].codes).toEqual(many.slice(0, MAX_CODES_PER_PLANT));
+  });
+
+  it("repairs tag_photo to null unless it is a photo basename, and tag_missing to a boolean", () => {
+    expect(parsePlantStore(stored({ tag_photo: "../x.jpg" }))[P1].tag_photo).toBeNull();
+    expect(parsePlantStore(stored({ tag_photo: "file:///photos/p/x1-00000001.jpg" }))[P1].tag_photo).toBeNull();
+    expect(parsePlantStore(stored({ tag_photo: 5 }))[P1].tag_photo).toBeNull();
+    expect(parsePlantStore(stored({ tag_photo: "x1-00000001.jpg" }))[P1].tag_photo).toBe("x1-00000001.jpg");
+    expect(parsePlantStore(stored({ tag_photo: null }))[P1].tag_photo).toBeNull();
+    expect(parsePlantStore(stored({ tag_missing: "yes" }))[P1].tag_missing).toBe(false);
+    expect(parsePlantStore(stored({ tag_missing: 1 }))[P1].tag_missing).toBe(false);
+    expect(parsePlantStore(stored({ tag_missing: true }))[P1].tag_missing).toBe(true);
+  });
+
+  it("never drops an otherwise valid plant because of a bad identifier", () => {
+    const parsed = parsePlantStore(stored({ tag: 7, codes: "x", tag_photo: "..", tag_missing: 1 }));
+    expect(parsed[P1]?.name).toBe("Lemon");
+    expect(parsed[P1]).toMatchObject({ tag: null, codes: [], tag_photo: null, tag_missing: false });
+  });
+});
+
+describe("addPlantCode / removePlantCode", () => {
+  const D1 = "a".repeat(64);
+  const D2 = "b".repeat(64);
+
+  it("appends a new digest once, in order, without mutating the plant", () => {
+    const before = plant({ codes: [D1] });
+    const after = addPlantCode(before, D2);
+    expect(after.codes).toEqual([D1, D2]);
+    expect(addPlantCode(after, D1).codes).toEqual([D1, D2]);
+    expect(before.codes).toEqual([D1]);
+  });
+
+  it("treats a legacy plant without codes as empty", () => {
+    expect(addPlantCode(plant(), D1).codes).toEqual([D1]);
+    expect(removePlantCode(plant(), D1).codes).toEqual([]);
+  });
+
+  it("refuses a ninth code — the plant comes back unchanged", () => {
+    const full = plant({ codes: Array.from({ length: MAX_CODES_PER_PLANT }, (_, i) => String(i).padStart(64, "0")) });
+    expect(addPlantCode(full, D1)).toBe(full);
+    expect(addPlantCode(full, full.codes![0]).codes).toEqual(full.codes);
+  });
+
+  it("removes a digest and leaves the others", () => {
+    const after = removePlantCode(plant({ codes: [D1, D2] }), D1);
+    expect(after.codes).toEqual([D2]);
+    expect(removePlantCode(after, "c".repeat(64)).codes).toEqual([D2]);
   });
 });

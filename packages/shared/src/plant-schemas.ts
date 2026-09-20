@@ -60,6 +60,9 @@ export const newPlantSchema = z.object({
   cultivar: optionalString(60).optional(),
   location: optionalString(80).optional(),
   zip_code: optionalString(10).optional(),
+  /** F39 (mobile): the human tag on the physical marker. Length only here —
+   * the whitelist, casing and uniqueness live in the mobile validator. */
+  tag: optionalString(24).optional(),
 });
 
 export type NewPlantInput = z.infer<typeof newPlantSchema>;

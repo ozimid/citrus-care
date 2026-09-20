@@ -26,6 +26,10 @@ export type PlantRow = Pick<
   /** jsonb from Postgres — untrusted until parseStoredCareProfile validates it. */
   care_profile?: unknown;
   assessments?: AssessmentScoreRow[] | null;
+  /** F39 (D-W4): the human tag, the bound-code digests, the lost-tag flag. */
+  tag?: string | null;
+  codes?: string[] | null;
+  tag_missing?: boolean;
 };
 
 export interface PlantListItem {
@@ -51,6 +55,16 @@ export interface PlantListItem {
   /** On-phone uri of the card's photo, joined by attachCoverPhotos; null =
    * placeholder (a plant never photographed, or photos not on this device). */
   coverUri: string | null;
+  // F39 Garden Walk (D-W4). The picker's numeric grid, the walk chip and the
+  // card badge read these; `codes` is carried so interpretScan / plantByCode
+  // can run straight on the list the viewfinder already holds.
+  /** normalizeTag output ("L3"), or null when the plant has no tag. */
+  tag: string | null;
+  /** SHA-256 digests of the bound sticker payloads — never the payloads. */
+  codes: string[];
+  codeCount: number;
+  /** The user flagged the physical tag as lost/unreadable. */
+  tagMissing: boolean;
 }
 
 /** Mirrors the web PlantCard sub-label: Type · species · cultivar (or "Unknown cultivar") · location. */
@@ -115,6 +129,10 @@ export function mapPlantRows(rows: PlantRow[] | null | undefined): PlantListItem
     lastAssessedAt: latestAssessedAt(row.assessments),
     coverAssessmentId: row.cover_assessment_id ?? null,
     coverUri: null,
+    tag: row.tag ?? null,
+    codes: [...(row.codes ?? [])],
+    codeCount: row.codes?.length ?? 0,
+    tagMissing: row.tag_missing === true,
   }));
 }
 

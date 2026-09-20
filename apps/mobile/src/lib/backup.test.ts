@@ -3,6 +3,7 @@ import type { AssessmentDiagnosis } from "@citrus/shared";
 import type { StoredAssessment } from "./assessment-store";
 import type { ChatMessage } from "./chat-store";
 import type { StoredPlant } from "./plant-store";
+import { codeDigest } from "./plant-tags";
 import {
   BACKUP_PHOTO_BYTES_ESTIMATE,
   BACKUP_PHOTO_CAP_BYTES,
@@ -311,5 +312,50 @@ describe("base64ToBytes", () => {
   });
   it("handles padding-free input", () => {
     expect(Array.from(base64ToBytes("aGk"))).toEqual([104, 105]);
+  });
+});
+
+// F39 D-W4 / D-W11: the human tag and the bound-code DIGESTS ride the plant
+// store into backup v3 with no version bump — the payloads themselves never
+// existed on disk, so a backup cannot leak them. A v3 file written before F39
+// has no such fields and must parse exactly as before.
+describe("backup v3 carries tags and code digests (F39)", () => {
+  const DIGEST = codeDigest("CC1-TEST01");
+
+  it("round-trips a tagged, coded plant with its tag photo and tag-missing flag", () => {
+    const tagged: StoredPlant = { ...plant(P1), tag: "L3", codes: [DIGEST], tag_photo: FILE, tag_missing: true };
+    const doc = buildBackup(stores({ plants: { [P1]: tagged } }), "2026-09-19T12:00:00Z");
+    const parsed = parseBackup(serializeBackup(doc));
+    expect(parsed?.stores.plants[P1]).toEqual(tagged);
+    // Only the digest travels — never anything that looks like a payload.
+    expect(serializeBackup(doc)).not.toContain("CC1-TEST01");
+  });
+
+  it("parses a v3 file written before tags existed, leaving the fields absent", () => {
+    const doc = { app: "citrus-care", version: 3, exportedAt: "t", plants: { [P1]: plant(P1) }, assessments: {} };
+    const parsed = parseBackup(JSON.stringify(doc))!.stores.plants[P1];
+    expect(parsed).toEqual(plant(P1));
+    expect("tag" in parsed).toBe(false);
+    expect("codes" in parsed).toBe(false);
+  });
+
+  it("repairs a crafted plant's identifiers instead of dropping the plant", () => {
+    const doc = {
+      app: "citrus-care",
+      version: 3,
+      exportedAt: "t",
+      plants: { [P1]: { ...plant(P1), tag: "l3!", codes: ["not-a-digest", DIGEST, DIGEST], tag_photo: "../etc" } },
+    };
+    const parsed = parseBackup(JSON.stringify(doc))!.stores.plants[P1];
+    expect(parsed.name).toBe(`Plant ${P1}`);
+    expect(parsed).toMatchObject({ tag: null, codes: [DIGEST], tag_photo: null });
+  });
+
+  it("merge keeps the local plant's tag and codes on collision (import never overwrites)", () => {
+    const local: StoredPlant = { ...plant(P1), tag: "L3", codes: [DIGEST] };
+    const incoming: StoredPlant = { ...plant(P1), tag: "L9", codes: [] };
+    const { merged } = mergeBackup(stores({ plants: { [P1]: local } }), stores({ plants: { [P1]: incoming } }));
+    expect(merged.plants[P1].tag).toBe("L3");
+    expect(merged.plants[P1].codes).toEqual([DIGEST]);
   });
 });

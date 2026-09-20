@@ -21,6 +21,12 @@ export type PlantDetailRow = Pick<
 > & {
   /** F20 jsonb — untrusted until parseStoredCareProfile validates it. */
   care_profile?: unknown;
+  /** F39 (D-W4): the human tag, bound-code digests, tag photo basename and
+   * lost-tag flag — what PlantTagsCard reads; edited only through plants-io. */
+  tag?: string | null;
+  codes?: string[] | null;
+  tag_photo?: string | null;
+  tag_missing?: boolean;
 };
 
 export interface TimelineRow {

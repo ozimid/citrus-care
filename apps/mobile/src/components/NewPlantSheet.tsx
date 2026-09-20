@@ -21,6 +21,9 @@ import {
   type NewPlantForm,
 } from "../lib/new-plant";
 import { GENERIC_UPDATE_PLANT_ERROR } from "../lib/plant-mutations";
+import { allPlants } from "../lib/plant-store";
+import { loadPlantStore } from "../lib/plant-store-io";
+import { suggestNextTag, TAG_MAX_LENGTH } from "../lib/plant-tags";
 import { insertPlant, updatePlant } from "../lib/plants-io";
 import { RADIUS, type Tokens } from "../lib/theme";
 import { useTheme } from "../lib/theme-io";
@@ -32,6 +35,13 @@ import { useTheme } from "../lib/theme-io";
 // (prefilled values, "Save changes", update instead of insert). All logic
 // lives in src/lib/new-plant.ts + plant-mutations.ts (tested); this file is
 // only the sheet UI.
+// F39 (D-W4): the "Tag / number" field is the human identifier written on the
+// stake — so the app never invents one. The field starts empty; the smallest
+// unused number is offered as a one-tap "Use N" beside it (a garden of thirty
+// still numbers itself 1…30 without typing), and the hint says what to write
+// it on. The sheet reads the plant store itself for the taken numbers, so
+// every caller (Plants tab, detail, review, capture) gets the uniqueness
+// check without new props.
 
 interface EditablePlant {
   id: string;
@@ -41,6 +51,25 @@ interface EditablePlant {
   cultivar: string | null;
   location: string | null;
   zip_code: string | null;
+  /** The number on the stake; absent on rows that predate F39. */
+  tag?: string | null;
+}
+
+/** Every other plant's tag, normalized upstream by parsePlantStore, plus the
+ * next free number to suggest. Read failures degrade to "nothing taken". */
+async function loadTagContext(selfId: string | null): Promise<{ taken: string[]; suggested: string }> {
+  try {
+    const plants = allPlants(await loadPlantStore());
+    return {
+      taken: plants
+        .filter((plant) => plant.id !== selfId && typeof plant.tag === "string" && plant.tag.length > 0)
+        .map((plant) => plant.tag as string),
+      suggested: suggestNextTag(plants),
+    };
+  } catch (e) {
+    console.error("[NewPlantSheet] tag context read failed:", (e as Error).message);
+    return { taken: [], suggested: "" };
+  }
 }
 
 interface Props {
@@ -63,14 +92,18 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cultivarOpen, setCultivarOpen] = useState(false);
+  /** F39: the other plants' numbers (uniqueness) and the next free one. */
+  const [takenTags, setTakenTags] = useState<string[]>([]);
+  const [suggestedTag, setSuggestedTag] = useState("");
   const editing = plant != null;
 
   // Edit mode: re-prefill from the plant row on every open, discarding
   // unsaved edits. (Create mode keeps typed values across an accidental
-  // close, as before; submit resets them on success.)
+  // close, as before; submit resets them on success.) The tag is set
+  // explicitly so an edit can never silently blank a number the row carries.
   useEffect(() => {
     if (!visible || !plant) return;
-    setForm(formFromPlant(plant));
+    setForm({ ...formFromPlant(plant), tag: plant.tag ?? "" });
     setErrors({});
     setSubmitError(null);
     setCultivarOpen(false);
@@ -84,6 +117,23 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
     setSubmitError(null);
   }, [visible, plant, prefill]);
 
+  // F39: on every open, learn which numbers are taken and which is next. The
+  // next free number is only OFFERED (the "Use N" tap below) — a tag means
+  // the number physically on the stake, so a plant the AI drafted from a
+  // snap-first photo, or one the user never staked, must not get one silently.
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    loadTagContext(plant?.id ?? null).then(({ taken, suggested }) => {
+      if (cancelled) return;
+      setTakenTags(taken);
+      setSuggestedTag(suggested);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, plant]);
+
   const set = (field: keyof NewPlantForm, value: string) =>
     setForm((f) => ({ ...f, [field]: value }));
 
@@ -95,7 +145,7 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
   };
 
   const submit = async () => {
-    const result = validateNewPlant(form);
+    const result = validateNewPlant(form, takenTags);
     if (!result.ok) {
       setErrors(result.errors);
       return;
@@ -164,6 +214,57 @@ export function NewPlantSheet({ visible, onClose, onSaved, plant, prefill }: Pro
                   placeholderTextColor={t.sub}
                   style={[inputStyle(t), errors.name ? { borderColor: t.danger } : null]}
                 />
+              </Field>
+
+              {/* F39 (D-W4): the number written on the stake. Uppercase
+                  keyboard because tags are stored uppercase; the next free
+                  number is one tap away, never pre-written. */}
+              <Field label="Tag / number" error={errors.tag} t={t}>
+                <View style={styles.tagRow}>
+                  <TextInput
+                    accessibilityLabel="Tag or number on the stake"
+                    value={form.tag}
+                    onChangeText={(v) => set("tag", v)}
+                    maxLength={TAG_MAX_LENGTH}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    placeholder="e.g. 7 or L3 — what's written on the stake"
+                    placeholderTextColor={t.sub}
+                    style={[inputStyle(t), styles.tagInput, errors.tag ? { borderColor: t.danger } : null]}
+                  />
+                  {form.tag ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear the tag"
+                      onPress={() => set("tag", "")}
+                      style={[styles.tagClear, { borderColor: t.border }]}
+                    >
+                      <Text style={[styles.tagClearText, { color: t.sub }]}>×</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {!form.tag && suggestedTag ? (
+                  <View style={styles.tagHintRow}>
+                    <Text style={[styles.fieldHint, styles.tagHintText, { color: t.sub }]}>
+                      Optional · next free number: {suggestedTag}
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Use number ${suggestedTag}`}
+                      onPress={() => set("tag", suggestedTag)}
+                      style={[styles.tagUse, { borderColor: t.green }]}
+                    >
+                      <Text style={[styles.tagUseText, { color: t.green }]}>Use {suggestedTag}</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {/* Research §5: the decision that makes the feature work is
+                    what the number is written on — said here, where it is
+                    made, not only on the per-plant card. */}
+                <Text style={[styles.fieldHint, { color: t.sub }]}>
+                  Write it on the stake, or on a numbered aluminium tag (about $25 per 100 — they outlast
+                  plastic and stickers).
+                </Text>
               </Field>
 
               <Field label="Plant type" error={errors.plant_type} t={t}>
@@ -412,6 +513,29 @@ const styles = StyleSheet.create({
   field: { gap: 6 },
   label: { fontSize: 12, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.4 },
   fieldError: { fontSize: 12 },
+  fieldHint: { fontSize: 12, lineHeight: 17 },
+  tagHintRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  tagHintText: { flexShrink: 1 },
+  tagUse: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: RADIUS,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tagUseText: { fontSize: 13, fontWeight: "600" },
+  tagRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  tagInput: { flex: 1 },
+  tagClear: {
+    width: 48,
+    height: 48,
+    borderRadius: RADIUS,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tagClearText: { fontSize: 22, fontWeight: "600", marginTop: -2 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
     borderWidth: 1,
